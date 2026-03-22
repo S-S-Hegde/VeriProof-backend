@@ -9,13 +9,13 @@ const {
   createJobRole,
   getMyJobs
 } = require("../controllers/verifyController");
-const { protect, recruiter } = require("../middleware/authMiddleware");
+const { protect, recruiterOnly } = require("../middleware/authMiddleware");
 
 // Recruiter endpoints
-router.post("/parse", protect, recruiter, parseResume);
-router.get("/results", protect, recruiter, getRecruiterResults);
-router.post("/job", protect, recruiter, createJobRole);
-router.get("/my-jobs", protect, recruiter, getMyJobs);
+router.post("/parse", protect, recruiterOnly, parseResume);
+router.get("/results", protect, recruiterOnly, getRecruiterResults);
+router.post("/job", protect, recruiterOnly, createJobRole);
+router.get("/my-jobs", protect, recruiterOnly, getMyJobs);
 
 // Candidate endpoints
 router.get("/my-results", protect, getCandidateResults);
