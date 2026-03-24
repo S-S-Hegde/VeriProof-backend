@@ -116,10 +116,94 @@ const syncProject = async (req, res) => {
   }
 };
 
+// @desc    Get analytics data for logged-in user
+// @route   GET /api/projects/analytics
+// @access  Private
+const getMyAnalytics = async (req, res) => {
+  try {
+    const projects = await Project.find({ user: req.user._id });
+
+    // 1. Skill frequency from project technologies
+    const skillTally = {};
+    projects.forEach((p) => {
+      (p.technologies || []).forEach((tech) => {
+        skillTally[tech] = (skillTally[tech] || 0) + 1;
+      });
+    });
+    const skillData = Object.entries(skillTally)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10)
+      .map(([label, value]) => ({ label, value }));
+
+    // 2. Project status distribution
+    const statusTally = { Published: 0, Verified: 0, Pending: 0, Draft: 0 };
+    projects.forEach((p) => {
+      const s = p.isVerified ? "Verified" : (p.status || "Published");
+      statusTally[s] = (statusTally[s] || 0) + 1;
+    });
+    const statusData = Object.entries(statusTally)
+      .filter(([, v]) => v > 0)
+      .map(([label, value]) => ({ label, value }));
+
+    // 3. Rankings: aggregate across all projects (take latest non-empty)
+    const rankings = { hackerrank: "", leetcode: "", codeforces: "", codechef: "", github: "", other: "" };
+    [...projects].reverse().forEach((p) => {
+      if (p.rankings) {
+        Object.keys(rankings).forEach((k) => {
+          if (!rankings[k] && p.rankings[k]) rankings[k] = p.rankings[k];
+        });
+      }
+    });
+
+    // 4. CGPA (latest non-empty across projects or from user)
+    const cgpaEntry = projects.find((p) => p.cgpa)?.cgpa || "";
+
+    // 5. Timeline: project creation dates
+    const timeline = projects
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+      .map((p) => ({
+        _id: p._id,
+        title: p.title,
+        isVerified: p.isVerified,
+        status: p.status,
+        createdAt: p.createdAt,
+        technologies: p.technologies,
+      }));
+
+    // 6. GitHub stars summary from githubStats languages
+    const allLanguages = {};
+    projects.forEach((p) => {
+      if (p.githubStats?.languages) {
+        Object.entries(p.githubStats.languages).forEach(([lang, bytes]) => {
+          allLanguages[lang] = (allLanguages[lang] || 0) + bytes;
+        });
+      }
+    });
+    const languageData = Object.entries(allLanguages)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6)
+      .map(([label, bytes]) => ({ label, bytes }));
+
+    res.json({
+      totalProjects: projects.length,
+      verifiedCount: projects.filter((p) => p.isVerified).length,
+      skillData,
+      statusData,
+      rankings,
+      cgpa: cgpaEntry,
+      timeline,
+      languageData,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
 module.exports = {
   createProject,
   getProjects,
   getMyProjects,
   getProjectById,
   syncProject,
+  getMyAnalytics,
 };

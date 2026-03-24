@@ -1,5 +1,14 @@
 const mongoose = require("mongoose");
 
+const rankingSchema = new mongoose.Schema({
+  hackerrank:  { type: String, default: "" },
+  leetcode:    { type: String, default: "" },
+  codeforces:  { type: String, default: "" },
+  codechef:    { type: String, default: "" },
+  github:      { type: String, default: "" },
+  other:       { type: String, default: "" },
+}, { _id: false });
+
 const projectSchema = new mongoose.Schema(
   {
     user: {
@@ -7,41 +16,27 @@ const projectSchema = new mongoose.Schema(
       required: true,
       ref: "User",
     },
-    title: {
-      type: String,
-      required: true,
-    },
-    description: {
-      type: String,
-      required: true,
-    },
-    technologies: {
-      type: [String],
-      required: true,
-    },
-    repositoryUrl: {
-      type: String,
-      required: true,
-    },
-    liveUrl: {
-      type: String,
-    },
-    images: {
-      type: [String], // URLs of uploaded images
-    },
+    title:        { type: String, required: true },
+    description:  { type: String, required: true },
+    technologies: { type: [String], required: true },
+    repositoryUrl:{ type: String, required: true },
+    liveUrl:      { type: String },
+    images:       { type: [String] },
+    cgpa:         { type: String, default: "" },
+    rankings:     { type: rankingSchema, default: () => ({}) },
     githubStats: {
-      commitsCount: { type: Number, default: 0 },
-      lastCommitDate: { type: Date },
-      languages: { type: Object },
+      commitsCount:  { type: Number, default: 0 },
+      lastCommitDate:{ type: Date },
+      languages:     { type: Object },
     },
-    isVerified: {
-      type: Boolean,
-      default: false,
+    isVerified: { type: Boolean, default: false },
+    status: {
+      type: String,
+      enum: ["Draft", "Published", "Pending", "Verified"],
+      default: "Published",
     },
   },
-  {
-    timestamps: true,
-  },
+  { timestamps: true },
 );
 
 const Project = mongoose.model("Project", projectSchema);

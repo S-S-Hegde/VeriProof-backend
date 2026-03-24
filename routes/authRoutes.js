@@ -4,6 +4,7 @@ const {
   registerUser,
   authUser,
   getUserProfile,
+  updateUserProfile,
   uploadResume,
   getPendingResumes,
   verifyResume,
@@ -13,6 +14,7 @@ const { protect, recruiterOnly } = require("../middleware/authMiddleware");
 router.post("/", registerUser);
 router.post("/login", authUser);
 router.get("/profile", protect, getUserProfile);
+router.put("/profile", protect, updateUserProfile);
 
 // Resume Routes
 router.put("/profile/resume", protect, uploadResume);

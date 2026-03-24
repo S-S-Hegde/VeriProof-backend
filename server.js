@@ -4,9 +4,10 @@ const cors = require("cors");
 const connectDB = require("./config/db");
 
 // Route files
-const authRoutes = require("./routes/authRoutes");
+const authRoutes    = require("./routes/authRoutes");
 const projectRoutes = require("./routes/projectRoutes");
-const verifyRoutes = require("./routes/verifyRoutes");
+const verifyRoutes  = require("./routes/verifyRoutes");
+const pdfRoutes     = require("./routes/pdfRoutes");
 
 // Load env vars
 dotenv.config();
@@ -30,6 +31,7 @@ app.get("/", (req, res) => {
 app.use("/api/users", authRoutes);
 app.use("/api/projects", projectRoutes);
 app.use("/api/verify", verifyRoutes);
+app.use("/api/resume", pdfRoutes);
 
 const PORT = process.env.PORT || 5000;
 
