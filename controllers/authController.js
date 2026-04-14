@@ -75,8 +75,11 @@ const updateUserProfile = async (req, res) => {
     textFields.forEach((f) => { if (req.body[f] !== undefined) user[f] = req.body[f]; });
     if (req.body.skills !== undefined) user.skills = req.body.skills;
     if (req.body.notifications) {
+      const currentNotifs = user.notifications && typeof user.notifications.toObject === 'function' 
+        ? user.notifications.toObject() 
+        : (user.notifications || {});
       user.notifications = {
-        ...(user.notifications?.toObject ? user.notifications.toObject() : user.notifications),
+        ...currentNotifs,
         ...req.body.notifications,
       };
     }
