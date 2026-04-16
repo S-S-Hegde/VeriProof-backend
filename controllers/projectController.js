@@ -31,11 +31,71 @@ const createProject = async (req, res) => {
 // @access  Public
 const getProjects = async (req, res) => {
   try {
-    const projects = await Project.find({}).populate(
-      "user",
-      "name githubUsername profileImage",
-    );
-    res.json(projects);
+    const {
+      search = "",
+      tech = "",
+      verified = "",
+      sort = "latest",
+      page = 1,
+      limit = 24,
+    } = req.query;
+
+    const filters = {};
+
+    if (verified === "true") {
+      filters.isVerified = true;
+    }
+
+    if (tech) {
+      filters.technologies = { $in: [tech] };
+    }
+
+    if (search) {
+      const regex = new RegExp(search, "i");
+      filters.$or = [
+        { title: regex },
+        { description: regex },
+        { technologies: regex },
+      ];
+    }
+
+    const sortMap = {
+      latest: { createdAt: -1 },
+      oldest: { createdAt: 1 },
+      verified: { isVerified: -1, createdAt: -1 },
+      title: { title: 1 },
+    };
+
+    const safeLimit = Math.min(Number(limit) || 24, 50);
+    const safePage = Math.max(Number(page) || 1, 1);
+    const skip = (safePage - 1) * safeLimit;
+
+    const [projects, total] = await Promise.all([
+      Project.find(filters)
+        .sort(sortMap[sort] || sortMap.latest)
+        .skip(skip)
+        .limit(safeLimit)
+        .populate(
+          "user",
+          "name githubUsername profileImage role",
+        ),
+      Project.countDocuments(filters),
+    ]);
+
+    const technologies = await Project.distinct("technologies");
+
+    res.json({
+      projects,
+      pagination: {
+        page: safePage,
+        limit: safeLimit,
+        total,
+        totalPages: Math.ceil(total / safeLimit) || 1,
+      },
+      filters: {
+        technologies: technologies.filter(Boolean).sort((a, b) => a.localeCompare(b)),
+      },
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

@@ -48,6 +48,10 @@ const userSchema = new mongoose.Schema(
       enum: ["public", "recruiters-only", "private"],
       default: "public",
     },
+    savedProjects: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Project",
+    }],
     resetPasswordToken: String,
     resetPasswordExpire: Date,
   },

@@ -1,4 +1,5 @@
 const User = require("../models/User");
+const Project = require("../models/Project");
 const generateToken = require("../utils/generateToken");
 const crypto = require("crypto");
 const sendEmail = require("../utils/sendEmail");
@@ -142,6 +143,54 @@ const verifyResume = async (req, res) => {
   }
 };
 
+// @desc    Get saved recruiter shortlist projects
+// @route   GET /api/users/profile/saved-projects
+// @access  Private
+const getSavedProjects = async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id).populate({
+      path: "savedProjects",
+      populate: { path: "user", select: "name githubUsername profileImage role" },
+    });
+
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    res.json(user.savedProjects || []);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// @desc    Toggle a project in the recruiter's shortlist
+// @route   PUT /api/users/profile/saved-projects/:projectId
+// @access  Private
+const toggleSavedProject = async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id);
+    const project = await Project.findById(req.params.projectId);
+
+    if (!user) return res.status(404).json({ message: "User not found" });
+    if (!project) return res.status(404).json({ message: "Project not found" });
+
+    const currentSavedProjects = (user.savedProjects || []).map((entry) => entry.toString());
+    const projectId = req.params.projectId.toString();
+    const alreadySaved = currentSavedProjects.includes(projectId);
+
+    user.savedProjects = alreadySaved
+      ? user.savedProjects.filter((entry) => entry.toString() !== projectId)
+      : [...user.savedProjects, project._id];
+
+    await user.save();
+
+    res.json({
+      saved: !alreadySaved,
+      savedProjects: user.savedProjects,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
 // @desc    Forgot Password
 // @route   POST /api/users/forgotpassword
 // @access  Public
@@ -216,6 +265,8 @@ module.exports = {
   uploadResume,
   getPendingResumes,
   verifyResume,
+  getSavedProjects,
+  toggleSavedProject,
   forgotPassword,
   resetPassword,
 };

@@ -18,6 +18,16 @@ const parseResume = asyncHandler(async (req, res) => {
     throw new Error("Job or Candidate not found");
   }
 
+  if (job.recruiterId.toString() !== req.user._id.toString()) {
+    res.status(403);
+    throw new Error("You can only parse resumes for your own job posts");
+  }
+
+  if (candidate.role !== "student") {
+    res.status(400);
+    throw new Error("Selected candidate must be a student profile");
+  }
+
   // Mock parsing algorithm: Intersect targetSkills with resumeText keywords
   const textLower = resumeText.toLowerCase();
   let matchedSkills = 0;
@@ -40,13 +50,18 @@ const parseResume = asyncHandler(async (req, res) => {
     console.log(`[Verification Engine] EMAIL SENT to ${candidate.email}: Alignment Score ${alignmentScore}%. Please complete the Verification Exam to proceed.`);
   }
 
-  const result = await VerificationResult.create({
-    candidateId,
-    jobId,
-    resumeText,
-    alignmentScore,
-    status
-  });
+  const result = await VerificationResult.findOneAndUpdate(
+    { candidateId, jobId },
+    {
+      candidateId,
+      jobId,
+      resumeText,
+      alignmentScore,
+      status,
+      examScore: undefined,
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true },
+  );
 
   res.status(201).json(result);
 });
@@ -55,6 +70,16 @@ const parseResume = asyncHandler(async (req, res) => {
 // @route   GET /api/verify/exam/:jobId
 // @access  Private
 const getExamForJob = asyncHandler(async (req, res) => {
+  const verificationResult = await VerificationResult.findOne({
+    candidateId: req.user._id,
+    jobId: req.params.jobId,
+  });
+
+  if (!verificationResult) {
+    res.status(404);
+    throw new Error("No verification request found for this job");
+  }
+
   // Mock finding an exam related to the job topic. 
   // In reality, we'd relate Exam to Job directly or via tags. We'll return a generic mock exam here.
   let exam = await Exam.findOne();
@@ -106,6 +131,11 @@ const submitExam = asyncHandler(async (req, res) => {
   if (!result || !exam) {
     res.status(404);
     throw new Error("Result or Exam not found");
+  }
+
+  if (result.candidateId.toString() !== req.user._id.toString()) {
+    res.status(403);
+    throw new Error("You can only submit your own verification exam");
   }
 
   let correctCount = 0;
