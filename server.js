@@ -39,6 +39,15 @@ app.use("/api/verify", verifyRoutes);
 app.use("/api/resume", pdfRoutes);
 app.use("/api/exams", examRoutes);
 
+// Global Error Handler
+app.use((err, req, res, next) => {
+  const statusCode = res.statusCode === 200 ? 500 : res.statusCode;
+  res.status(statusCode).json({
+    message: err.message,
+    stack: process.env.NODE_ENV === "production" ? null : err.stack,
+  });
+});
+
 const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, console.log(`Server running on port ${PORT}`));

@@ -30,6 +30,16 @@ const userSchema = new mongoose.Schema(
     // Skills (global, not per-project)
     skills:         { type: [String], default: [] },
 
+    // Certificates
+    certificates: [{
+      title:        { type: String, required: true },
+      issuedAt:     { type: Date, default: Date.now },
+      issuer:       { type: String, default: "VeriProof Authority" },
+      credentialId: { type: String, unique: true, sparse: true },
+      techStack:    { type: [String] },
+      verificationUrl: { type: String }
+    }],
+
     // Resume
     resumeUrl:      { type: String, default: "" },
     resumeStatus:   {

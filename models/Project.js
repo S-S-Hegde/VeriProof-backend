@@ -9,6 +9,13 @@ const rankingSchema = new mongoose.Schema({
   other:       { type: String, default: "" },
 }, { _id: false });
 
+const snippetSchema = new mongoose.Schema({
+  title:    { type: String, required: true },
+  code:     { type: String, required: true },
+  language: { type: String, default: "javascript" },
+  explanation: { type: String }
+}, { _id: false });
+
 const projectSchema = new mongoose.Schema(
   {
     user: {
@@ -22,6 +29,7 @@ const projectSchema = new mongoose.Schema(
     repositoryUrl:{ type: String, required: true },
     liveUrl:      { type: String },
     images:       { type: [String] },
+    featuredSnippets: [snippetSchema],
     cgpa:         { type: String, default: "" },
     rankings:     { type: rankingSchema, default: () => ({}) },
     githubStats: {

@@ -1,4 +1,6 @@
 const Question = require("../models/Question");
+const User = require("../models/User");
+const crypto = require("crypto");
 
 // @desc    Fetch a generated exam payload
 // @route   GET /api/exams/start
@@ -54,13 +56,39 @@ const submitExam = async (req, res) => {
 
     const totalQuestions = answers.length;
     const score = totalQuestions > 0 ? Math.round((correctCount / totalQuestions) * 100) : 0;
+    const isPassed = score >= 70;
+
+    let certificate = null;
+    if (isPassed) {
+      const user = await User.findById(req.user._id);
+      if (user) {
+        const fullQuestions = await Question.find({ _id: { $in: questionIds } }).select("category");
+        const categories = [...new Set(fullQuestions.map(q => q.category))];
+        
+        const certTitle = `${categories[0] || "Software Engineering"} Professional Certificate`;
+        const credentialId = `VP-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
+        
+        certificate = {
+          title: certTitle,
+          issuedAt: new Date(),
+          issuer: "VeriProof Authority",
+          credentialId: credentialId,
+          techStack: categories,
+          verificationUrl: `/verify-credential/${credentialId}`
+        };
+
+        user.certificates.push(certificate);
+        await user.save();
+      }
+    }
 
     res.json({
       totalQuestions,
       answeredQuestions: answers.filter(({ answerIndex }) => Number.isInteger(answerIndex)).length,
       correctAnswers: correctCount,
       score,
-      status: score >= 70 ? "Passed" : "Needs Improvement",
+      status: isPassed ? "Passed" : "Needs Improvement",
+      certificate
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
