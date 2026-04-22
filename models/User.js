@@ -2,6 +2,15 @@ const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 
+const skillNodeSchema = new mongoose.Schema({
+  id:          { type: String, required: true },
+  name:        { type: String, required: true },
+  category:    { type: String, enum: ["verified", "foundational", "recommended"], required: true },
+  parentId:    { type: String, default: null },
+  confidence:  { type: Number, min: 0, max: 100 },
+  evidence:    { type: [String], default: [] },
+}, { _id: false });
+
 const userSchema = new mongoose.Schema(
   {
     name:           { type: String, required: true },
@@ -62,6 +71,14 @@ const userSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Project",
     }],
+
+    // AI-Generated Skill Tree
+    skillTree: {
+      nodes:       { type: [skillNodeSchema], default: [] },
+      generatedAt: { type: Date },
+      sourceHash:  { type: String, default: "" },
+    },
+
     resetPasswordToken: String,
     resetPasswordExpire: Date,
   },
