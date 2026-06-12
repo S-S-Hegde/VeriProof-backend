@@ -3,6 +3,7 @@ const Job = require("../models/Job");
 const VerificationResult = require("../models/VerificationResult");
 const Exam = require("../models/Exam");
 const User = require("../models/User");
+const { rebuildSkillProgression } = require("../services/skillProgressionService");
 
 // @desc    Parse Resume against Job description
 // @route   POST /api/verify/parse
@@ -62,6 +63,18 @@ const parseResume = asyncHandler(async (req, res) => {
     },
     { upsert: true, new: true, setDefaultsOnInsert: true },
   );
+
+  if (status === "Verified") {
+    await rebuildSkillProgression(candidateId, {
+      type: "recruiter_assessment",
+      label: `Resume alignment for ${job.title}`,
+      technologies: job.targetSkills,
+      score: alignmentScore,
+      xp: 150,
+      completed: true,
+      source: result._id.toString(),
+    });
+  }
 
   res.status(201).json(result);
 });
@@ -151,6 +164,16 @@ const submitExam = asyncHandler(async (req, res) => {
   result.examScore = examScore;
   result.status = newStatus;
   await result.save();
+
+  await rebuildSkillProgression(result.candidateId, {
+    type: "recruiter_assessment",
+    label: `Recruiter exam: ${exam.topic}`,
+    technologies: [exam.topic],
+    score: examScore,
+    xp: newStatus === "Verified" ? 170 : 65,
+    completed: newStatus === "Verified",
+    source: result._id.toString(),
+  });
 
   res.json({ examScore, status: newStatus });
 });

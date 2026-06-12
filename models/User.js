@@ -3,12 +3,53 @@ const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 
 const skillNodeSchema = new mongoose.Schema({
+  id:                { type: String, required: true },
+  name:              { type: String, required: true },
+  type:              { type: String, enum: ["category", "skill"], default: "skill" },
+  category:          { type: String, enum: ["verified", "foundational", "recommended"] },
+  categoryKey:       { type: String, default: "" },
+  categoryName:      { type: String, default: "" },
+  parentId:          { type: String, default: null },
+  prerequisites:     { type: [String], default: [] },
+  status:            { type: String, enum: ["locked", "unlocked", "in_progress", "verified"], default: "locked" },
+  progress:          { type: Number, min: 0, max: 100, default: 0 },
+  confidence:        { type: Number, min: 0, max: 100 },
+  verificationScore: { type: Number, min: 0, max: 100, default: 0 },
+  xp:                { type: Number, default: 0 },
+  level:             { type: Number, default: 1 },
+  accent:            { type: String, default: "#38bdf8" },
+  x:                 { type: Number },
+  y:                 { type: Number },
+  evidence:          { type: mongoose.Schema.Types.Mixed, default: [] },
+}, { _id: false });
+
+const skillEvidenceSchema = new mongoose.Schema({
+  type:      { type: String, default: "system" },
+  source:    { type: String, default: "" },
+  label:     { type: String, default: "" },
+  score:     { type: Number, min: 0, max: 100, default: 0 },
+  createdAt: { type: Date, default: Date.now },
+}, { _id: false });
+
+const skillProgressSchema = new mongoose.Schema({
+  id:                { type: String, required: true },
+  status:            { type: String, enum: ["locked", "unlocked", "in_progress", "verified"], default: "locked" },
+  progress:          { type: Number, min: 0, max: 100, default: 0 },
+  verificationScore: { type: Number, min: 0, max: 100, default: 0 },
+  xp:                { type: Number, default: 0 },
+  level:             { type: Number, default: 1 },
+  evidence:          { type: [skillEvidenceSchema], default: [] },
+  unlockedAt:        { type: Date },
+  completedAt:       { type: Date },
+}, { _id: false });
+
+const achievementSchema = new mongoose.Schema({
   id:          { type: String, required: true },
-  name:        { type: String, required: true },
-  category:    { type: String, enum: ["verified", "foundational", "recommended"], required: true },
-  parentId:    { type: String, default: null },
-  confidence:  { type: Number, min: 0, max: 100 },
-  evidence:    { type: [String], default: [] },
+  title:       { type: String, required: true },
+  description: { type: String, default: "" },
+  icon:        { type: String, default: "Award" },
+  unlocked:    { type: Boolean, default: false },
+  unlockedAt:  { type: Date },
 }, { _id: false });
 
 const userSchema = new mongoose.Schema(
@@ -79,14 +120,31 @@ const userSchema = new mongoose.Schema(
       sourceHash:  { type: String, default: "" },
     },
 
+    skillProgress: {
+      skills:               { type: [skillProgressSchema], default: [] },
+      achievements:         { type: [achievementSchema], default: [] },
+      totalXp:              { type: Number, default: 0 },
+      level:                { type: Number, default: 1 },
+      progressPercent:      { type: Number, default: 0 },
+      verificationScore:    { type: Number, default: 0 },
+      githubScore:          { type: Number, default: 0 },
+      trustScore:           { type: Number, default: 0 },
+      streakDays:           { type: Number, default: 0 },
+      verifiedCount:        { type: Number, default: 0 },
+      unlockedCount:        { type: Number, default: 0 },
+      totalSkills:          { type: Number, default: 0 },
+      completedAssessments: { type: Number, default: 0 },
+      lastUpdated:          { type: Date },
+    },
+
     resetPasswordToken: String,
     resetPasswordExpire: Date,
   },
   { timestamps: true },
 );
 
-userSchema.pre("save", async function (next) {
-  if (!this.isModified("password")) return next();
+userSchema.pre("save", async function () {
+  if (!this.isModified("password")) return;
   const salt = await bcrypt.genSalt(10);
   this.password = await bcrypt.hash(this.password, salt);
 });

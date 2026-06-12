@@ -1,5 +1,6 @@
 const Project = require("../models/Project");
 const { getRepoDetails } = require("../services/githubService");
+const { rebuildSkillProgression } = require("../services/skillProgressionService");
 
 // @desc    Create a project
 // @route   POST /api/projects
@@ -20,6 +21,14 @@ const createProject = async (req, res) => {
     });
 
     const createdProject = await project.save();
+    await rebuildSkillProgression(req.user._id, {
+      type: "project",
+      label: createdProject.title,
+      technologies: createdProject.technologies,
+      score: 55,
+      xp: 70,
+      source: createdProject._id.toString(),
+    });
     res.status(201).json(createdProject);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -77,7 +86,7 @@ const getProjects = async (req, res) => {
         .limit(safeLimit)
         .populate(
           "user",
-          "name githubUsername profileImage role",
+          "name githubUsername profileImage role skillProgress",
         ),
       Project.countDocuments(filters),
     ]);
@@ -170,6 +179,18 @@ const syncProject = async (req, res) => {
     };
 
     const updatedProject = await project.save();
+    await rebuildSkillProgression(req.user._id, {
+      type: "github_sync",
+      label: updatedProject.title,
+      technologies: [
+        ...(updatedProject.technologies || []),
+        ...Object.keys(updatedProject.githubStats?.languages || {}),
+      ],
+      score: updatedProject.isVerified ? 92 : 64,
+      xp: 90,
+      completed: Boolean(updatedProject.isVerified),
+      source: updatedProject._id.toString(),
+    });
     res.json(updatedProject);
   } catch (error) {
     res.status(500).json({ message: error.message });

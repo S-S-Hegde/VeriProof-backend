@@ -1,6 +1,7 @@
 const Question = require("../models/Question");
 const User = require("../models/User");
 const crypto = require("crypto");
+const { rebuildSkillProgression } = require("../services/skillProgressionService");
 
 // @desc    Fetch a generated exam payload
 // @route   GET /api/exams/start
@@ -79,6 +80,15 @@ const submitExam = async (req, res) => {
 
         user.certificates.push(certificate);
         await user.save();
+        await rebuildSkillProgression(user._id, {
+          type: "exam",
+          label: certTitle,
+          technologies: categories,
+          score,
+          xp: 160,
+          completed: true,
+          source: credentialId,
+        });
       }
     }
 
