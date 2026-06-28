@@ -1,5 +1,6 @@
 const User = require("../models/User");
 const Project = require("../models/Project");
+const VerificationResult = require("../models/VerificationResult");
 const generateToken = require("../utils/generateToken");
 const crypto = require("crypto");
 const sendEmail = require("../utils/sendEmail");
@@ -56,7 +57,40 @@ const getUserProfile = async (req, res) => {
   try {
     const user = await User.findById(req.user._id).select("-password");
     if (!user) return res.status(404).json({ message: "User not found" });
-    res.json(user);
+
+    // Pipeline Stage 1: Resume Upload
+    const hasResume = !!user.resumeUrl;
+
+    // Pipeline Stage 2: Resume Analysis
+    // TODO: Automated NLP Resume Parser service is not yet implemented.
+    // Currently, resumes are only evaluated manually by recruiters.
+    // We cannot mock this. Feature gate will remain locked until Phase 3.
+    const isResumeAnalyzed = false;
+
+    // Pipeline Stage 3: Repository Analysis
+    // Relies on synced projects
+    const projectsCount = await Project.countDocuments({ user: user._id, "githubStats.commitsCount": { $exists: true, $gt: 0 } });
+    const hasRepoAnalysis = projectsCount > 0;
+
+    // Pipeline Stage 4: Technical Exam
+    const hasExamPassed = user.certificates && user.certificates.length > 0;
+
+    // Pipeline Stage 5: Verification Request
+    const verificationCount = await VerificationResult.countDocuments({ candidateId: user._id });
+    const hasVerificationRequest = verificationCount > 0;
+
+    const workflowState = {
+      hasResume,
+      isResumeAnalyzed,
+      hasRepoAnalysis,
+      hasExamPassed,
+      hasVerificationRequest,
+    };
+
+    const userObj = user.toObject();
+    userObj.workflowState = workflowState;
+
+    res.json(userObj);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

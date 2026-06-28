@@ -1,5 +1,7 @@
 const Question = require("../models/Question");
 const User = require("../models/User");
+const Project = require("../models/Project");
+const VerificationResult = require("../models/VerificationResult");
 const crypto = require("crypto");
 const { rebuildSkillProgression } = require("../services/skillProgressionService");
 
@@ -37,6 +39,12 @@ const startExam = async (req, res) => {
 // @access  Private
 const submitExam = async (req, res) => {
   try {
+    // Phase 2C Security: Ensure Repository Analysis is completed before allowing Exam Submission
+    const hasRepoAnalysis = await Project.exists({ user: req.user._id, "githubStats.commitsCount": { $exists: true, $gt: 0 } });
+    if (!hasRepoAnalysis) {
+      return res.status(403).json({ message: "Repository Analysis required before Technical Assessment." });
+    }
+
     const { answers = [] } = req.body;
 
     if (!Array.isArray(answers) || answers.length === 0) {
@@ -89,6 +97,14 @@ const submitExam = async (req, res) => {
           completed: true,
           source: credentialId,
         });
+      }
+
+      // Update Verification Engine if a pending result exists for this candidate
+      const existingResult = await VerificationResult.findOne({ candidateId: req.user._id, status: "Pending Exam" }).sort({ createdAt: -1 });
+      if (existingResult) {
+        existingResult.examScore = score;
+        existingResult.status = isPassed ? "Verified" : "Failed";
+        await existingResult.save();
       }
     }
 

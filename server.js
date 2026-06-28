@@ -7,7 +7,6 @@ const connectDB = require("./config/db");
 const authRoutes    = require("./routes/authRoutes");
 const projectRoutes = require("./routes/projectRoutes");
 const verifyRoutes  = require("./routes/verifyRoutes");
-const pdfRoutes     = require("./routes/pdfRoutes");
 const examRoutes    = require("./routes/examRoutes");
 const skillTreeRoutes = require("./routes/skillTreeRoutes");
 
@@ -37,7 +36,6 @@ app.get("/", (req, res) => {
 app.use("/api/users", authRoutes);
 app.use("/api/projects", projectRoutes);
 app.use("/api/verify", verifyRoutes);
-app.use("/api/resume", pdfRoutes);
 app.use("/api/exams", examRoutes);
 app.use("/api/skill-tree", skillTreeRoutes);
 
