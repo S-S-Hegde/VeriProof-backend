@@ -13,6 +13,7 @@ const {
   toggleSavedProject,
   forgotPassword,
   resetPassword,
+  deleteUserAccount,
 } = require("../controllers/authController");
 
 const { protect, recruiterOnly } = require("../middleware/authMiddleware");
@@ -234,6 +235,7 @@ router.post("/forgotpassword", forgotPassword);
 router.put("/resetpassword/:resettoken", resetPassword);
 router.get("/profile", protect, getUserProfile);
 router.put("/profile", protect, updateUserProfile);
+router.delete("/profile", protect, deleteUserAccount);
 router.get("/profile/saved-projects", protect, recruiterOnly, getSavedProjects);
 router.put("/profile/saved-projects/:projectId", protect, recruiterOnly, toggleSavedProject);
 

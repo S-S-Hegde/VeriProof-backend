@@ -291,6 +291,83 @@ const resetPassword = async (req, res) => {
   }
 };
 
+// @desc    Delete user account and all owned data
+// @route   DELETE /api/users/profile
+// @access  Private
+const deleteUserAccount = async (req, res) => {
+  try {
+    const { password } = req.body;
+    if (!password) {
+      return res.status(400).json({ message: "Password is required to confirm account deletion." });
+    }
+
+    const userId = req.user._id;
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ message: "User not found." });
+    }
+
+    // Verify Password
+    const isMatch = await user.matchPassword(password);
+    if (!isMatch) {
+      return res.status(401).json({ message: "Invalid credentials. Password mismatch." });
+    }
+
+    // Save references to local files before database deletion
+    const filesToDelete = [];
+    if (user.profileImage && user.profileImage.startsWith("/uploads/")) {
+      filesToDelete.push(user.profileImage);
+    }
+    if (user.resumeUrl && user.resumeUrl.startsWith("/uploads/")) {
+      filesToDelete.push(user.resumeUrl);
+    }
+
+    // Clean up database records
+    if (user.role === "student") {
+      const Project = require("../models/Project");
+      const VerificationResult = require("../models/VerificationResult");
+      const ResumeAnalysis = require("../models/ResumeAnalysis");
+
+      // Delete user's projects and verification results and resume analysis
+      await Project.deleteMany({ user: userId });
+      await VerificationResult.deleteMany({ candidateId: userId });
+      await ResumeAnalysis.deleteMany({ candidateId: userId });
+    } else if (user.role === "recruiter") {
+      const Job = require("../models/Job");
+      const VerificationResult = require("../models/VerificationResult");
+
+      const jobs = await Job.find({ recruiterId: userId });
+      const jobIds = jobs.map(j => j._id);
+
+      await VerificationResult.deleteMany({ jobId: { $in: jobIds } });
+      await Job.deleteMany({ recruiterId: userId });
+    }
+
+    // Finally delete the user
+    await User.findByIdAndDelete(userId);
+
+    // Clean up local uploaded files on disk ONLY after DB deletion completes successfully
+    const fs = require("fs");
+    const path = require("path");
+    
+    filesToDelete.forEach((fileUrl) => {
+      const filePath = path.join(__dirname, "..", fileUrl);
+      if (fs.existsSync(filePath)) {
+        try {
+          fs.unlinkSync(filePath);
+          console.log(`[Cleanup] Deleted local file: ${filePath}`);
+        } catch (err) {
+          console.error(`[Cleanup] Failed to delete local file ${filePath}:`, err);
+        }
+      }
+    });
+
+    res.json({ success: true, message: "Account and all associated records deleted successfully." });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
 module.exports = {
   registerUser,
   authUser,
@@ -303,4 +380,5 @@ module.exports = {
   toggleSavedProject,
   forgotPassword,
   resetPassword,
+  deleteUserAccount,
 };
