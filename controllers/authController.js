@@ -62,10 +62,9 @@ const getUserProfile = async (req, res) => {
     const hasResume = !!user.resumeUrl;
 
     // Pipeline Stage 2: Resume Analysis
-    // TODO: Automated NLP Resume Parser service is not yet implemented.
-    // Currently, resumes are only evaluated manually by recruiters.
-    // We cannot mock this. Feature gate will remain locked until Phase 3.
-    const isResumeAnalyzed = false;
+    const ResumeAnalysis = require("../models/ResumeAnalysis");
+    const activeAnalysis = await ResumeAnalysis.findOne({ candidateId: user._id, active: true });
+    const isResumeAnalyzed = activeAnalysis ? activeAnalysis.status === "Analysis Complete" : false;
 
     // Pipeline Stage 3: Repository Analysis
     // Relies on synced projects
