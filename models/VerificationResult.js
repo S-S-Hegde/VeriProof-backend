@@ -15,6 +15,11 @@ const verificationResultSchema = mongoose.Schema(
     resumeText: {
       type: String, // Mock extracted text
     },
+    sourceAnalysisId: { type: mongoose.Schema.Types.ObjectId, ref: "ResumeAnalysis" },
+    claimedSkills: { type: [String], default: [] },
+    matchedSkills: { type: [String], default: [] },
+    missingSkills: { type: [String], default: [] },
+    examId: { type: mongoose.Schema.Types.ObjectId, ref: "Exam" },
     alignmentScore: {
       type: Number, // 0-100% Mock parsing score
       required: true,

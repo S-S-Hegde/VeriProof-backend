@@ -8,6 +8,9 @@ const resumeAnalysisSchema = new mongoose.Schema(
       ref: "User",
       index: true,
     },
+    resumeUrl: { type: String, default: "" },
+    originalFileName: { type: String, default: "" },
+    mimeType: { type: String, default: "" },
     status: {
       type: String,
       enum: [

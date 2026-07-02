@@ -328,6 +328,11 @@ const deleteUserAccount = async (req, res) => {
       const VerificationResult = require("../models/VerificationResult");
       const ResumeAnalysis = require("../models/ResumeAnalysis");
 
+      const resumeAnalyses = await ResumeAnalysis.find({ candidateId: userId }).select("resumeUrl");
+      resumeAnalyses.forEach((analysis) => {
+        if (analysis.resumeUrl?.startsWith("/uploads/")) filesToDelete.push(analysis.resumeUrl);
+      });
+
       // Delete user's projects and verification results and resume analysis
       await Project.deleteMany({ user: userId });
       await VerificationResult.deleteMany({ candidateId: userId });
@@ -335,11 +340,17 @@ const deleteUserAccount = async (req, res) => {
     } else if (user.role === "recruiter") {
       const Job = require("../models/Job");
       const VerificationResult = require("../models/VerificationResult");
+      const RecruiterApplicant = require("../models/RecruiterApplicant");
 
       const jobs = await Job.find({ recruiterId: userId });
       const jobIds = jobs.map(j => j._id);
 
       await VerificationResult.deleteMany({ jobId: { $in: jobIds } });
+      const applicants = await RecruiterApplicant.find({ recruiterId: userId }).select("fileUrl");
+      applicants.forEach((applicant) => {
+        if (applicant.fileUrl?.startsWith("/uploads/")) filesToDelete.push(applicant.fileUrl);
+      });
+      await RecruiterApplicant.deleteMany({ recruiterId: userId });
       await Job.deleteMany({ recruiterId: userId });
     }
 

@@ -3,13 +3,21 @@ const Job = require("../models/Job");
 const VerificationResult = require("../models/VerificationResult");
 const Exam = require("../models/Exam");
 const User = require("../models/User");
+const ResumeAnalysis = require("../models/ResumeAnalysis");
+const RecruiterApplicant = require("../models/RecruiterApplicant");
+const fs = require("fs");
+const path = require("path");
+const crypto = require("crypto");
+const { analyzeResumeBuffer, extractTextFromBuffer, normalizeText } = require("../services/resumeIntelligenceService");
+const { flatSkillCatalog } = require("../data/skillCatalog");
 const { rebuildSkillProgression } = require("../services/skillProgressionService");
+const { scoreClaimsAgainstJob, selectAdaptiveQuestions } = require("../services/claimVerificationService");
 
 // @desc    Parse Resume against Job description
 // @route   POST /api/verify/parse
 // @access  Private (Recruiter)
 const parseResume = asyncHandler(async (req, res) => {
-  const { resumeText, candidateId, jobId } = req.body;
+  const { candidateId, jobId } = req.body;
 
   const job = await Job.findById(jobId);
   const candidate = await User.findById(candidateId);
@@ -29,52 +37,29 @@ const parseResume = asyncHandler(async (req, res) => {
     throw new Error("Selected candidate must be a student profile");
   }
 
-  // Mock parsing algorithm: Intersect targetSkills with resumeText keywords
-  const textLower = resumeText.toLowerCase();
-  let matchedSkills = 0;
-  
-  job.targetSkills.forEach((skill) => {
-    if (textLower.includes(skill.toLowerCase())) {
-      matchedSkills++;
-    }
-  });
-
-  const alignmentScore = job.targetSkills.length > 0
-    ? Math.round((matchedSkills / job.targetSkills.length) * 100)
-    : 100;
-
-  // Verification Workflow: score < 75% -> triggers exam
-  const status = alignmentScore < 75 ? "Pending Exam" : "Verified";
-
-  if (status === "Pending Exam") {
-    // Mock Automated Email
-    console.log(`[Verification Engine] EMAIL SENT to ${candidate.email}: Alignment Score ${alignmentScore}%. Please complete the Verification Exam to proceed.`);
+  const analysis = await ResumeAnalysis.findOne({ candidateId, active: true, status: "Analysis Complete" });
+  if (!analysis) {
+    res.status(409);
+    throw new Error("The candidate's latest resume must finish analysis before screening.");
   }
+  const scoring = scoreClaimsAgainstJob(analysis.claims, job);
+  const status = "Pending Exam";
 
   const result = await VerificationResult.findOneAndUpdate(
     { candidateId, jobId },
     {
-      candidateId,
-      jobId,
-      resumeText,
-      alignmentScore,
-      status,
-      examScore: undefined,
+      $set: {
+        candidateId,
+        jobId,
+        resumeText: analysis.truncatedText,
+        sourceAnalysisId: analysis._id,
+        ...scoring,
+        status,
+      },
+      $unset: { examScore: 1, examId: 1 },
     },
     { upsert: true, new: true, setDefaultsOnInsert: true },
   );
-
-  if (status === "Verified") {
-    await rebuildSkillProgression(candidateId, {
-      type: "recruiter_assessment",
-      label: `Resume alignment for ${job.title}`,
-      technologies: job.targetSkills,
-      score: alignmentScore,
-      xp: 150,
-      completed: true,
-      source: result._id.toString(),
-    });
-  }
 
   res.status(201).json(result);
 });
@@ -93,28 +78,29 @@ const getExamForJob = asyncHandler(async (req, res) => {
     throw new Error("No verification request found for this job");
   }
 
-  // Mock finding an exam related to the job topic. 
-  // In reality, we'd relate Exam to Job directly or via tags. We'll return a generic mock exam here.
-  let exam = await Exam.findOne();
-  
+  let exam = verificationResult.examId ? await Exam.findById(verificationResult.examId) : null;
   if (!exam) {
-    // Seed a mock exam if none exists
+    const job = await Job.findById(req.params.jobId);
+    const skills = [...new Set([...(verificationResult.matchedSkills || []), ...(job?.targetSkills || [])])];
+    const bankQuestions = await selectAdaptiveQuestions(skills, 10);
+    if (!bankQuestions.length) {
+      res.status(409);
+      throw new Error("No exam questions are available. Seed the question bank before starting verification.");
+    }
     exam = await Exam.create({
-      topic: "General Software Engineering",
+      verificationResultId: verificationResult._id,
+      sourceAnalysisId: verificationResult.sourceAnalysisId,
+      topic: job?.title || "Claim Verification",
+      skills,
       passingScore: 70,
-      questions: [
-        {
-          questionText: "What is the primary purpose of a reverse proxy?",
-          options: ["Database scaling", "Load balancing and security", "Frontend rendering", "Code compilation"],
-          correctOption: 1
-        },
-        {
-          questionText: "Which HTTP method is idempotent?",
-          options: ["POST", "PUT", "PATCH", "None"],
-          correctOption: 1
-        }
-      ]
+      questions: bankQuestions.map((question) => ({
+        questionText: question.text,
+        options: question.options,
+        correctOption: question.correctIndex,
+      })),
     });
+    verificationResult.examId = exam._id;
+    await verificationResult.save();
   }
 
   // Hide correctOptions from candidate
@@ -222,6 +208,83 @@ const getMyJobs = asyncHandler(async (req, res) => {
   res.json(jobs);
 });
 
+const createJobFromFile = asyncHandler(async (req, res) => {
+  if (!req.file) {
+    res.status(400);
+    throw new Error("A PDF, DOCX, or TXT job description is required.");
+  }
+  const rawText = await extractTextFromBuffer(req.file.buffer, req.file.mimetype, req.file.originalname);
+  const description = normalizeText(rawText);
+  if (!description) {
+    res.status(400);
+    throw new Error("No readable job-description text was found.");
+  }
+  const lower = description.toLowerCase();
+  const targetSkills = flatSkillCatalog
+    .filter((skill) => skill.triggers.some((trigger) => lower.includes(trigger.toLowerCase())))
+    .map((skill) => skill.name);
+  const title = String(req.body.title || path.parse(req.file.originalname).name).trim();
+  const job = await Job.create({ recruiterId: req.user._id, title, description, targetSkills });
+  res.status(201).json(job);
+});
+
+const uploadApplicantResumes = asyncHandler(async (req, res) => {
+  const job = await Job.findOne({ _id: req.body.jobId, recruiterId: req.user._id });
+  if (!job) {
+    res.status(404);
+    throw new Error("Select one of your jobs before uploading resumes.");
+  }
+  if (!req.files?.length) {
+    res.status(400);
+    throw new Error("Select at least one resume.");
+  }
+
+  const uploadDir = path.join(__dirname, "..", "uploads", "recruiter-resumes");
+  fs.mkdirSync(uploadDir, { recursive: true });
+  const records = await Promise.all(req.files.map(async (file) => {
+    const extension = path.extname(file.originalname).toLowerCase();
+    const filename = `${crypto.randomBytes(16).toString("hex")}${extension}`;
+    const fileUrl = `/uploads/recruiter-resumes/${filename}`;
+    fs.writeFileSync(path.join(uploadDir, filename), file.buffer);
+    const applicant = await RecruiterApplicant.create({
+      recruiterId: req.user._id,
+      jobId: job._id,
+      originalFileName: file.originalname,
+      mimeType: file.mimetype,
+      fileUrl,
+    });
+    try {
+      const parsed = await analyzeResumeBuffer(file.buffer, {
+        mimeType: file.mimetype,
+        fileName: file.originalname,
+        userProfile: { name: path.parse(file.originalname).name },
+      });
+      const scoring = scoreClaimsAgainstJob(parsed.claims, job);
+      Object.assign(applicant, {
+        status: "Completed",
+        resumeText: parsed.normalizedText.substring(0, 20000),
+        claims: parsed.claims,
+        analysis: parsed.analysis,
+        ...scoring,
+        processedAt: new Date(),
+      });
+    } catch (error) {
+      applicant.status = "Failed";
+      applicant.error = error.message;
+      applicant.processedAt = new Date();
+    }
+    return applicant.save();
+  }));
+  res.status(201).json(records);
+});
+
+const getApplicantResumes = asyncHandler(async (req, res) => {
+  const filter = { recruiterId: req.user._id };
+  if (req.query.jobId) filter.jobId = req.query.jobId;
+  const applicants = await RecruiterApplicant.find(filter).populate("jobId", "title").sort({ createdAt: -1 });
+  res.json(applicants);
+});
+
 module.exports = {
   parseResume,
   getExamForJob,
@@ -229,5 +292,8 @@ module.exports = {
   getRecruiterResults,
   getCandidateResults,
   createJobRole,
-  getMyJobs
+  getMyJobs,
+  createJobFromFile,
+  uploadApplicantResumes,
+  getApplicantResumes,
 };

@@ -26,7 +26,12 @@ const fs = require("fs");
 const crypto = require("crypto");
 const cloudinary = require("../utils/cloudinary");
 
-const isCloudinaryConfigured = () => !!process.env.CLOUDINARY_CLOUD_NAME;
+const isCloudinaryConfigured = () => Boolean(
+  process.env.CLOUDINARY_CLOUD_NAME &&
+  process.env.CLOUDINARY_API_KEY &&
+  process.env.CLOUDINARY_API_SECRET
+);
+const PROFILE_IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 
 // Ensure uploads directories exist for local fallback
 const ensureDir = (dir) => { if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true }); };
@@ -43,8 +48,7 @@ const imageUpload = multer({
   storage,
   limits: { fileSize: PROFILE_IMAGE_LIMIT_MB * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    const allowed = ["image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif"];
-    if (allowed.includes(file.mimetype)) {
+    if (PROFILE_IMAGE_MIME_TYPES.has(file.mimetype)) {
       cb(null, true);
     } else {
       cb(new Error("Only image files are allowed (JPG, PNG, WEBP, GIF)"), false);
@@ -52,23 +56,44 @@ const imageUpload = multer({
   },
 });
 
+const receiveProfileImage = (req, res, next) => {
+  imageUpload.single("image")(req, res, (error) => {
+    if (!error) return next();
+    if (error.code === "LIMIT_FILE_SIZE") {
+      return res.status(413).json({
+        message: `Image exceeds ${PROFILE_IMAGE_LIMIT_MB}MB limit. Please use a smaller image.`,
+      });
+    }
+    return res.status(400).json({ message: error.message });
+  });
+};
+
 const resumeUpload = multer({
   storage,
   limits: { fileSize: RESUME_FILE_LIMIT_MB * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const allowed = [
       "application/pdf",
-      "application/msword",
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       "text/plain",
     ];
     if (allowed.includes(file.mimetype)) {
       cb(null, true);
     } else {
-      cb(new Error("Only resume files are allowed (PDF, DOC, DOCX, TXT)"), false);
+      cb(new Error("Only resume files are allowed (PDF, DOCX, TXT)"), false);
     }
   },
 });
+
+const receiveResume = (req, res, next) => {
+  resumeUpload.single("resume")(req, res, (error) => {
+    if (!error) return next();
+    if (error.code === "LIMIT_FILE_SIZE") {
+      return res.status(413).json({ message: `Resume exceeds ${RESUME_FILE_LIMIT_MB}MB limit.` });
+    }
+    return res.status(400).json({ message: error.message });
+  });
+};
 
 // Helper: save buffer to local disk, return URL
 const saveLocal = (buffer, originalName, subDir) => {
@@ -79,25 +104,63 @@ const saveLocal = (buffer, originalName, subDir) => {
   return `/uploads/${subDir}/${filename}`;
 };
 
+// Browser-provided MIME types can be spoofed. Confirm the uploaded bytes match
+// one of the image formats accepted above before persisting anything.
+const detectedImageType = (buffer) => {
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return "image/jpeg";
+  if (buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "image/png";
+  if (buffer.length >= 12 && buffer.subarray(0, 4).toString() === "RIFF" && buffer.subarray(8, 12).toString() === "WEBP") return "image/webp";
+  if (buffer.length >= 6 && ["GIF87a", "GIF89a"].includes(buffer.subarray(0, 6).toString())) return "image/gif";
+  return null;
+};
+
+const isValidResumeFile = (file) => {
+  if (file.mimetype === "application/pdf") return file.buffer.subarray(0, 5).toString() === "%PDF-";
+  if (file.mimetype === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
+    return file.buffer.length >= 4 && file.buffer[0] === 0x50 && file.buffer[1] === 0x4b;
+  }
+  if (file.mimetype === "text/plain") return !file.buffer.includes(0x00);
+  return false;
+};
+
+const deleteLocalUpload = (fileUrl) => {
+  if (!fileUrl?.startsWith("/uploads/profiles/")) return;
+  const profilesDir = path.resolve(__dirname, "..", "uploads", "profiles");
+  const filePath = path.resolve(__dirname, "..", fileUrl.slice(1));
+  if (path.dirname(filePath) === profilesDir && fs.existsSync(filePath)) {
+    fs.unlinkSync(filePath);
+  }
+};
+
 // ====================== PROFILE IMAGE UPLOAD ======================
 router.post(
   "/profile/image",
   protect,
-  imageUpload.single("image"),
+  receiveProfileImage,
   async (req, res) => {
     try {
       if (!req.file) {
         return res.status(400).json({ message: "No image file received" });
       }
 
+      const imageType = detectedImageType(req.file.buffer);
+      if (!imageType || imageType !== req.file.mimetype) {
+        return res.status(400).json({ message: "The selected file is not a valid supported image." });
+      }
+
       let fileUrl;
+      const user = await User.findById(req.user._id);
+      if (!user) return res.status(404).json({ message: "User not found" });
+      const previousImage = user.profileImage;
 
       if (isCloudinaryConfigured()) {
         // Upload to Cloudinary with optimizations
         const result = await new Promise((resolve, reject) => {
           cloudinary.uploader.upload_stream(
             {
-              folder: "veriproof/profiles",
+              public_id: `veriproof/profiles/${user._id}`,
+              overwrite: true,
+              invalidate: true,
               resource_type: "image",
               transformation: [
                 { width: 800, height: 800, crop: "limit" },
@@ -114,13 +177,28 @@ router.post(
         fileUrl = result.secure_url;
       } else {
         // Local fallback: save to /uploads/profiles/
-        fileUrl = saveLocal(req.file.buffer, req.file.originalname, "profiles");
+        const extensionByType = {
+          "image/jpeg": ".jpg",
+          "image/png": ".png",
+          "image/webp": ".webp",
+          "image/gif": ".gif",
+        };
+        fileUrl = saveLocal(req.file.buffer, `profile${extensionByType[imageType]}`, "profiles");
       }
 
       // Save URL to user profile
-      const user = await User.findById(req.user._id);
       user.profileImage = fileUrl;
       await user.save();
+
+      // A profile owns one current photo. Remove a superseded local fallback
+      // only after the database points at the replacement.
+      if (previousImage && previousImage !== fileUrl) {
+        try {
+          deleteLocalUpload(previousImage);
+        } catch (cleanupError) {
+          console.error("Previous profile image cleanup failed:", cleanupError);
+        }
+      }
 
       res.json({
         success: true,
@@ -143,11 +221,14 @@ router.post(
 router.post(
   "/profile/resume-file",
   protect,
-  resumeUpload.single("resume"),
+  receiveResume,
   async (req, res) => {
     try {
       if (!req.file) {
         return res.status(400).json({ message: "No resume file received" });
+      }
+      if (!isValidResumeFile(req.file)) {
+        return res.status(400).json({ message: "The uploaded resume does not match its declared file format." });
       }
 
       let fileUrl;
@@ -178,7 +259,10 @@ router.post(
 
       // Trigger async resume parsing and intelligence pipeline (non-blocking)
       const { runAnalysis } = require("../services/resumeIntelligenceService");
-      runAnalysis(user._id, fileUrl).catch((err) => {
+      runAnalysis(user._id, fileUrl, {
+        originalFileName: req.file.originalname,
+        mimeType: req.file.mimetype,
+      }).catch((err) => {
         console.error("[Resume Intelligence] Asynchronous process crash:", err);
       });
 
@@ -222,6 +306,19 @@ router.get("/profile/resume-analysis", protect, async (req, res) => {
       error: analysis.error,
       lastUpdated: analysis.updatedAt || analysis.createdAt,
     });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// GET /api/users/profile/resume-analyses - immutable analysis/claims history
+router.get("/profile/resume-analyses", protect, async (req, res) => {
+  try {
+    const ResumeAnalysis = require("../models/ResumeAnalysis");
+    const analyses = await ResumeAnalysis.find({ candidateId: req.user._id })
+      .sort({ createdAt: -1 })
+      .select("status progress stage claims analysis active resumeUrl originalFileName mimeType processedAt createdAt error");
+    res.json(analyses);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

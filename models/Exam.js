@@ -8,6 +8,9 @@ const questionSchema = mongoose.Schema({
 
 const examSchema = mongoose.Schema(
   {
+    verificationResultId: { type: mongoose.Schema.Types.ObjectId, ref: "VerificationResult", index: true },
+    sourceAnalysisId: { type: mongoose.Schema.Types.ObjectId, ref: "ResumeAnalysis" },
+    skills: { type: [String], default: [] },
     topic: {
       type: String, // E.g., "MERN Stack Application", "React Fundamentals"
       required: true,

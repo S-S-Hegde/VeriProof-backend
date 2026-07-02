@@ -1,7 +1,8 @@
 const fs = require("fs");
 const path = require("path");
 const axios = require("axios");
-const pdfParse = require("pdf-parse");
+const { PDFParse } = require("pdf-parse");
+const mammoth = require("mammoth");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const User = require("../models/User");
 const ResumeAnalysis = require("../models/ResumeAnalysis");
@@ -39,6 +40,14 @@ const normalizeText = (rawText) => {
   return text.trim();
 };
 
+const containsSkillTrigger = (text, trigger) => {
+  const escaped = trigger.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const needsBoundaries = /^[a-z0-9]+$/.test(trigger) && trigger.length <= 4;
+  return needsBoundaries
+    ? new RegExp(`(^|[^a-z0-9])${escaped}([^a-z0-9]|$)`, "i").test(text)
+    : text.includes(trigger.toLowerCase());
+};
+
 // Helper: download file from URL (local or Cloudinary)
 const downloadFile = async (fileUrl) => {
   // Local file check
@@ -53,6 +62,27 @@ const downloadFile = async (fileUrl) => {
   // External URL download
   const response = await axios.get(fileUrl, { responseType: "arraybuffer" });
   return Buffer.from(response.data);
+};
+
+const extractTextFromBuffer = async (buffer, mimeType = "application/pdf", fileName = "") => {
+  const extension = path.extname(fileName).toLowerCase();
+  if (mimeType === "application/pdf" || extension === ".pdf") {
+    const parser = new PDFParse({ data: buffer });
+    try {
+      const result = await parser.getText();
+      return result.text || "";
+    } finally {
+      await parser.destroy();
+    }
+  }
+  if (mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || extension === ".docx") {
+    const result = await mammoth.extractRawText({ buffer });
+    return result.value || "";
+  }
+  if (mimeType === "text/plain" || extension === ".txt") {
+    return buffer.toString("utf8");
+  }
+  throw new Error("Unsupported resume format. Upload PDF, DOCX, or TXT.");
 };
 
 // Heuristic Fallback Parser (Regex and Skill Catalog triggers)
@@ -76,7 +106,7 @@ const deterministicFallbackParse = (text, userProfile = {}) => {
   const flatCatalog = skillCatalogModule.flatSkillCatalog || [];
   
   flatCatalog.forEach((skill) => {
-    if (skill.triggers && skill.triggers.some((trigger) => textLower.includes(trigger.toLowerCase()))) {
+    if (skill.triggers && skill.triggers.some((trigger) => containsSkillTrigger(textLower, trigger))) {
       matchedSkillIds.add(skill.id);
     }
   });
@@ -248,7 +278,13 @@ Ensure the response contains ONLY the raw JSON block without markdown prefix/suf
   const flatCatalog = skillCatalogModule.flatSkillCatalog || [];
   
   // Map extracted skills to catalog IDs where applicable
-  const skillsList = parsed.skills || [];
+  const skillsList = [...new Set([
+    ...(parsed.skills || []),
+    ...(parsed.programmingLanguages || []),
+    ...(parsed.frameworks || []),
+    ...(parsed.databases || []),
+    ...(parsed.tools || []),
+  ].map((skill) => String(skill).trim()).filter(Boolean))];
   const skills = skillsList.map((skillName, idx) => {
     // Try to find matching catalog item
     const matched = flatCatalog.find(s => 
@@ -332,7 +368,32 @@ Ensure the response contains ONLY the raw JSON block without markdown prefix/suf
 };
 
 // Main Asynchronous orchestrator
-const runAnalysis = async (userId, resumeUrl) => {
+const parseResumeText = async (rawText, userProfile = {}) => {
+  const normalizedText = normalizeText(rawText);
+  if (!normalizedText) throw new Error("No readable text was found in the resume.");
+
+  let parseResult;
+  const geminiKey = process.env.GEMINI_API_KEY;
+  if (geminiKey?.trim()) {
+    try {
+      parseResult = await geminiParse(geminiKey, normalizedText, userProfile);
+    } catch (geminiError) {
+      console.error("[Resume Intelligence] Gemini parse failed; using deterministic parser:", geminiError.message);
+      parseResult = deterministicFallbackParse(normalizedText, userProfile);
+      parseResult.analysis.parseErrors = [geminiError.message];
+    }
+  } else {
+    parseResult = deterministicFallbackParse(normalizedText, userProfile);
+  }
+  return { normalizedText, ...parseResult };
+};
+
+const analyzeResumeBuffer = async (buffer, { mimeType, fileName, userProfile = {} } = {}) => {
+  const rawText = await extractTextFromBuffer(buffer, mimeType, fileName);
+  return parseResumeText(rawText, userProfile);
+};
+
+const runAnalysis = async (userId, resumeUrl, fileMetadata = {}) => {
   let analysisRecord = null;
   try {
     console.log(`[Resume Intelligence] Starting parse for User ${userId}`);
@@ -348,6 +409,9 @@ const runAnalysis = async (userId, resumeUrl) => {
       stage: "Queued for processing",
       estimatedRemainingStage: "45s",
       active: true,
+      resumeUrl,
+      originalFileName: fileMetadata.originalFileName || "",
+      mimeType: fileMetadata.mimeType || "application/pdf",
       processedAt: new Date()
     });
 
@@ -362,10 +426,12 @@ const runAnalysis = async (userId, resumeUrl) => {
     await analysisRecord.save();
 
     const buffer = await downloadFile(resumeUrl);
-    const pdfData = await pdfParse(buffer);
-    
-    // Run text normalization
-    const normalizedText = normalizeText(pdfData.text);
+    const rawText = await extractTextFromBuffer(
+      buffer,
+      fileMetadata.mimeType || "application/pdf",
+      fileMetadata.originalFileName || resumeUrl,
+    );
+    const normalizedText = normalizeText(rawText);
     analysisRecord.truncatedText = normalizedText.substring(0, 2000); // Truncate text block to avoid DB clutter
     await analysisRecord.save();
 
@@ -376,21 +442,8 @@ const runAnalysis = async (userId, resumeUrl) => {
     analysisRecord.estimatedRemainingStage = "20s";
     await analysisRecord.save();
 
-    let parseResult;
-    const geminiKey = process.env.GEMINI_API_KEY;
-    if (geminiKey && geminiKey.trim() !== "") {
-      try {
-        console.log(`[Resume Intelligence] Invoking Gemini model for structured extraction...`);
-        parseResult = await geminiParse(geminiKey, normalizedText, user);
-      } catch (geminiError) {
-        console.error("[Resume Intelligence] Gemini parse failed. Falling back to deterministic regex parser:", geminiError);
-        parseResult = deterministicFallbackParse(normalizedText, user);
-        parseResult.analysis.parseErrors = [geminiError.message];
-      }
-    } else {
-      console.log(`[Resume Intelligence] Gemini key missing. Using deterministic fallback parser.`);
-      parseResult = deterministicFallbackParse(normalizedText, user);
-    }
+    const { normalizedText: parsedText, ...parseResult } = await parseResumeText(normalizedText, user);
+    analysisRecord.truncatedText = parsedText.substring(0, 2000);
 
     // Save extracted claims and analysis
     analysisRecord.claims = parseResult.claims;
@@ -458,4 +511,7 @@ const runAnalysis = async (userId, resumeUrl) => {
 module.exports = {
   runAnalysis,
   normalizeText,
+  extractTextFromBuffer,
+  parseResumeText,
+  analyzeResumeBuffer,
 };

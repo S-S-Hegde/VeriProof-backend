@@ -4,31 +4,29 @@ const Project = require("../models/Project");
 const VerificationResult = require("../models/VerificationResult");
 const crypto = require("crypto");
 const { rebuildSkillProgression } = require("../services/skillProgressionService");
+const ResumeAnalysis = require("../models/ResumeAnalysis");
+const { selectAdaptiveQuestions } = require("../services/claimVerificationService");
 
 // @desc    Fetch a generated exam payload
 // @route   GET /api/exams/start
 // @access  Private
 const startExam = async (req, res) => {
   try {
-    // In the future, this can query based on req.user.skills
-    // For now, randomly select 10 questions across difficulties
-    
-    const questions = await Question.aggregate([
-      { $sample: { size: 10 } },
-      { $project: {
-          _id: 1,
-          category: 1,
-          difficulty: 1,
-          text: 1,
-          options: 1,
-      }}
-    ]);
+    const analysis = await ResumeAnalysis.findOne({
+      candidateId: req.user._id,
+      active: true,
+      status: "Analysis Complete",
+    });
+    const claimedSkills = (analysis?.claims?.skills || []).map((skill) => skill.name);
+    const questions = await selectAdaptiveQuestions(claimedSkills, 10);
 
     if (!questions || questions.length === 0) {
       return res.status(404).json({ message: "No questions available in the database." });
     }
 
-    res.json(questions);
+    res.json(questions.map(({ _id, category, difficulty, text, options }) => ({
+      _id, category, difficulty, text, options,
+    })));
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -40,9 +38,12 @@ const startExam = async (req, res) => {
 const submitExam = async (req, res) => {
   try {
     // Phase 2C Security: Ensure Repository Analysis is completed before allowing Exam Submission
-    const hasRepoAnalysis = await Project.exists({ user: req.user._id, "githubStats.commitsCount": { $exists: true, $gt: 0 } });
-    if (!hasRepoAnalysis) {
-      return res.status(403).json({ message: "Repository Analysis required before Technical Assessment." });
+    const [hasRepoAnalysis, hasResumeAnalysis] = await Promise.all([
+      Project.exists({ user: req.user._id, "githubStats.commitsCount": { $exists: true, $gt: 0 } }),
+      ResumeAnalysis.exists({ candidateId: req.user._id, active: true, status: "Analysis Complete" }),
+    ]);
+    if (!hasRepoAnalysis && !hasResumeAnalysis) {
+      return res.status(403).json({ message: "Complete resume or repository analysis before the technical assessment." });
     }
 
     const { answers = [] } = req.body;
@@ -99,13 +100,13 @@ const submitExam = async (req, res) => {
         });
       }
 
-      // Update Verification Engine if a pending result exists for this candidate
-      const existingResult = await VerificationResult.findOne({ candidateId: req.user._id, status: "Pending Exam" }).sort({ createdAt: -1 });
-      if (existingResult) {
-        existingResult.examScore = score;
-        existingResult.status = isPassed ? "Verified" : "Failed";
-        await existingResult.save();
-      }
+    }
+
+    const existingResult = await VerificationResult.findOne({ candidateId: req.user._id, status: "Pending Exam" }).sort({ createdAt: -1 });
+    if (existingResult) {
+      existingResult.examScore = score;
+      existingResult.status = isPassed ? "Verified" : "Failed";
+      await existingResult.save();
     }
 
     res.json({
