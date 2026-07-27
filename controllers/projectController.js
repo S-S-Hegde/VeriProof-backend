@@ -1,6 +1,11 @@
+const axios = require("axios"); // <-- New import for proxying to Python
 const Project = require("../models/Project");
-const { getRepoDetails } = require("../services/githubService");
-const { rebuildSkillProgression } = require("../services/skillProgressionService");
+const ResumeAnalysis = require("../models/ResumeAnalysis");
+const {
+  rebuildSkillProgression,
+} = require("../services/skillProgressionService");
+
+const PYTHON_API_BASE = "http://127.0.0.1:8000/api";
 
 // @desc    Create a project
 // @route   POST /api/projects
@@ -102,7 +107,9 @@ const getProjects = async (req, res) => {
         totalPages: Math.ceil(total / safeLimit) || 1,
       },
       filters: {
-        technologies: technologies.filter(Boolean).sort((a, b) => a.localeCompare(b)),
+        technologies: technologies
+          .filter(Boolean)
+          .sort((a, b) => a.localeCompare(b)),
       },
     });
   } catch (error) {
@@ -142,7 +149,7 @@ const getProjectById = async (req, res) => {
   }
 };
 
-// @desc    Sync project stats with GitHub
+// @desc    Sync project stats with GitHub (Proxied to Python Engine)
 // @route   PUT /api/projects/:id/sync
 // @access  Private
 const syncProject = async (req, res) => {
@@ -169,28 +176,62 @@ const syncProject = async (req, res) => {
         .json({ message: "Valid GitHub repository URL is required" });
     }
 
-    // Fetch details
-    const stats = await getRepoDetails(project.repositoryUrl);
+    // Extract the GitHub username from the repository URL
+    const repoPathParts = project.repositoryUrl
+      .split("github.com/")[1]
+      .split("/");
+    const githubUsername = repoPathParts[0];
 
-    project.githubStats = {
-      ...project.githubStats,
-      lastCommitDate: stats.lastCommitDate,
-      languages: stats.languages,
-    };
+    // Retrieve the user's latest parsed claims to send to Python
+    const analysis = await ResumeAnalysis.findOne({
+      candidateId: req.user._id,
+      active: true,
+      status: "Analysis Complete",
+    });
+    const userClaims =
+      analysis && analysis.claims ? analysis.claims.skills : [];
+
+    // --- PROXY TO PYTHON MODULE 2 (GitHub Verification) ---
+    let githubScore = 0;
+    try {
+      const pythonRes = await axios.post(`${PYTHON_API_BASE}/verify-github`, {
+        github_username: githubUsername,
+        claims: userClaims || [],
+      });
+      githubScore = pythonRes.data.result.overall_score || 0;
+
+      // We no longer receive raw language bytes from Python in this payload format,
+      // so we set a default timestamp to show sync completion
+      project.githubStats = {
+        ...project.githubStats,
+        lastCommitDate: new Date(),
+      };
+    } catch (error) {
+      console.error(
+        "[Python Proxy] GitHub Verification Failed:",
+        error.message,
+      );
+      return res
+        .status(502)
+        .json({
+          message: "Failed to communicate with AI verification engine.",
+        });
+    }
 
     const updatedProject = await project.save();
+
+    // Update the skill tree using the dynamic Python score
     await rebuildSkillProgression(req.user._id, {
       type: "github_sync",
       label: updatedProject.title,
-      technologies: [
-        ...(updatedProject.technologies || []),
-        ...Object.keys(updatedProject.githubStats?.languages || {}),
-      ],
-      score: updatedProject.isVerified ? 92 : 64,
+      technologies: updatedProject.technologies || [],
+      score:
+        githubScore > 0 ? githubScore : updatedProject.isVerified ? 92 : 64,
       xp: 90,
       completed: Boolean(updatedProject.isVerified),
       source: updatedProject._id.toString(),
     });
+
     res.json(updatedProject);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -219,7 +260,7 @@ const getMyAnalytics = async (req, res) => {
     // 2. Project status distribution
     const statusTally = { Published: 0, Verified: 0, Pending: 0, Draft: 0 };
     projects.forEach((p) => {
-      const s = p.isVerified ? "Verified" : (p.status || "Published");
+      const s = p.isVerified ? "Verified" : p.status || "Published";
       statusTally[s] = (statusTally[s] || 0) + 1;
     });
     const statusData = Object.entries(statusTally)
@@ -227,7 +268,14 @@ const getMyAnalytics = async (req, res) => {
       .map(([label, value]) => ({ label, value }));
 
     // 3. Rankings: aggregate across all projects (take latest non-empty)
-    const rankings = { hackerrank: "", leetcode: "", codeforces: "", codechef: "", github: "", other: "" };
+    const rankings = {
+      hackerrank: "",
+      leetcode: "",
+      codeforces: "",
+      codechef: "",
+      github: "",
+      other: "",
+    };
     [...projects].reverse().forEach((p) => {
       if (p.rankings) {
         Object.keys(rankings).forEach((k) => {

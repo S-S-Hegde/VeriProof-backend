@@ -281,6 +281,7 @@ Key | Description | Default
 `files` | For multipart forms, the max number of file fields | Infinity
 `parts` | For multipart forms, the max number of parts (fields + files) | Infinity
 `headerPairs` | For multipart forms, the max number of header key=>value pairs to parse | 2000
+`fieldNestingDepth` | Max number of nesting levels for field names (e.g. `a[b][c]` has 2 levels) | Infinity
 
 Specifying the limits can help protect your site against denial of service (DoS) attacks.
 
@@ -306,6 +307,15 @@ function fileFilter (req, file, cb) {
 
 }
 ```
+
+## Security
+
+Specifying the [limits](#limits) can help protect your site against denial of service (DoS) attacks. The following limits are recommended for most applications:
+
+- `fileSize` -- set to the maximum expected file size for your use case
+- `files` -- set to the maximum number of files per request
+- `fields` -- set to the maximum number of text fields per request
+- `fieldNestingDepth` -- set to the minimum depth your field names require (e.g. `3` for `a[b][c]`)
 
 ## Error handling
 
