@@ -11,21 +11,37 @@ const sendEmail = require("../utils/sendEmail");
 const registerUser = async (req, res) => {
   const { name, email, password, role, githubUsername } = req.body;
   try {
-    const userExists = await User.findOne({ email });
-    if (userExists) return res.status(400).json({ message: "User already exists" });
+    if (!name || !email || !password) {
+      return res.status(400).json({ message: "Please enter name, email, and password." });
+    }
 
-    const user = await User.create({ name, email, password, role: role || "student", githubUsername });
+    const normalizedEmail = email.trim().toLowerCase();
+    const normalizedName = name.trim();
+    const userExists = await User.findOne({ email: normalizedEmail });
+    if (userExists) return res.status(400).json({ message: "An account with this email address already exists." });
+
+    const user = await User.create({
+      name: normalizedName,
+      email: normalizedEmail,
+      password,
+      role: role || "student",
+      githubUsername: githubUsername ? githubUsername.trim() : "",
+    });
+
     if (user) {
       res.status(201).json({
-        _id: user._id, name: user.name, email: user.email,
-        role: user.role, githubUsername: user.githubUsername,
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        githubUsername: user.githubUsername,
         token: generateToken(user._id),
       });
     } else {
-      res.status(400).json({ message: "Invalid user data" });
+      res.status(400).json({ message: "Invalid user data provided." });
     }
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ message: error.message || "Registration failed due to a server error." });
   }
 };
 
@@ -35,11 +51,18 @@ const registerUser = async (req, res) => {
 const authUser = async (req, res) => {
   const { email, password } = req.body;
   try {
-    const user = await User.findOne({ email });
+    if (!email || !password) {
+      return res.status(400).json({ message: "Please provide both email and password." });
+    }
+    const normalizedEmail = email.trim().toLowerCase();
+    const user = await User.findOne({ email: normalizedEmail });
     if (user && (await user.matchPassword(password))) {
       res.json({
-        _id: user._id, name: user.name, email: user.email,
-        role: user.role, githubUsername: user.githubUsername,
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        githubUsername: user.githubUsername,
         token: generateToken(user._id),
       });
     } else {
