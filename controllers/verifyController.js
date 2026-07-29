@@ -1,5 +1,5 @@
 const asyncHandler = require("express-async-handler");
-const axios = require("axios"); // <-- New import for making requests to Python
+const axios = require("axios");
 const Job = require("../models/Job");
 const VerificationResult = require("../models/VerificationResult");
 const Exam = require("../models/Exam");
@@ -9,11 +9,9 @@ const RecruiterApplicant = require("../models/RecruiterApplicant");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
-const {
-  analyzeResumeBuffer,
-  extractTextFromBuffer,
-  normalizeText,
-} = require("../services/resumeIntelligenceService");
+
+const resumeIntelligenceService = require("../services/resumeIntelligenceService");
+
 const { flatSkillCatalog } = require("../data/skillCatalog");
 const {
   rebuildSkillProgression,
@@ -57,7 +55,6 @@ const parseResume = asyncHandler(async (req, res) => {
     );
   }
 
-  // --- PROXY TO PYTHON MODULE 1 (Claim Verifier) ---
   let alignmentScore = 0;
   let verifiableMatched = 0;
   try {
@@ -69,7 +66,7 @@ const parseResume = asyncHandler(async (req, res) => {
     verifiableMatched = pythonRes.data.result.verifiable_claims_matched || 0;
   } catch (error) {
     console.error("[Python Proxy] Claim Verification Failed:", error.message);
-    alignmentScore = 0; // Fallback score on error
+    alignmentScore = 0;
   }
 
   const status = "Pending Exam";
@@ -83,7 +80,7 @@ const parseResume = asyncHandler(async (req, res) => {
         resumeText: analysis.truncatedText,
         sourceAnalysisId: analysis._id,
         alignmentScore: alignmentScore,
-        matchedSkills: [], // Deprecated in favor of numerical verifiableMatched count
+        matchedSkills: [],
         missingSkills: [],
         status,
       },
@@ -92,7 +89,6 @@ const parseResume = asyncHandler(async (req, res) => {
     { upsert: true, new: true, setDefaultsOnInsert: true },
   );
 
-  // Attach metadata for the frontend
   const resultObj = result.toObject();
   resultObj.verifiable_claims_matched = verifiableMatched;
 
@@ -126,7 +122,6 @@ const getExamForJob = asyncHandler(async (req, res) => {
       ]),
     ];
 
-    // --- PROXY TO PYTHON MODULE 3 (Assessment Generator) ---
     let generatedMcqs = [];
     try {
       const formattedClaims = skills.map((skill) => ({
@@ -164,7 +159,6 @@ const getExamForJob = asyncHandler(async (req, res) => {
       skills,
       passingScore: 70,
       questions: generatedMcqs.map((q) => {
-        // Find the index of the correct answer from the array of options
         const correctIdx = q.options.indexOf(q.correct_answer);
         return {
           questionText: q.question_text,
@@ -178,7 +172,6 @@ const getExamForJob = asyncHandler(async (req, res) => {
     await verificationResult.save();
   }
 
-  // Hide correctOptions from candidate
   const candidateExam = {
     _id: exam._id,
     topic: exam.topic,
@@ -282,37 +275,49 @@ const getMyJobs = asyncHandler(async (req, res) => {
   res.json(jobs);
 });
 
+// @desc    Create Job from File (Proxied to Python AI)
+// @route   POST /api/verify/job/from-file
+// @access  Private (Recruiter)
 const createJobFromFile = asyncHandler(async (req, res) => {
   if (!req.file) {
     res.status(400);
     throw new Error("A PDF, DOCX, or TXT job description is required.");
   }
-  const rawText = await extractTextFromBuffer(
-    req.file.buffer,
-    req.file.mimetype,
-    req.file.originalname,
-  );
-  const description = normalizeText(rawText);
-  if (!description) {
-    res.status(400);
-    throw new Error("No readable job-description text was found.");
+
+  try {
+    const parsedData = await resumeIntelligenceService.analyzeResumeBuffer(
+      req.file.buffer,
+      {
+        mimeType: req.file.mimetype,
+        fileName: req.file.originalname,
+      },
+    );
+
+    const description = parsedData.normalizedText;
+
+    if (!description) {
+      res.status(400);
+      throw new Error("No readable text was found in the document.");
+    }
+
+    const targetSkills = parsedData.claims.skills || [];
+
+    const title = String(
+      req.body.title || path.parse(req.file.originalname).name,
+    ).trim();
+
+    const job = await Job.create({
+      recruiterId: req.user._id,
+      title,
+      description,
+      targetSkills,
+    });
+
+    res.status(201).json(job);
+  } catch (error) {
+    res.status(500);
+    throw new Error(`Document Processing Failed: ${error.message}`);
   }
-  const lower = description.toLowerCase();
-  const targetSkills = flatSkillCatalog
-    .filter((skill) =>
-      skill.triggers.some((trigger) => lower.includes(trigger.toLowerCase())),
-    )
-    .map((skill) => skill.name);
-  const title = String(
-    req.body.title || path.parse(req.file.originalname).name,
-  ).trim();
-  const job = await Job.create({
-    recruiterId: req.user._id,
-    title,
-    description,
-    targetSkills,
-  });
-  res.status(201).json(job);
 });
 
 const uploadApplicantResumes = asyncHandler(async (req, res) => {
@@ -345,13 +350,15 @@ const uploadApplicantResumes = asyncHandler(async (req, res) => {
         fileUrl,
       });
       try {
-        const parsed = await analyzeResumeBuffer(file.buffer, {
-          mimeType: file.mimetype,
-          fileName: file.originalname,
-          userProfile: { name: path.parse(file.originalname).name },
-        });
+        const parsed = await resumeIntelligenceService.analyzeResumeBuffer(
+          file.buffer,
+          {
+            mimeType: file.mimetype,
+            fileName: file.originalname,
+            userProfile: { name: path.parse(file.originalname).name },
+          },
+        );
 
-        // --- PROXY TO PYTHON MODULE 1 (Claim Verifier) ---
         let alignmentScore = 0;
         try {
           const pythonRes = await axios.post(
