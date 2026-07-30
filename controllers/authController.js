@@ -41,7 +41,8 @@ const registerUser = async (req, res) => {
       res.status(400).json({ message: "Invalid user data provided." });
     }
   } catch (error) {
-    res.status(500).json({ message: error.message || "Registration failed due to a server error." });
+    const isDev = process.env.NODE_ENV !== "production";
+    res.status(500).json({ message: isDev ? error.message : "Registration failed. Please try again." });
   }
 };
 
@@ -49,27 +50,38 @@ const registerUser = async (req, res) => {
 // @route   POST /api/users/login
 // @access  Public
 const authUser = async (req, res) => {
-  const { email, password } = req.body;
+  const { email, password, role } = req.body;
   try {
     if (!email || !password) {
       return res.status(400).json({ message: "Please provide both email and password." });
     }
     const normalizedEmail = email.trim().toLowerCase();
     const user = await User.findOne({ email: normalizedEmail });
-    if (user && (await user.matchPassword(password))) {
-      res.json({
-        _id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        githubUsername: user.githubUsername,
-        token: generateToken(user._id),
-      });
-    } else {
-      res.status(401).json({ message: "Invalid email or password" });
+
+    if (!user || !(await user.matchPassword(password))) {
+      return res.status(401).json({ message: "Invalid email or password." });
     }
+
+    // Role-mismatch guard: user exists but registered under a different role
+    if (role && user.role !== role) {
+      return res.status(403).json({
+        message: `No ${role === "recruiter" ? "Investigator" : "Candidate"} account found for this email. Would you like to register one?`,
+        redirectTo: "/register",
+        existingRole: user.role,
+      });
+    }
+
+    res.json({
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      githubUsername: user.githubUsername,
+      token: generateToken(user._id),
+    });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    const isDev = process.env.NODE_ENV !== "production";
+    res.status(500).json({ message: isDev ? error.message : "Login failed. Please try again." });
   }
 };
 
@@ -114,11 +126,10 @@ const getUserProfile = async (req, res) => {
 
     res.json(userObj);
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    const isDev = process.env.NODE_ENV !== "production";
+    res.status(500).json({ message: isDev ? error.message : "Failed to load profile." });
   }
 };
-
-// @desc    Update full user profile (name, bio, social, academic, prefs)
 // @route   PUT /api/users/profile
 // @access  Private
 const updateUserProfile = async (req, res) => {
@@ -142,7 +153,18 @@ const updateUserProfile = async (req, res) => {
         ...req.body.notifications,
       };
     }
-    if (req.body.password && req.body.password.length >= 6) {
+    if (req.body.password) {
+      // SECURITY: Require the user's current password before allowing a change.
+      if (!req.body.currentPassword) {
+        return res.status(400).json({ message: "Current password is required to set a new password." });
+      }
+      const isMatch = await user.matchPassword(req.body.currentPassword);
+      if (!isMatch) {
+        return res.status(401).json({ message: "Current password is incorrect." });
+      }
+      if (req.body.password.length < 8) {
+        return res.status(400).json({ message: "New password must be at least 8 characters." });
+      }
       user.password = req.body.password;
     }
 
@@ -152,7 +174,8 @@ const updateUserProfile = async (req, res) => {
     plain.token = generateToken(updated._id);
     res.json(plain);
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    const isDev = process.env.NODE_ENV !== "production";
+    res.status(500).json({ message: isDev ? error.message : "Profile update failed." });
   }
 };
 

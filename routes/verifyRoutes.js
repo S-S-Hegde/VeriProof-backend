@@ -11,7 +11,9 @@ const {
   createJobFromFile,
   uploadApplicantResumes,
   getApplicantResumes,
+  deleteJob,
 } = require("../controllers/verifyController");
+
 const { protect, recruiterOnly } = require("../middleware/authMiddleware");
 const multer = require("multer");
 
@@ -48,13 +50,15 @@ const receiveDocuments = (field, maxCount) => (req, res, next) => {
 };
 
 // Recruiter endpoints
-router.post("/parse", protect, recruiterOnly, parseResume);
-router.get("/results", protect, recruiterOnly, getRecruiterResults);
-router.post("/job", protect, recruiterOnly, createJobRole);
-router.post("/job/from-file", protect, recruiterOnly, receiveDocuments("jobDescription", 1), createJobFromFile);
-router.get("/my-jobs", protect, recruiterOnly, getMyJobs);
-router.post("/applicants/upload", protect, recruiterOnly, receiveDocuments("resumes", 10), uploadApplicantResumes);
-router.get("/applicants", protect, recruiterOnly, getApplicantResumes);
+router.post("/parse",              protect, recruiterOnly, parseResume);
+router.get("/results",             protect, recruiterOnly, getRecruiterResults);
+router.post("/job",                protect, recruiterOnly, createJobRole);
+router.post("/job/from-file",      protect, recruiterOnly, receiveDocuments("jobDescription", 1), createJobFromFile);
+router.delete("/job/:id",          protect, recruiterOnly, deleteJob);
+router.get("/my-jobs",             protect, recruiterOnly, getMyJobs);
+router.post("/applicants/upload",  protect, recruiterOnly, receiveDocuments("resumes", 10), uploadApplicantResumes);
+router.get("/applicants",          protect, recruiterOnly, getApplicantResumes);
+
 
 // Candidate endpoints
 router.get("/my-results", protect, getCandidateResults);

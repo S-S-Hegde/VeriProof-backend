@@ -17,6 +17,15 @@ const {
 } = require("../controllers/authController");
 
 const { protect, recruiterOnly } = require("../middleware/authMiddleware");
+const { authLimiter, uploadLimiter } = require("../middleware/rateLimiter");
+const validate = require("../middleware/validate");
+const {
+  registerValidator,
+  loginValidator,
+  forgotPasswordValidator,
+  resetPasswordValidator,
+  updateProfileValidator,
+} = require("../middleware/validators/authValidators");
 
 // ====================== FILE UPLOAD INFRASTRUCTURE ======================
 
@@ -136,6 +145,7 @@ const deleteLocalUpload = (fileUrl) => {
 router.post(
   "/profile/image",
   protect,
+  uploadLimiter,
   receiveProfileImage,
   async (req, res) => {
     try {
@@ -221,6 +231,7 @@ router.post(
 router.post(
   "/profile/resume-file",
   protect,
+  uploadLimiter,
   receiveResume,
   async (req, res) => {
     try {
@@ -326,12 +337,12 @@ router.get("/profile/resume-analyses", protect, async (req, res) => {
 
 // ====================== OTHER ROUTES ======================
 
-router.post("/", registerUser);
-router.post("/login", authUser);
-router.post("/forgotpassword", forgotPassword);
-router.put("/resetpassword/:resettoken", resetPassword);
+router.post("/", authLimiter, registerValidator, validate, registerUser);
+router.post("/login", authLimiter, loginValidator, validate, authUser);
+router.post("/forgotpassword", authLimiter, forgotPasswordValidator, validate, forgotPassword);
+router.put("/resetpassword/:resettoken", authLimiter, resetPasswordValidator, validate, resetPassword);
 router.get("/profile", protect, getUserProfile);
-router.put("/profile", protect, updateUserProfile);
+router.put("/profile", protect, updateProfileValidator, validate, updateUserProfile);
 router.delete("/profile", protect, deleteUserAccount);
 router.get("/profile/saved-projects", protect, recruiterOnly, getSavedProjects);
 router.put("/profile/saved-projects/:projectId", protect, recruiterOnly, toggleSavedProject);

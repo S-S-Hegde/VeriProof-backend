@@ -9,10 +9,70 @@ const RecruiterApplicant = require("../models/RecruiterApplicant");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const sendEmail = require("../utils/sendEmail");
 
-const resumeIntelligenceService = require("../services/resumeIntelligenceService");
+const {
+  analyzeResumeBuffer,
+  scoreAlignmentLocally,
+} = require("../services/resumeIntelligenceService");
 
 const { flatSkillCatalog } = require("../data/skillCatalog");
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/** Extract email from plain resume text via regex */
+const extractEmailFromText = (text) => {
+  const match = text.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/);
+  return match ? match[0].toLowerCase() : null;
+};
+
+/** Extract candidate name: first non-empty line that isn't an email / phone / url */
+const extractNameFromText = (text) => {
+  const lines = text.split(/\n/).map(l => l.trim()).filter(Boolean);
+  for (const line of lines.slice(0, 8)) {
+    if (line.length > 2 && line.length < 60 &&
+        !line.match(/@/) && !line.match(/^[\d+\-()\s]{7,}$/) &&
+        !line.match(/^https?:\/\//i)) {
+      return line;
+    }
+  }
+  return null;
+};
+
+/** Branded invitation email HTML */
+const buildInviteEmail = ({ candidateName, recruiterName, jobTitle, registerUrl }) => ({
+  subject: `[VeriProof] You've been invited to verify your credentials — ${jobTitle}`,
+  html: `
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"></head>
+<body style="font-family:sans-serif;background:#0a0e1a;color:#e8ecf4;padding:40px;">
+  <div style="max-width:560px;margin:0 auto;">
+    <h1 style="font-size:28px;font-weight:900;font-style:italic;letter-spacing:-1px;margin-bottom:4px;">
+      VERI<span style="color:#6b8aff">PROOF</span><span style="color:#6b8aff">.</span>
+    </h1>
+    <p style="font-family:monospace;font-size:10px;letter-spacing:3px;text-transform:uppercase;color:#5a6478;margin-top:0;">
+      Forensic Credential Intelligence
+    </p>
+    <hr style="border-color:#1a2040;margin:24px 0;">
+    <p>Hi <strong>${candidateName || "Candidate"}</strong>,</p>
+    <p>
+      <strong>${recruiterName}</strong> reviewed your resume for the role of
+      <strong>${jobTitle}</strong> and has invited you to verify your credentials on VeriProof.
+    </p>
+    <p style="color:#94a0b8;">VeriProof is a forensic credential platform. By creating a profile and linking your evidence (GitHub, projects, certifications), you allow recruiters to independently verify your claims.</p>
+    <div style="text-align:center;margin:32px 0;">
+      <a href="${registerUrl}" style="background:#6b8aff;color:#fff;font-weight:700;font-size:12px;letter-spacing:2px;text-transform:uppercase;text-decoration:none;padding:14px 32px;border-radius:8px;display:inline-block;">
+        Create Your Profile
+      </a>
+    </div>
+    <p style="color:#5a6478;font-size:12px;">If you were not expecting this, you can safely ignore this email.</p>
+    <hr style="border-color:#1a2040;margin:24px 0;">
+    <p style="color:#5a6478;font-size:11px;font-family:monospace;">VeriProof &mdash; Screen Everyone · Catch the Fraud · Prove the Honest</p>
+  </div>
+</body>
+</html>`,
+});
 const {
   rebuildSkillProgression,
 } = require("../services/skillProgressionService");
@@ -61,12 +121,17 @@ const parseResume = asyncHandler(async (req, res) => {
     const pythonRes = await axios.post(`${PYTHON_API_BASE}/verify-claims`, {
       claims: analysis.claims.skills || [],
       job_requirements: job.targetSkills || [],
-    });
-    alignmentScore = pythonRes.data.result.score || 0;
+    }, { timeout: 12000 });
+    alignmentScore    = pythonRes.data.result.score || 0;
     verifiableMatched = pythonRes.data.result.verifiable_claims_matched || 0;
   } catch (error) {
-    console.error("[Python Proxy] Claim Verification Failed:", error.message);
-    alignmentScore = 0;
+    // Python offline — use local keyword matcher
+    const isConnErr = error.code === "ECONNREFUSED" || error.code === "ETIMEDOUT";
+    console.warn(isConnErr
+      ? "[VerifyController] Python offline — using local alignment scorer"
+      : `[VerifyController] Alignment error: ${error.message}`);
+    alignmentScore    = scoreAlignmentLocally(analysis.claims.skills || [], job.targetSkills || []);
+    verifiableMatched = alignmentScore > 0 ? Math.round((alignmentScore / 100) * (job.targetSkills?.length || 0)) : 0;
   }
 
   const status = "Pending Exam";
@@ -285,13 +350,14 @@ const createJobFromFile = asyncHandler(async (req, res) => {
   }
 
   try {
-    const parsedData = await resumeIntelligenceService.analyzeResumeBuffer(
+    const parsedData = await analyzeResumeBuffer(
       req.file.buffer,
       {
         mimeType: req.file.mimetype,
         fileName: req.file.originalname,
       },
     );
+
 
     const description = parsedData.normalizedText;
 
@@ -321,10 +387,7 @@ const createJobFromFile = asyncHandler(async (req, res) => {
 });
 
 const uploadApplicantResumes = asyncHandler(async (req, res) => {
-  const job = await Job.findOne({
-    _id: req.body.jobId,
-    recruiterId: req.user._id,
-  });
+  const job = await Job.findOne({ _id: req.body.jobId, recruiterId: req.user._id });
   if (!job) {
     res.status(404);
     throw new Error("Select one of your jobs before uploading resumes.");
@@ -336,61 +399,99 @@ const uploadApplicantResumes = asyncHandler(async (req, res) => {
 
   const uploadDir = path.join(__dirname, "..", "uploads", "recruiter-resumes");
   fs.mkdirSync(uploadDir, { recursive: true });
-  const records = await Promise.all(
-    req.files.map(async (file) => {
-      const extension = path.extname(file.originalname).toLowerCase();
-      const filename = `${crypto.randomBytes(16).toString("hex")}${extension}`;
-      const fileUrl = `/uploads/recruiter-resumes/${filename}`;
-      fs.writeFileSync(path.join(uploadDir, filename), file.buffer);
-      const applicant = await RecruiterApplicant.create({
-        recruiterId: req.user._id,
-        jobId: job._id,
-        originalFileName: file.originalname,
-        mimeType: file.mimetype,
-        fileUrl,
-      });
+
+  const REGISTER_URL = process.env.FRONTEND_URL
+    ? `${process.env.FRONTEND_URL}/register`
+    : "http://localhost:5173/register";
+
+  const records = [];
+
+  // ── Serial processing (free-tier Gemini: 15 req/min) ─────────────────────
+  for (const file of req.files) {
+    const extension = path.extname(file.originalname).toLowerCase();
+    const filename = `${crypto.randomBytes(16).toString("hex")}${extension}`;
+    const fileUrl = `/uploads/recruiter-resumes/${filename}`;
+    fs.writeFileSync(path.join(uploadDir, filename), file.buffer);
+
+    const applicant = await RecruiterApplicant.create({
+      recruiterId: req.user._id,
+      jobId: job._id,
+      originalFileName: file.originalname,
+      mimeType: file.mimetype,
+      fileUrl,
+    });
+
+    try {
+      const parsed = await analyzeResumeBuffer(
+        file.buffer,
+        { mimeType: file.mimetype, fileName: file.originalname },
+      );
+
+      // ── Extract name + email from resume text ──
+      const extractedEmail = extractEmailFromText(parsed.normalizedText);
+      const extractedName  = extractNameFromText(parsed.normalizedText)
+        || path.parse(file.originalname).name;
+
+      // ── Alignment score (Python first, local fallback) ──
+      let alignmentScore = 0;
       try {
-        const parsed = await resumeIntelligenceService.analyzeResumeBuffer(
-          file.buffer,
-          {
-            mimeType: file.mimetype,
-            fileName: file.originalname,
-            userProfile: { name: path.parse(file.originalname).name },
-          },
-        );
-
-        let alignmentScore = 0;
-        try {
-          const pythonRes = await axios.post(
-            `${PYTHON_API_BASE}/verify-claims`,
-            {
-              claims: parsed.claims.skills || [],
-              job_requirements: job.targetSkills || [],
-            },
-          );
-          alignmentScore = pythonRes.data.result.score || 0;
-        } catch (error) {
-          console.error("[Python Proxy] Bulk Claim Verification Failed");
-        }
-
-        Object.assign(applicant, {
-          status: "Completed",
-          resumeText: parsed.normalizedText.substring(0, 20000),
-          claims: parsed.claims,
-          analysis: parsed.analysis,
-          alignmentScore: alignmentScore,
-          matchedSkills: [],
-          missingSkills: [],
-          processedAt: new Date(),
-        });
-      } catch (error) {
-        applicant.status = "Failed";
-        applicant.error = error.message;
-        applicant.processedAt = new Date();
+        const pythonRes = await axios.post(`${PYTHON_API_BASE}/verify-claims`, {
+          claims: parsed.claims.skills || [],
+          job_requirements: job.targetSkills || [],
+        }, { timeout: 12000 });
+        alignmentScore = pythonRes.data.result.score || 0;
+      } catch {
+        alignmentScore = scoreAlignmentLocally(parsed.claims.skills || [], job.targetSkills || []);
+        console.warn("[Intake] Python offline — using local alignment scorer");
       }
-      return applicant.save();
-    }),
-  );
+
+      Object.assign(applicant, {
+        status: "Completed",
+        resumeText: parsed.normalizedText.substring(0, 20000),
+        claims: parsed.claims,
+        analysis: parsed.analysis,
+        alignmentScore,
+        matchedSkills: [],
+        missingSkills: [],
+        extractedName,
+        extractedEmail: extractedEmail || "",
+        processedAt: new Date(),
+      });
+
+      // ── Send invitation email ──
+      if (extractedEmail) {
+        try {
+          const { subject, html } = buildInviteEmail({
+            candidateName: extractedName,
+            recruiterName: req.user.name,
+            jobTitle: job.title,
+            registerUrl: REGISTER_URL,
+          });
+          await sendEmail({ email: extractedEmail, subject, html });
+          applicant.emailSentTo  = extractedEmail;
+          applicant.emailStatus  = "sent";
+          console.log(`[Intake] Invite sent → ${extractedEmail}`);
+        } catch (mailErr) {
+          applicant.emailStatus = "failed";
+          console.warn(`[Intake] Email failed for ${extractedEmail}:`, mailErr.message);
+        }
+      } else {
+        applicant.emailStatus = "not_found";
+      }
+    } catch (err) {
+      applicant.status = "Failed";
+      applicant.error = err.message;
+      applicant.processedAt = new Date();
+    }
+
+    records.push(await applicant.save());
+
+    // ── Free-tier rate-limit buffer (800ms between files) ──
+    if (req.files.indexOf(file) < req.files.length - 1) {
+      await new Promise(r => setTimeout(r, 800));
+    }
+  }
+
   res.status(201).json(records);
 });
 
@@ -401,6 +502,19 @@ const getApplicantResumes = asyncHandler(async (req, res) => {
     .populate("jobId", "title")
     .sort({ createdAt: -1 });
   res.json(applicants);
+});
+
+// @desc    Delete a job role (Blueprint)
+// @route   DELETE /api/verify/job/:id
+// @access  Private (Recruiter)
+const deleteJob = asyncHandler(async (req, res) => {
+  const job = await Job.findOne({ _id: req.params.id, recruiterId: req.user._id });
+  if (!job) {
+    res.status(404);
+    throw new Error("Job not found or you are not the owner.");
+  }
+  await job.deleteOne();
+  res.json({ message: "Blueprint deleted." });
 });
 
 module.exports = {
@@ -414,4 +528,6 @@ module.exports = {
   createJobFromFile,
   uploadApplicantResumes,
   getApplicantResumes,
+  deleteJob,
 };
+
