@@ -427,35 +427,32 @@ const uploadApplicantResumes = asyncHandler(async (req, res) => {
         { mimeType: file.mimetype, fileName: file.originalname },
       );
 
-      // ── Extract name + email from resume text ──
-      const extractedEmail = extractEmailFromText(parsed.normalizedText);
-      const extractedName  = extractNameFromText(parsed.normalizedText)
-        || path.parse(file.originalname).name;
+      // ── Name + email: prefer Gemini extraction, fall back to regex ──
+      const extractedEmail =
+        parsed.analysis?.email ||
+        extractEmailFromText(parsed.normalizedText);
+      const extractedName =
+        parsed.analysis?.name ||
+        extractNameFromText(parsed.normalizedText) ||
+        path.parse(file.originalname).name;
 
-      // ── Alignment score (Python first, local fallback) ──
-      let alignmentScore = 0;
-      try {
-        const pythonRes = await axios.post(`${PYTHON_API_BASE}/verify-claims`, {
-          claims: parsed.claims.skills || [],
-          job_requirements: job.targetSkills || [],
-        }, { timeout: 12000 });
-        alignmentScore = pythonRes.data.result.score || 0;
-      } catch {
-        alignmentScore = scoreAlignmentLocally(parsed.claims.skills || [], job.targetSkills || []);
-        console.warn("[Intake] Python offline — using local alignment scorer");
-      }
+      // ── Alignment score (local — instant, no external dependency) ──
+      const alignmentScore = scoreAlignmentLocally(
+        parsed.claims.skills || [],
+        job.targetSkills     || [],
+      );
 
       Object.assign(applicant, {
-        status: "Completed",
-        resumeText: parsed.normalizedText.substring(0, 20000),
-        claims: parsed.claims,
-        analysis: parsed.analysis,
+        status:        "Completed",
+        resumeText:    parsed.normalizedText.substring(0, 20000),
+        claims:        parsed.claims,
+        analysis:      parsed.analysis,
         alignmentScore,
         matchedSkills: [],
         missingSkills: [],
         extractedName,
         extractedEmail: extractedEmail || "",
-        processedAt: new Date(),
+        processedAt:   new Date(),
       });
 
       // ── Send invitation email ──

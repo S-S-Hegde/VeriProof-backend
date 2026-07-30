@@ -1,183 +1,178 @@
 /**
  * resumeIntelligenceService.js
  *
- * Self-sufficient resume intelligence pipeline.
+ * AI-powered resume intelligence using Google Gemini directly from Node.js.
+ * No Python engine required.
  *
- * Strategy:
- *  1. Parse PDF/DOCX to plain text (local — always works)
- *  2. Try to call Python AI engine for skill extraction (best quality)
- *  3. If Python is offline → fall back to local keyword matcher (always available)
- *  4. Score alignment against job requirements locally
- *
- * This means the system works even when the Python service is not running.
+ * Pipeline:
+ *  1. Extract raw text from PDF / DOCX (local, always works)
+ *  2. Send text to Gemini 1.5 Flash for structured skill + profile extraction
+ *  3. If Gemini fails (rate-limit, quota, etc.) → fall back to local keyword matcher
+ *  4. Score alignment between resume skills and job requirements (local, instant)
  */
 
-const axios  = require("axios");
-const pdfParse = require("pdf-parse"); // v1.1.1 — plain async function
+const pdfParse = require("pdf-parse");
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 
-const PYTHON_API_BASE = process.env.PYTHON_API_BASE || "http://127.0.0.1:8000/api";
-const PYTHON_TIMEOUT  = 12000; // 12 s — don't wait too long before falling back
+// ── Gemini setup ───────────────────────────────────────────────────────────────
+const geminiClient = process.env.GEMINI_API_KEY
+  ? new GoogleGenerativeAI(process.env.GEMINI_API_KEY)
+  : null;
 
-/* ═══════════════════════════════════════════════════════════════════════
-   LOCAL SKILL KEYWORD DICTIONARY
-   Covers the most common resume skills that recruiters look for.
-   Each entry: [display name, ...trigger keywords (lowercase)]
-   ═══════════════════════════════════════════════════════════════════════ */
+const getModel = () =>
+  geminiClient?.getGenerativeModel({
+    model: "gemini-3.6-flash",          // Custom model available on the current API key
+    generationConfig: {
+      responseMimeType: "application/json",
+      temperature: 0.1,                 // Low temp = deterministic, structured output
+      maxOutputTokens: 1024,
+    },
+  });
+
+
+// ── Gemini prompt ──────────────────────────────────────────────────────────────
+const buildExtractionPrompt = (text) => `
+You are an expert technical recruiter and resume analyst.
+Analyse the resume text below and return a valid JSON object with these exact fields:
+
+{
+  "name": "Candidate's full name (string, or null if not found)",
+  "email": "Email address (string, or null if not found)",
+  "skills": ["Array of technical and professional skills mentioned"],
+  "experience_years": "Total years of experience as a number (or 0 if unclear)",
+  "education": "Highest degree or qualification (string)",
+  "summary": "One sentence professional summary"
+}
+
+Rules:
+- Return ONLY the JSON object. No markdown, no code fences, no explanation.
+- Skills must be specific technologies, tools, frameworks, or methodologies.
+- Include both technical and soft skills only if clearly stated.
+- Keep skill names concise (e.g. "React" not "React.js framework for building UIs").
+
+Resume text:
+---
+${text.substring(0, 12000)}
+---
+`;
+
+// ── Local keyword dictionary (fallback) ────────────────────────────────────────
 const SKILL_DICT = [
-  // Languages
-  ["JavaScript",       "javascript", "js", "ecmascript", "es6", "es2015"],
+  ["JavaScript",       "javascript", "js", "ecmascript", "es6"],
   ["TypeScript",       "typescript", "ts"],
-  ["Python",           "python", "django", "flask", "fastapi"],
-  ["Java",             "java", "spring boot", "spring", "maven", "gradle"],
+  ["Python",           "python"],
+  ["Java",             "java", "spring boot", "spring"],
   ["C++",              "c++", "cpp"],
-  ["C#",               "c#", "csharp", "dotnet", ".net"],
-  ["Go",               "golang", " go "],
+  ["C#",               "c#", "csharp", ".net"],
+  ["Go",               "golang"],
   ["Rust",             "rust"],
-  ["Ruby",             "ruby", "rails", "ruby on rails"],
-  ["PHP",              "php", "laravel", "symfony"],
-  ["Swift",            "swift", "ios", "xcode"],
-  ["Kotlin",           "kotlin", "android"],
-  ["SQL",              "sql", "plsql", "t-sql"],
-  ["R",                " r ", "rstudio"],
-  ["Scala",            "scala", "spark"],
+  ["Ruby",             "ruby", "rails"],
+  ["PHP",              "php", "laravel"],
+  ["Swift",            "swift"],
+  ["Kotlin",           "kotlin"],
+  ["SQL",              "sql", "plsql"],
   ["Dart",             "dart", "flutter"],
-
-  // Frontend
-  ["HTML/CSS",         "html", "css", "sass", "scss", "less"],
-  ["React",            "react", "reactjs", "react.js", "react native"],
-  ["Next.js",          "next.js", "nextjs", "next js"],
-  ["Vue.js",           "vue", "vuejs", "vue.js", "nuxt"],
-  ["Angular",          "angular", "angularjs"],
-  ["Svelte",           "svelte", "sveltekit"],
-  ["Tailwind CSS",     "tailwind", "tailwindcss"],
-  ["Webpack",          "webpack", "vite", "rollup", "parcel", "esbuild"],
-  ["Redux",            "redux", "zustand", "mobx", "recoil"],
+  ["HTML/CSS",         "html", "css", "sass", "scss"],
+  ["React",            "react", "reactjs"],
+  ["Next.js",          "next.js", "nextjs"],
+  ["Vue.js",           "vue", "vuejs"],
+  ["Angular",          "angular"],
+  ["Svelte",           "svelte"],
+  ["Tailwind CSS",     "tailwind"],
+  ["Redux",            "redux", "zustand", "mobx"],
   ["GraphQL",          "graphql", "apollo"],
-  ["WebSockets",       "websocket", "socket.io", "websockets"],
-
-  // Backend
-  ["Node.js",          "node.js", "nodejs", "node js"],
-  ["Express",          "express", "expressjs", "express.js"],
+  ["WebSockets",       "websocket", "socket.io"],
+  ["Node.js",          "node.js", "nodejs"],
+  ["Express",          "express"],
   ["FastAPI",          "fastapi"],
   ["Django",           "django"],
   ["Flask",            "flask"],
-  ["Spring Boot",      "spring boot"],
-  ["REST API",         "rest api", "restful", "rest", "crud"],
-  ["gRPC",             "grpc"],
-  ["Microservices",    "microservices", "microservice"],
-  ["Message Queues",   "rabbitmq", "kafka", "celery", "message queue", "pub/sub"],
-
-  // Databases
+  ["REST API",         "rest api", "restful", "crud"],
+  ["Microservices",    "microservices"],
   ["MongoDB",          "mongodb", "mongo"],
   ["PostgreSQL",       "postgresql", "postgres"],
   ["MySQL",            "mysql"],
-  ["SQLite",           "sqlite"],
   ["Redis",            "redis"],
-  ["Elasticsearch",    "elasticsearch", "elastic"],
   ["Firebase",         "firebase", "firestore"],
-  ["DynamoDB",         "dynamodb"],
-  ["Cassandra",        "cassandra"],
-  ["Supabase",         "supabase"],
-
-  // DevOps & Cloud
-  ["Git/GitHub",       "git", "github", "gitlab", "bitbucket", "version control"],
-  ["Docker",           "docker", "dockerfile", "container", "containerisation"],
-  ["Kubernetes",       "kubernetes", "k8s", "helm"],
-  ["CI/CD",            "ci/cd", "github actions", "jenkins", "circleci", "travis", "pipeline"],
-  ["AWS",              "aws", "amazon web services", "ec2", "s3", "lambda", "rds", "ecs"],
-  ["GCP",              "gcp", "google cloud", "bigquery", "cloud run"],
-  ["Azure",            "azure", "microsoft azure"],
-  ["Terraform",        "terraform", "infrastructure as code", "iac"],
-  ["Linux",            "linux", "unix", "bash", "shell scripting", "shell"],
-  ["Nginx",            "nginx", "apache"],
-  ["Monitoring",       "datadog", "prometheus", "grafana", "newrelic", "sentry"],
-
-  // AI / ML / Data
-  ["Machine Learning", "machine learning", "ml", "supervised", "unsupervised"],
-  ["Deep Learning",    "deep learning", "neural network", "cnn", "rnn", "lstm"],
+  ["Elasticsearch",    "elasticsearch"],
+  ["Git/GitHub",       "git", "github", "gitlab"],
+  ["Docker",           "docker", "dockerfile"],
+  ["Kubernetes",       "kubernetes", "k8s"],
+  ["CI/CD",            "ci/cd", "github actions", "jenkins"],
+  ["AWS",              "aws", "ec2", "s3", "lambda"],
+  ["GCP",              "gcp", "google cloud"],
+  ["Azure",            "azure"],
+  ["Linux",            "linux", "bash", "shell"],
+  ["Machine Learning", "machine learning", "ml"],
+  ["Deep Learning",    "deep learning", "neural network"],
   ["TensorFlow",       "tensorflow", "keras"],
   ["PyTorch",          "pytorch"],
   ["scikit-learn",     "scikit-learn", "sklearn"],
-  ["Data Analysis",    "pandas", "numpy", "data analysis", "data analytics"],
-  ["Data Visualization","matplotlib", "seaborn", "plotly", "tableau", "power bi"],
-  ["LLMs",             "llm", "large language model", "openai", "gemini", "claude", "hugging face"],
-  ["RAG",              "rag", "retrieval augmented"],
-  ["NLP",              "nlp", "natural language processing", "spacy", "nltk"],
-
-  // Security
-  ["Authentication",   "jwt", "oauth", "oauth2", "authentication", "authorisation", "authorization", "bcrypt", "saml"],
-  ["Security",         "cybersecurity", "owasp", "xss", "csrf", "sql injection", "penetration testing", "pentest"],
-  ["API Security",     "rate limiting", "cors", "helmet", "input validation"],
-
-  // Testing
-  ["Testing",          "unit testing", "integration testing", "tdd", "test driven", "bdd"],
-  ["Jest",             "jest"],
-  ["Pytest",           "pytest"],
-  ["Cypress",          "cypress"],
-  ["Playwright",       "playwright"],
-  ["Selenium",         "selenium"],
-
-  // Architecture & Design
-  ["System Design",    "system design", "high-level design", "hld", "low-level design", "lld"],
-  ["Design Patterns",  "design pattern", "solid", "dry", "mvc", "mvvm", "clean architecture"],
-  ["Full Stack",       "full stack", "fullstack", "mern", "mean", "mevn"],
-  ["Agile",            "agile", "scrum", "kanban", "sprint", "jira"],
-
-  // Mobile
+  ["Data Analysis",    "pandas", "numpy", "data analysis"],
+  ["LLMs",             "llm", "openai", "gemini", "hugging face"],
+  ["NLP",              "nlp", "natural language processing"],
+  ["Authentication",   "jwt", "oauth", "bcrypt"],
+  ["Security",         "cybersecurity", "owasp", "penetration testing"],
+  ["Testing",          "unit testing", "tdd", "jest", "pytest"],
+  ["Agile",            "agile", "scrum", "kanban"],
   ["React Native",     "react native"],
   ["Flutter",          "flutter"],
-  ["iOS",              "ios", "swift", "xcode"],
-  ["Android",          "android", "kotlin"],
-
-  // Other popular tools
+  ["System Design",    "system design", "hld", "lld"],
+  ["Full Stack",       "full stack", "fullstack", "mern"],
   ["Figma",            "figma"],
-  ["Postman",          "postman"],
-  ["Cloudinary",       "cloudinary"],
-  ["Stripe",           "stripe", "payment gateway"],
-  ["Twilio",           "twilio"],
+  ["Stripe",           "stripe"],
 ];
 
-/* ═══════════════════════════════════════════════════════════════════════
-   LOCAL SKILL EXTRACTOR
-   Scans normalised text for keyword matches and returns unique skill names
-   ═══════════════════════════════════════════════════════════════════════ */
 const extractSkillsLocally = (text) => {
   const lower = ` ${text.toLowerCase()} `;
-  const found  = [];
-
+  const found = [];
   for (const [displayName, ...triggers] of SKILL_DICT) {
     for (const trigger of triggers) {
-      // Word-boundary check: trigger must be surrounded by non-alphanumeric chars
       const escaped = trigger.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const pattern = new RegExp(`[^a-z0-9]${escaped}[^a-z0-9]`, "i");
-      if (pattern.test(lower)) {
+      if (new RegExp(`[^a-z0-9]${escaped}[^a-z0-9]`, "i").test(lower)) {
         found.push(displayName);
-        break; // only add each skill once
+        break;
       }
     }
   }
-
-  return [...new Set(found)]; // deduplicate
+  return [...new Set(found)];
 };
 
-/* ═══════════════════════════════════════════════════════════════════════
-   LOCAL ALIGNMENT SCORER
-   Returns a 0-100 score: what % of job requirements are found in resume
-   ═══════════════════════════════════════════════════════════════════════ */
-const scoreAlignmentLocally = (resumeSkills, jobRequirements) => {
-  if (!jobRequirements || jobRequirements.length === 0) return 0;
+// ── Alignment scorer (local, instant) ─────────────────────────────────────────
+const scoreAlignmentLocally = (resumeSkills = [], jobRequirements = []) => {
+  if (!jobRequirements.length) return 0;
   const resumeSet = new Set(resumeSkills.map(s => s.toLowerCase()));
   const matched = jobRequirements.filter(r => resumeSet.has(r.toLowerCase()));
   return Math.round((matched.length / jobRequirements.length) * 100);
 };
 
-/* ═══════════════════════════════════════════════════════════════════════
-   MAIN — analyzeResumeBuffer
-   ═══════════════════════════════════════════════════════════════════════ */
-const analyzeResumeBuffer = async (buffer, options = {}) => {
-  // ── Step 1: Extract text ──────────────────────────────────────────────
-  let text = "";
+// ── Gemini extraction ──────────────────────────────────────────────────────────
+const extractWithGemini = async (text) => {
+  const model = getModel();
+  if (!model) throw new Error("GEMINI_API_KEY not configured");
 
+  const prompt = buildExtractionPrompt(text);
+  const result = await model.generateContent(prompt);
+  const raw    = result.response.text().trim();
+
+  // Strip any accidental markdown fences
+  const cleaned = raw.replace(/^```json\s*/i, "").replace(/```\s*$/i, "").trim();
+  const parsed  = JSON.parse(cleaned);
+
+  return {
+    name:             parsed.name             || null,
+    email:            parsed.email            || null,
+    skills:           Array.isArray(parsed.skills) ? parsed.skills : [],
+    experience_years: parsed.experience_years || 0,
+    education:        parsed.education        || "",
+    summary:          parsed.summary          || "",
+  };
+};
+
+// ── Main export ────────────────────────────────────────────────────────────────
+const analyzeResumeBuffer = async (buffer, options = {}) => {
+  // Step 1: Extract text (local — always works)
+  let text = "";
   if (options.mimeType === "application/pdf") {
     const pdfData = await pdfParse(buffer);
     text = pdfData.text;
@@ -185,35 +180,30 @@ const analyzeResumeBuffer = async (buffer, options = {}) => {
     text = buffer.toString("utf8");
   }
 
-  if (!text || text.trim().length === 0) {
+  if (!text || text.trim().length < 20) {
     throw new Error("No readable text found in document.");
   }
 
-  // ── Step 2: Skill extraction (Python first, local fallback) ───────────
-  let skills  = [];
-  let analysis = {};
+  // Step 2: Gemini AI extraction (with local fallback)
+  let skills   = [];
+  let meta     = {};
   let source   = "local";
 
   try {
-    const pythonRes = await axios.post(
-      `${PYTHON_API_BASE}/extract-skills`,
-      { text },
-      { timeout: PYTHON_TIMEOUT },
-    );
-    skills   = pythonRes.data.result.skills   || [];
-    analysis = pythonRes.data.result.analysis || {};
-    source   = "python";
-    console.log(`[Intelligence] Python extraction: ${skills.length} skills`);
+    const aiResult = await extractWithGemini(text);
+    skills  = aiResult.skills;
+    meta    = {
+      name:             aiResult.name,
+      email:            aiResult.email,
+      experience_years: aiResult.experience_years,
+      education:        aiResult.education,
+      summary:          aiResult.summary,
+    };
+    source  = "gemini";
+    console.log(`[Intelligence] Gemini extracted ${skills.length} skills for "${aiResult.name || "unknown"}"`);
   } catch (err) {
-    // Python offline or timed out — use local keyword matcher
-    const isConnErr = err.code === "ECONNREFUSED" || err.code === "ECONNRESET" || err.code === "ETIMEDOUT";
-    if (isConnErr) {
-      console.warn("[Intelligence] Python AI engine offline — using local keyword extractor");
-    } else {
-      console.warn("[Intelligence] Python AI error:", err.message, "— falling back to local");
-    }
+    console.warn(`[Intelligence] Gemini failed (${err.message}) — using local keyword extractor`);
     skills = extractSkillsLocally(text);
-    analysis = { note: "Extracted via local keyword matcher (Python AI engine offline)" };
     source = "local";
     console.log(`[Intelligence] Local extraction: ${skills.length} skills`);
   }
@@ -221,13 +211,13 @@ const analyzeResumeBuffer = async (buffer, options = {}) => {
   return {
     normalizedText: text,
     claims: { skills },
-    analysis: { ...analysis, extractionSource: source },
+    analysis: {
+      ...meta,
+      extractionSource: source,
+    },
   };
 };
 
-/* ═══════════════════════════════════════════════════════════════════════
-   EXPORTS
-   ═══════════════════════════════════════════════════════════════════════ */
 module.exports = {
   analyzeResumeBuffer,
   extractSkillsLocally,
