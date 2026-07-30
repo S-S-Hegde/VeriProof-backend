@@ -4,7 +4,7 @@ const cors = require("cors");
 const connectDB = require("./config/db");
 const { generalLimiter } = require("./middleware/rateLimiter");
 
-// Route files
+// Route files (Trigger reload)
 const authRoutes    = require("./routes/authRoutes");
 const projectRoutes = require("./routes/projectRoutes");
 const verifyRoutes  = require("./routes/verifyRoutes");
