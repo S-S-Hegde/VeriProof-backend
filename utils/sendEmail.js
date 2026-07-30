@@ -1,47 +1,86 @@
+/**
+ * sendEmail.js
+ *
+ * Email delivery via real Gmail SMTP (production) or Ethereal (dev preview).
+ *
+ * To enable REAL delivery, fill these 3 fields in backend/.env:
+ *   SMTP_USER=youraddress@gmail.com
+ *   SMTP_PASS=xxxx xxxx xxxx xxxx   (Gmail App Password — 16 chars)
+ *   FROM_EMAIL=youraddress@gmail.com
+ *
+ * How to create a Gmail App Password:
+ *   1. myaccount.google.com → Security → 2-Step Verification → enable
+ *   2. Search "App passwords" in the search bar
+ *   3. Choose app = "Mail", device = "Other", name it "VeriProof"
+ *   4. Copy the 16-character code → paste in SMTP_PASS (no spaces needed)
+ */
+
 const nodemailer = require("nodemailer");
 
+const hasRealSMTP = () =>
+  !!(process.env.SMTP_USER?.trim() && process.env.SMTP_PASS?.trim());
+
+const createGmailTransport = () =>
+  nodemailer.createTransport({
+    host:   process.env.SMTP_HOST || "smtp.gmail.com",
+    port:   Number(process.env.SMTP_PORT) || 587,
+    secure: false,          // TLS via STARTTLS on port 587
+    auth: {
+      user: process.env.SMTP_USER.trim(),
+      pass: process.env.SMTP_PASS.trim(),
+    },
+    tls: {
+      rejectUnauthorized: false, // avoids self-signed cert errors in dev
+    },
+  });
+
+const createEtherealTransport = async () => {
+  const testAccount = await nodemailer.createTestAccount();
+  return nodemailer.createTransport({
+    host:   "smtp.ethereal.email",
+    port:   587,
+    secure: false,
+    auth: {
+      user: testAccount.user,
+      pass: testAccount.pass,
+    },
+  });
+};
+
 const sendEmail = async (options) => {
-  // Use Ethereal Email for dev testing (generates an inbox link automatically)
-  // In production, user will swap with their SMTP credentials via process.env
+  const usingReal = hasRealSMTP();
   let transporter;
-  
-  if (process.env.SMTP_USER && process.env.SMTP_PASS) {
-    transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST || "smtp.gmail.com",
-      port: process.env.SMTP_PORT || 587,
-      auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASS,
-      },
-    });
+
+  if (usingReal) {
+    transporter = createGmailTransport();
   } else {
-    // Generate test account automatically
-    let testAccount = await nodemailer.createTestAccount();
-    transporter = nodemailer.createTransport({
-      host: "smtp.ethereal.email",
-      port: 587,
-      secure: false, 
-      auth: {
-        user: testAccount.user, // generated ethereal user
-        pass: testAccount.pass, // generated ethereal password
-      },
-    });
+    console.warn(
+      "\n⚠️  [Email] SMTP_USER / SMTP_PASS not set in .env\n" +
+      "   → Using Ethereal (fake inbox). Emails will NOT reach real inboxes.\n" +
+      "   → Add Gmail App Password to .env to enable real delivery.\n",
+    );
+    transporter = await createEtherealTransport();
   }
 
   const message = {
-    from: `${process.env.FROM_NAME || 'VeriProof System'} <${process.env.FROM_EMAIL || 'noreply@veriproof.com'}>`,
-    to: options.email,
+    from: `"${process.env.FROM_NAME || "VeriProof"}" <${
+      process.env.FROM_EMAIL || process.env.SMTP_USER || "noreply@veriproof.dev"
+    }>`,
+    to:      options.email,
     subject: options.subject,
-    text: options.message,
-    html: options.html || `<p>${options.message}</p>`
+    html:    options.html    || `<p>${options.message || ""}</p>`,
+    text:    options.message || "",
   };
 
   const info = await transporter.sendMail(message);
 
-  if (!process.env.SMTP_USER) {
+  if (usingReal) {
+    console.log(`✅ [Email] Delivered → ${options.email} (messageId: ${info.messageId})`);
+  } else {
     console.log("---------------------------------------");
-    console.log("DEV MAIL DELIVERED:");
-    console.log("Preview URL: %s", nodemailer.getTestMessageUrl(info));
+    console.log("DEV MAIL DELIVERED (Ethereal — not real inbox):");
+    console.log("To:          ", options.email);
+    console.log("Preview URL: ", nodemailer.getTestMessageUrl(info));
     console.log("---------------------------------------");
   }
 };
