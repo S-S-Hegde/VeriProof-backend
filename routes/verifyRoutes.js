@@ -12,6 +12,7 @@ const {
   uploadApplicantResumes,
   getApplicantResumes,
   deleteJob,
+  deleteApplicant,
 } = require("../controllers/verifyController");
 
 const { protect, recruiterOnly } = require("../middleware/authMiddleware");
@@ -58,6 +59,8 @@ router.delete("/job/:id",          protect, recruiterOnly, deleteJob);
 router.get("/my-jobs",             protect, recruiterOnly, getMyJobs);
 router.post("/applicants/upload",  protect, recruiterOnly, receiveDocuments("resumes", 10), uploadApplicantResumes);
 router.get("/applicants",          protect, recruiterOnly, getApplicantResumes);
+router.delete("/applicants/:id",   protect, recruiterOnly, deleteApplicant);
+
 
 
 // Candidate endpoints

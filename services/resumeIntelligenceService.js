@@ -31,7 +31,7 @@ const getModel = () =>
 
 
 // ── Gemini prompt ──────────────────────────────────────────────────────────────
-const buildExtractionPrompt = (text) => `
+const buildExtractionPrompt = (text, strictMode = false) => `
 You are an expert technical recruiter and resume analyst.
 Analyse the resume text below and return a valid JSON object with these exact fields:
 
@@ -49,12 +49,15 @@ Rules:
 - Skills must be specific technologies, tools, frameworks, or methodologies.
 - Include both technical and soft skills only if clearly stated.
 - Keep skill names concise (e.g. "React" not "React.js framework for building UIs").
+${strictMode ? `
+- STRICT MODE ENABLED: Only include skills that the candidate has applied in actual job positions, internships, or complete projects. Do NOT include skills that are merely listed under "Interests", "Acquiring", "Familiar with", or "Exposure to". We need only verified expertise skills to prevent keyword stuffing or false positives.` : ""}
 
 Resume text:
 ---
 ${text.substring(0, 12000)}
 ---
 `;
+
 
 // ── Local keyword dictionary (fallback) ────────────────────────────────────────
 const SKILL_DICT = [
@@ -147,11 +150,11 @@ const scoreAlignmentLocally = (resumeSkills = [], jobRequirements = []) => {
 };
 
 // ── Gemini extraction ──────────────────────────────────────────────────────────
-const extractWithGemini = async (text) => {
+const extractWithGemini = async (text, strictMode = false) => {
   const model = getModel();
   if (!model) throw new Error("GEMINI_API_KEY not configured");
 
-  const prompt = buildExtractionPrompt(text);
+  const prompt = buildExtractionPrompt(text, strictMode);
   const result = await model.generateContent(prompt);
   const raw    = result.response.text().trim();
 
@@ -190,7 +193,7 @@ const analyzeResumeBuffer = async (buffer, options = {}) => {
   let source   = "local";
 
   try {
-    const aiResult = await extractWithGemini(text);
+    const aiResult = await extractWithGemini(text, options.strictMode);
     skills  = aiResult.skills;
     meta    = {
       name:             aiResult.name,
@@ -199,6 +202,7 @@ const analyzeResumeBuffer = async (buffer, options = {}) => {
       education:        aiResult.education,
       summary:          aiResult.summary,
     };
+
     source  = "gemini";
     console.log(`[Intelligence] Gemini extracted ${skills.length} skills for "${aiResult.name || "unknown"}"`);
   } catch (err) {

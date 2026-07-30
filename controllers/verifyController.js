@@ -404,6 +404,7 @@ const uploadApplicantResumes = asyncHandler(async (req, res) => {
     ? `${process.env.FRONTEND_URL}/register`
     : "http://localhost:5173/register";
 
+  const strictMode = req.body.strictMode === "true";
   const records = [];
 
   // ── Serial processing (free-tier Gemini: 15 req/min) ─────────────────────
@@ -424,7 +425,7 @@ const uploadApplicantResumes = asyncHandler(async (req, res) => {
     try {
       const parsed = await analyzeResumeBuffer(
         file.buffer,
-        { mimeType: file.mimetype, fileName: file.originalname },
+        { mimeType: file.mimetype, fileName: file.originalname, strictMode },
       );
 
       // ── Name + email: prefer Gemini extraction, fall back to regex ──
@@ -514,6 +515,24 @@ const deleteJob = asyncHandler(async (req, res) => {
   res.json({ message: "Blueprint deleted." });
 });
 
+// @desc    Delete an applicant record (Verdicts)
+// @route   DELETE /api/verify/applicants/:id
+// @access  Private (Recruiter)
+const deleteApplicant = asyncHandler(async (req, res) => {
+  const applicant = await RecruiterApplicant.findOne({
+    _id: req.params.id,
+    recruiterId: req.user._id,
+  });
+
+  if (!applicant) {
+    res.status(404);
+    throw new Error("Applicant not found or you are not the owner.");
+  }
+
+  await applicant.deleteOne();
+  res.json({ message: "Applicant removed." });
+});
+
 module.exports = {
   parseResume,
   getExamForJob,
@@ -526,5 +545,7 @@ module.exports = {
   uploadApplicantResumes,
   getApplicantResumes,
   deleteJob,
+  deleteApplicant,
 };
+
 
