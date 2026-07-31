@@ -437,15 +437,21 @@ const uploadApplicantResumes = asyncHandler(async (req, res) => {
         extractNameFromText(parsed.normalizedText) ||
         path.parse(file.originalname).name;
 
-      // ── Alignment score (local — instant, no external dependency) ──
-      const alignmentScore = scoreAlignmentLocally(
-        parsed.claims.skills || [],
-        job.targetSkills     || [],
-      );
-
+      // ── Alignment score (Python AI Engine with local fallback) ──
+      let alignmentScore = 0;
       const resumeSkills = parsed.claims.skills || [];
       const jobSkills = job.targetSkills || [];
       const resumeSet = new Set(resumeSkills.map(s => s.toLowerCase()));
+
+      try {
+        const pythonRes = await axios.post(`${PYTHON_API_BASE}/verify-claims`, {
+          claims: resumeSkills.map(s => ({ skill: s, context: "Resume claim", source_quote: s })),
+          job_requirements: jobSkills,
+        }, { timeout: 8000 });
+        alignmentScore = pythonRes.data.result.score || 0;
+      } catch (pythonErr) {
+        alignmentScore = scoreAlignmentLocally(resumeSkills, jobSkills);
+      }
 
       const matchedSkills = jobSkills.filter(s => resumeSet.has(s.toLowerCase()));
       const missingSkills = jobSkills.filter(s => !resumeSet.has(s.toLowerCase()));
@@ -454,11 +460,11 @@ const uploadApplicantResumes = asyncHandler(async (req, res) => {
       if (jobSkills.length === 0) {
         reasoning = "No target skills were specified on the job blueprint.";
       } else if (matchedSkills.length === jobSkills.length) {
-        reasoning = "Excellent match. The candidate's profile covers all required target skills.";
+        reasoning = `Excellent match (${alignmentScore}% score). Candidate covers all required target skills.`;
       } else if (matchedSkills.length === 0) {
-        reasoning = `No matching target skills found. Gaps: ${jobSkills.join(", ")}.`;
+        reasoning = `No matching target skills found (${alignmentScore}% score). Gaps: ${jobSkills.join(", ")}.`;
       } else {
-        reasoning = `Matched ${matchedSkills.length} of ${jobSkills.length} target skills. Strengths: ${matchedSkills.join(", ")}. Gaps: ${missingSkills.join(", ")}.`;
+        reasoning = `Matched ${matchedSkills.length} of ${jobSkills.length} target skills (${alignmentScore}% score). Strengths: ${matchedSkills.join(", ")}. Gaps: ${missingSkills.join(", ")}.`;
       }
 
       Object.assign(applicant, {
