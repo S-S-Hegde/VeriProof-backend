@@ -149,64 +149,55 @@ const scoreAlignmentLocally = (resumeSkills = [], jobRequirements = []) => {
   return Math.round((matched.length / jobRequirements.length) * 100);
 };
 
-// ── Gemini extraction ──────────────────────────────────────────────────────────
-const extractWithGemini = async (text, strictMode = false) => {
-  const model = getModel();
-  if (!model) throw new Error("GEMINI_API_KEY not configured");
-
-  const prompt = buildExtractionPrompt(text, strictMode);
-  const result = await model.generateContent(prompt);
-  const raw    = result.response.text().trim();
-
-  // Strip any accidental markdown fences
-  const cleaned = raw.replace(/^```json\s*/i, "").replace(/```\s*$/i, "").trim();
-  const parsed  = JSON.parse(cleaned);
-
-  return {
-    name:             parsed.name             || null,
-    email:            parsed.email            || null,
-    skills:           Array.isArray(parsed.skills) ? parsed.skills : [],
-    experience_years: parsed.experience_years || 0,
-    education:        parsed.education        || "",
-    summary:          parsed.summary          || "",
-  };
+// ── Python Engine extraction ──────────────────────────────────────────────────
+const { postToAiEngine, aiEngineClient } = require("./aiEngineService");
+const FormData = require("form-data");
+const extractTextLocally = async (buffer, mimeType) => {
+  if (mimeType === "application/pdf") {
+    const pdfData = await pdfParse(buffer);
+    return pdfData.text;
+  }
+  return buffer.toString("utf8");
 };
 
 // ── Main export ────────────────────────────────────────────────────────────────
 const analyzeResumeBuffer = async (buffer, options = {}) => {
-  // Step 1: Extract text (local — always works)
+  let source = "python_microservice";
+  let skills = [];
+  let meta = {};
   let text = "";
-  if (options.mimeType === "application/pdf") {
-    const pdfData = await pdfParse(buffer);
-    text = pdfData.text;
-  } else {
-    text = buffer.toString("utf8");
-  }
-
-  if (!text || text.trim().length < 20) {
-    throw new Error("No readable text found in document.");
-  }
-
-  // Step 2: Gemini AI extraction (with local fallback)
-  let skills   = [];
-  let meta     = {};
-  let source   = "local";
 
   try {
-    const aiResult = await extractWithGemini(text, options.strictMode);
-    skills  = aiResult.skills;
-    meta    = {
-      name:             aiResult.name,
-      email:            aiResult.email,
-      experience_years: aiResult.experience_years,
-      education:        aiResult.education,
-      summary:          aiResult.summary,
-    };
+    // Attempt Python AI Engine parsing
+    const formData = new FormData();
+    formData.append("file", buffer, {
+      filename: options.fileName || "resume.pdf",
+      contentType: options.mimeType || "application/pdf"
+    });
 
-    source  = "gemini";
-    console.log(`[Intelligence] Gemini extracted ${skills.length} skills for "${aiResult.name || "unknown"}"`);
+    const aiResult = await aiEngineClient.post("/api/extract-claims-pdf", formData, {
+      headers: {
+        ...aiEngineClient.defaults.headers,
+        ...formData.getHeaders()
+      }
+    });
+
+    const parsedData = aiResult.data.result;
+    
+    // Convert python claims array of objects to array of skill strings for backwards compatibility in Node.js
+    skills = parsedData.claims ? parsedData.claims.map(c => c.skill) : [];
+    
+    // Also save the full claims object in meta
+    meta = {
+      fullClaimsData: parsedData.claims,
+    };
+    
+    text = parsedData.extracted_text_preview || await extractTextLocally(buffer, options.mimeType);
+    console.log(`[Intelligence] Python Engine extracted ${skills.length} skills`);
+
   } catch (err) {
-    console.warn(`[Intelligence] Gemini failed (${err.message}) — using local keyword extractor`);
+    console.warn(`[Intelligence] Python Engine failed (${err.message}) — using local keyword extractor fallback`);
+    text = await extractTextLocally(buffer, options.mimeType);
     skills = extractSkillsLocally(text);
     source = "local";
     console.log(`[Intelligence] Local extraction: ${skills.length} skills`);

@@ -16,9 +16,14 @@ const aiEngineClient = axios.create({
  * @param {string} endpoint - The Python API route (e.g., '/api/extract-claims-pdf')
  * @param {object} data - The JSON payload to send
  */
-const postToAiEngine = async (endpoint, data) => {
+const postToAiEngine = async (endpoint, data, customHeaders = {}) => {
   try {
-    const response = await aiEngineClient.post(endpoint, data);
+    const response = await aiEngineClient.post(endpoint, data, {
+      headers: {
+        ...aiEngineClient.defaults.headers,
+        ...customHeaders
+      }
+    });
     return response.data;
   } catch (error) {
     console.error(
@@ -26,11 +31,12 @@ const postToAiEngine = async (endpoint, data) => {
       error.response?.data || error.message,
     );
     throw new Error(
+      error.response?.data?.error?.message ||
       error.response?.data?.detail ||
-        "AI Processing Engine Service Unavailable",
+      "AI Processing Engine Service Unavailable",
     );
   }
 };
 
-module.exports = { postToAiEngine };
+module.exports = { postToAiEngine, aiEngineClient };
  
