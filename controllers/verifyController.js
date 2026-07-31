@@ -443,18 +443,38 @@ const uploadApplicantResumes = asyncHandler(async (req, res) => {
         job.targetSkills     || [],
       );
 
+      const resumeSkills = parsed.claims.skills || [];
+      const jobSkills = job.targetSkills || [];
+      const resumeSet = new Set(resumeSkills.map(s => s.toLowerCase()));
+
+      const matchedSkills = jobSkills.filter(s => resumeSet.has(s.toLowerCase()));
+      const missingSkills = jobSkills.filter(s => !resumeSet.has(s.toLowerCase()));
+
+      let reasoning = "";
+      if (jobSkills.length === 0) {
+        reasoning = "No target skills were specified on the job blueprint.";
+      } else if (matchedSkills.length === jobSkills.length) {
+        reasoning = "Excellent match. The candidate's profile covers all required target skills.";
+      } else if (matchedSkills.length === 0) {
+        reasoning = `No matching target skills found. Gaps: ${jobSkills.join(", ")}.`;
+      } else {
+        reasoning = `Matched ${matchedSkills.length} of ${jobSkills.length} target skills. Strengths: ${matchedSkills.join(", ")}. Gaps: ${missingSkills.join(", ")}.`;
+      }
+
       Object.assign(applicant, {
         status:        "Completed",
         resumeText:    parsed.normalizedText.substring(0, 20000),
         claims:        parsed.claims,
         analysis:      parsed.analysis,
         alignmentScore,
-        matchedSkills: [],
-        missingSkills: [],
+        matchedSkills,
+        missingSkills,
         extractedName,
         extractedEmail: extractedEmail || "",
+        reasoning,
         processedAt:   new Date(),
       });
+
 
       // ── Send invitation email ──
       if (extractedEmail) {

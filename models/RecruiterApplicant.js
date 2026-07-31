@@ -21,6 +21,7 @@ const recruiterApplicantSchema = new mongoose.Schema({
   extractedEmail:    { type: String, default: "" },
   emailSentTo:       { type: String, default: "" },
   emailStatus:       { type: String, enum: ["sent", "failed", "not_found"], default: "not_found" },
+  reasoning:         { type: String, default: "" },
 }, { timestamps: true });
 
 module.exports = mongoose.model("RecruiterApplicant", recruiterApplicantSchema);
