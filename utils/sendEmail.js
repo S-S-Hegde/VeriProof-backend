@@ -57,14 +57,14 @@ const sendEmail = async (options) => {
     console.warn(
       "\n⚠️  [Email] SMTP_USER / SMTP_PASS not set in .env\n" +
       "   → Using Ethereal (fake inbox). Emails will NOT reach real inboxes.\n" +
-      "   → Add Gmail App Password to .env to enable real delivery.\n",
+      "   → Add Brevo or Gmail App Password to .env to enable real delivery.\n",
     );
     transporter = await createEtherealTransport();
   }
 
   const message = {
     from: `"${process.env.FROM_NAME || "VeriProof"}" <${
-      process.env.FROM_EMAIL || process.env.SMTP_USER || "noreply@veriproof.dev"
+      (process.env.FROM_EMAIL || process.env.SMTP_USER || "noreply@veriproof.dev").trim()
     }>`,
     to:      options.email,
     subject: options.subject,
@@ -72,16 +72,22 @@ const sendEmail = async (options) => {
     text:    options.message || "",
   };
 
-  const info = await transporter.sendMail(message);
+  try {
+    const info = await transporter.sendMail(message);
 
-  if (usingReal) {
-    console.log(`✅ [Email] Delivered → ${options.email} (messageId: ${info.messageId})`);
-  } else {
-    console.log("---------------------------------------");
-    console.log("DEV MAIL DELIVERED (Ethereal — not real inbox):");
-    console.log("To:          ", options.email);
-    console.log("Preview URL: ", nodemailer.getTestMessageUrl(info));
-    console.log("---------------------------------------");
+    if (usingReal) {
+      console.log(`✅ [Email] Delivered → ${options.email} (messageId: ${info.messageId})`);
+    } else {
+      console.log("---------------------------------------");
+      console.log("DEV MAIL DELIVERED (Ethereal — not real inbox):");
+      console.log("To:          ", options.email);
+      console.log("Preview URL: ", nodemailer.getTestMessageUrl(info));
+      console.log("---------------------------------------");
+    }
+    return info;
+  } catch (err) {
+    console.error(`❌ [Email Error] Delivery failed to ${options.email}:`, err.message);
+    throw err;
   }
 };
 

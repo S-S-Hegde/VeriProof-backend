@@ -525,7 +525,41 @@ const getApplicantResumes = asyncHandler(async (req, res) => {
   const applicants = await RecruiterApplicant.find(filter)
     .populate("jobId", "title")
     .sort({ createdAt: -1 });
-  res.json(applicants);
+
+  // Map each applicant to check if candidate has registered and attended exam
+  const populatedApplicants = await Promise.all(
+    applicants.map(async (app) => {
+      const obj = app.toObject();
+      if (!obj.extractedEmail) {
+        obj.examStatus = "Unregistered";
+        obj.examScore = null;
+        return obj;
+      }
+
+      const candidateUser = await User.findOne({ email: obj.extractedEmail.toLowerCase() });
+      if (!candidateUser) {
+        obj.examStatus = obj.emailStatus === "sent" ? "Not Attended" : "Unregistered";
+        obj.examScore = null;
+        return obj;
+      }
+
+      const vResult = await VerificationResult.findOne({ candidateId: candidateUser._id, jobId: obj.jobId?._id || obj.jobId });
+      if (vResult && vResult.examScore !== undefined && vResult.examScore !== null) {
+        obj.examStatus = "Attended";
+        obj.examScore = vResult.examScore;
+      } else if (vResult) {
+        obj.examStatus = "In Progress";
+        obj.examScore = null;
+      } else {
+        obj.examStatus = "Not Attended";
+        obj.examScore = null;
+      }
+
+      return obj;
+    })
+  );
+
+  res.json(populatedApplicants);
 });
 
 // @desc    Delete a job role (Blueprint)
