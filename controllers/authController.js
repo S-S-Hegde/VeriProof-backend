@@ -141,6 +141,7 @@ const updateUserProfile = async (req, res) => {
       "name","bio","phone","location","website",
       "linkedin","twitter","instagram","githubUsername",
       "college","branch","usn","batch","cgpa","profileVisibility",
+      "profileImage",
     ];
     textFields.forEach((f) => { if (req.body[f] !== undefined) user[f] = req.body[f]; });
     if (req.body.skills !== undefined) user.skills = req.body.skills;

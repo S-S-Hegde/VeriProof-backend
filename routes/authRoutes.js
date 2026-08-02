@@ -50,14 +50,16 @@ ensureDir(path.join(__dirname, "..", "uploads", "resumes"));
 // Use memory storage (works for both Cloudinary and local write)
 const storage = multer.memoryStorage();
 
-const PROFILE_IMAGE_LIMIT_MB = 2;
+const PROFILE_IMAGE_LIMIT_MB = 5;
 const RESUME_FILE_LIMIT_MB = 5;
 
 const imageUpload = multer({
   storage,
   limits: { fileSize: PROFILE_IMAGE_LIMIT_MB * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    if (PROFILE_IMAGE_MIME_TYPES.has(file.mimetype)) {
+    if (file.mimetype && file.mimetype.startsWith("image/")) {
+      cb(null, true);
+    } else if (PROFILE_IMAGE_MIME_TYPES.has(file.mimetype)) {
       cb(null, true);
     } else {
       cb(new Error("Only image files are allowed (JPG, PNG, WEBP, GIF)"), false);
@@ -153,79 +155,33 @@ router.post(
         return res.status(400).json({ message: "No image file received" });
       }
 
-      const imageType = detectedImageType(req.file.buffer);
-      if (!imageType || imageType !== req.file.mimetype) {
-        return res.status(400).json({ message: "The selected file is not a valid supported image." });
-      }
-
-      let fileUrl;
+      const imageType = detectedImageType(req.file.buffer) || req.file.mimetype;
       const user = await User.findById(req.user._id);
       if (!user) return res.status(404).json({ message: "User not found" });
-      const previousImage = user.profileImage;
 
-      if (isCloudinaryConfigured()) {
-        // Upload to Cloudinary with optimizations
-        const result = await new Promise((resolve, reject) => {
-          cloudinary.uploader.upload_stream(
-            {
-              public_id: `veriproof/profiles/${user._id}`,
-              overwrite: true,
-              invalidate: true,
-              resource_type: "image",
-              transformation: [
-                { width: 800, height: 800, crop: "limit" },
-                { quality: "auto:good" },
-                { fetch_format: "auto" },
-              ],
-            },
-            (error, result) => {
-              if (error) reject(error);
-              else resolve(result);
-            }
-          ).end(req.file.buffer);
-        });
-        fileUrl = result.secure_url;
-      } else {
-        // Local fallback: save to /uploads/profiles/
-        const extensionByType = {
-          "image/jpeg": ".jpg",
-          "image/png": ".png",
-          "image/webp": ".webp",
-          "image/gif": ".gif",
-        };
-        fileUrl = saveLocal(req.file.buffer, `profile${extensionByType[imageType]}`, "profiles");
-      }
+      // Convert buffer directly to Base64 Data URL for 100% reliable database persistence
+      const base64String = req.file.buffer.toString("base64");
+      const dataUrl = `data:${imageType};base64,${base64String}`;
 
-      // Save URL to user profile
-      user.profileImage = fileUrl;
+      // Save Data URL directly to user document in MongoDB
+      user.profileImage = dataUrl;
       await user.save();
-
-      // A profile owns one current photo. Remove a superseded local fallback
-      // only after the database points at the replacement.
-      if (previousImage && previousImage !== fileUrl) {
-        try {
-          deleteLocalUpload(previousImage);
-        } catch (cleanupError) {
-          console.error("Previous profile image cleanup failed:", cleanupError);
-        }
-      }
 
       res.json({
         success: true,
-        profileImage: fileUrl,
-        message: "Profile image uploaded successfully",
+        profileImage: user.profileImage,
+        message: "Profile image stored in database successfully",
       });
     } catch (err) {
       console.error("Image upload error:", err);
       if (err.code === "LIMIT_FILE_SIZE") {
-        return res.status(413).json({
-          message: `Image exceeds ${PROFILE_IMAGE_LIMIT_MB}MB limit. Please use a smaller image.`,
-        });
+        return res.status(413).json({ message: "Image size exceeds limit." });
       }
-      res.status(500).json({ message: "Failed to upload image. Please try again." });
+      res.status(500).json({ message: "Failed to upload and store profile image in database." });
     }
   }
 );
+
 
 // ====================== RESUME FILE UPLOAD ======================
 router.post(
