@@ -370,6 +370,7 @@ const updateProject = async (req, res) => {
       "cgpa",
       "rankings",
       "status",
+      "candidateEdits", // Allow editing AI-generated summary/docs
     ];
 
     fields.forEach((field) => {

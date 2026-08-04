@@ -58,6 +58,31 @@ const userSchema = new mongoose.Schema(
     email:          { type: String, required: true, unique: true },
     password:       { type: String, required: true },
     role:           { type: String, enum: ["student", "recruiter"], default: "student" },
+
+    // Single source of truth for candidate workflow architecture
+    origin: {
+      type: String,
+      enum: ["self_registered", "recruiter_invited"],
+    },
+    pipeline: {
+      type: String,
+      enum: ["self_candidate_pipeline", "invited_candidate_pipeline", "recruiter_pipeline"],
+    },
+    pipelineStage: {
+      type: String,
+      enum: [
+        "registration",
+        "resume_upload",
+        "resume_analysis",
+        "repository_analysis",
+        "project_intelligence",
+        "technical_assessment",
+        "candidate_complete",
+        "waiting_for_recruiter",
+        "verification_complete"
+      ],
+    },
+
     githubUsername: { type: String, default: "" },
     profileImage:   { type: String, default: "" },
 

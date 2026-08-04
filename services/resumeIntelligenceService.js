@@ -2,15 +2,18 @@
  * resumeIntelligenceService.js
  *
  * AI-powered resume intelligence using Google Gemini directly from Node.js.
- * No Python engine required.
+ * No Python engine required for Gemini extraction — but proxies to Python
+ * /api/extract-claims-pdf for the full structured claim extraction.
  *
  * Pipeline:
- *  1. Extract raw text from PDF / DOCX (local, always works)
- *  2. Send text to Gemini 1.5 Flash for structured skill + profile extraction
- *  3. If Gemini fails (rate-limit, quota, etc.) → fall back to local keyword matcher
- *  4. Score alignment between resume skills and job requirements (local, instant)
+ *  1. Immediately mark ResumeAnalysis as "Parsing" (progress: 15)
+ *  2. Call Python /api/extract-claims-pdf — saves full claim objects
+ *  3. Persist complete claims (claim_id, skill, context, source_quote)
+ *  4. Update progress stages live throughout
+ *  5. After success, fire GitHub analysis (non-blocking) if githubUsername exists
  */
 
+const axios = require("axios");
 const pdfParse = require("pdf-parse");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
@@ -21,45 +24,24 @@ const geminiClient = process.env.GEMINI_API_KEY
 
 const getModel = () =>
   geminiClient?.getGenerativeModel({
-    model: "gemini-3.6-flash",          // Custom model available on the current API key
+    model: "gemini-2.0-flash",
     generationConfig: {
       responseMimeType: "application/json",
-      temperature: 0.1,                 // Low temp = deterministic, structured output
+      temperature: 0.1,
       maxOutputTokens: 1024,
     },
   });
 
+// ── Local text extraction (PDF / DOCX fallback) ────────────────────────────────
+const extractTextLocally = async (buffer, mimeType) => {
+  if (mimeType === "application/pdf") {
+    const pdfData = await pdfParse(buffer);
+    return pdfData.text;
+  }
+  return buffer.toString("utf8");
+};
 
-// ── Gemini prompt ──────────────────────────────────────────────────────────────
-const buildExtractionPrompt = (text, strictMode = false) => `
-You are an expert technical recruiter and resume analyst.
-Analyse the resume text below and return a valid JSON object with these exact fields:
-
-{
-  "name": "Candidate's full name (string, or null if not found)",
-  "email": "Email address (string, or null if not found)",
-  "skills": ["Array of technical and professional skills mentioned"],
-  "experience_years": "Total years of experience as a number (or 0 if unclear)",
-  "education": "Highest degree or qualification (string)",
-  "summary": "One sentence professional summary"
-}
-
-Rules:
-- Return ONLY the JSON object. No markdown, no code fences, no explanation.
-- Skills must be specific technologies, tools, frameworks, or methodologies.
-- Include both technical and soft skills only if clearly stated.
-- Keep skill names concise (e.g. "React" not "React.js framework for building UIs").
-${strictMode ? `
-- STRICT MODE ENABLED: Only include skills that the candidate has applied in actual job positions, internships, or complete projects. Do NOT include skills that are merely listed under "Interests", "Acquiring", "Familiar with", or "Exposure to". We need only verified expertise skills to prevent keyword stuffing or false positives.` : ""}
-
-Resume text:
----
-${text.substring(0, 12000)}
----
-`;
-
-
-// ── Local keyword dictionary (fallback) ────────────────────────────────────────
+// ── Local keyword dictionary (fallback when Python engine is unavailable) ──────
 const SKILL_DICT = [
   ["JavaScript",       "javascript", "js", "ecmascript", "es6"],
   ["TypeScript",       "typescript", "ts"],
@@ -149,18 +131,14 @@ const scoreAlignmentLocally = (resumeSkills = [], jobRequirements = []) => {
   return Math.round((matched.length / jobRequirements.length) * 100);
 };
 
-// ── Python Engine extraction ──────────────────────────────────────────────────
-const { postToAiEngine, aiEngineClient } = require("./aiEngineService");
+// ── Python Engine client ──────────────────────────────────────────────────────
+const { aiEngineClient } = require("./aiEngineService");
 const FormData = require("form-data");
-const extractTextLocally = async (buffer, mimeType) => {
-  if (mimeType === "application/pdf") {
-    const pdfData = await pdfParse(buffer);
-    return pdfData.text;
-  }
-  return buffer.toString("utf8");
-};
 
-// ── Main export ────────────────────────────────────────────────────────────────
+/**
+ * analyzeResumeBuffer — low-level extraction function.
+ * Returns { normalizedText, claims: { skills: [] }, analysis: {} }
+ */
 const analyzeResumeBuffer = async (buffer, options = {}) => {
   let source = "python_microservice";
   let skills = [];
@@ -171,34 +149,36 @@ const analyzeResumeBuffer = async (buffer, options = {}) => {
     // Attempt Python AI Engine parsing
     const formData = new FormData();
     formData.append("file", buffer, {
-      filename: options.fileName || "resume.pdf",
-      contentType: options.mimeType || "application/pdf"
+      filename: options.originalFileName || options.fileName || "resume.pdf",
+      contentType: options.mimeType || "application/pdf",
     });
 
     const aiResult = await aiEngineClient.post("/api/extract-claims-pdf", formData, {
       headers: {
-        ...aiEngineClient.defaults.headers,
-        ...formData.getHeaders()
-      }
+        // Include auth key but let form-data set Content-Type (with boundary)
+        "x-internal-api-key": process.env.INTERNAL_API_KEY || "veriproof-dev-secret",
+        ...formData.getHeaders(),
+      },
     });
 
     const parsedData = aiResult.data.result;
-    
-    // Convert python claims array of objects to array of skill strings for backwards compatibility in Node.js
-    skills = parsedData.claims ? parsedData.claims.map(c => c.skill) : [];
-    
-    // Also save the full claims object in meta
-    meta = {
-      fullClaimsData: parsedData.claims,
-    };
-    
-    text = parsedData.extracted_text_preview || await extractTextLocally(buffer, options.mimeType);
-    console.log(`[Intelligence] Python Engine extracted ${skills.length} skills`);
 
+    // Full claim objects with claim_id, skill, context, source_quote
+    skills = parsedData.claims ? parsedData.claims : [];
+    meta = { fullClaimsData: parsedData.claims };
+    text = parsedData.extracted_text_preview || await extractTextLocally(buffer, options.mimeType);
+    console.log(`[Intelligence] Python Engine extracted ${skills.length} claims`);
   } catch (err) {
-    console.warn(`[Intelligence] Python Engine failed (${err.message}) — using local keyword extractor fallback`);
+    console.warn(`[Intelligence] Python Engine failed (${err.message}) — using local keyword fallback`);
     text = await extractTextLocally(buffer, options.mimeType);
-    skills = extractSkillsLocally(text);
+    const skillNames = extractSkillsLocally(text);
+    // Create synthetic claim objects matching the schema
+    skills = skillNames.map((name, i) => ({
+      claim_id: `local_${i + 1}`,
+      skill: name,
+      context: "Extracted by local keyword matcher",
+      source_quote: "",
+    }));
     source = "local";
     console.log(`[Intelligence] Local extraction: ${skills.length} skills`);
   }
@@ -206,22 +186,39 @@ const analyzeResumeBuffer = async (buffer, options = {}) => {
   return {
     normalizedText: text,
     claims: { skills },
-    analysis: {
-      ...meta,
-      extractionSource: source,
-    },
+    analysis: { ...meta, extractionSource: source },
   };
 };
 
+// ── Models & services ─────────────────────────────────────────────────────────
 const ResumeAnalysis = require("../models/ResumeAnalysis");
 const User = require("../models/User");
 const { rebuildSkillProgression } = require("./skillProgressionService");
 
+/**
+ * setProgress — utility to update ResumeAnalysis progress live.
+ */
+const setProgress = async (userId, status, progress, stage) => {
+  await ResumeAnalysis.findOneAndUpdate(
+    { candidateId: userId },
+    { status, progress, stage },
+    { upsert: true }
+  );
+};
+
+/**
+ * runAnalysis — main orchestration function.
+ * Triggered asynchronously after resume file upload.
+ * Saves full claim objects and fires GitHub analysis on completion.
+ */
 const runAnalysis = async (userId, fileUrl, options) => {
   try {
+    // ── Stage 1: Parsing PDF ────────────────────────────────────────────────
+    await setProgress(userId, "Parsing", 15, "Parsing PDF document...");
+
     let buffer;
     if (fileUrl.startsWith("http")) {
-      const response = await axios.get(fileUrl, { responseType: 'arraybuffer' });
+      const response = await axios.get(fileUrl, { responseType: "arraybuffer" });
       buffer = Buffer.from(response.data);
     } else {
       const fs = require("fs");
@@ -229,44 +226,99 @@ const runAnalysis = async (userId, fileUrl, options) => {
       buffer = fs.readFileSync(path.join(__dirname, "..", fileUrl));
     }
 
+    // ── Stage 2: Extracting Claims ──────────────────────────────────────────
+    await setProgress(userId, "Extracting Information", 35, "Running AI claim extraction...");
+
     const result = await analyzeResumeBuffer(buffer, options);
 
-    const skills = result.claims.skills.map(skill => ({
-      id: skill.toLowerCase().replace(/[^a-z0-9]/g, '-'),
-      name: skill,
-      source: "Resume"
+    // ── Stage 3: Resume Verification ───────────────────────────────────────
+    await setProgress(userId, "Parsing", 60, "Verifying extracted claims...");
+
+    // Map full claim objects into the ResumeAnalysis schema
+    // Python returns: { claim_id, skill, context, source_quote }
+    const mappedSkills = result.claims.skills.map((claim) => ({
+      id:                 claim.claim_id || claim.skill?.toLowerCase().replace(/[^a-z0-9]/g, "-") || `c_${Date.now()}`,
+      name:               claim.skill || claim.name || "",
+      source:             "Resume",
+      verificationStatus: "Pending",
+      evidenceCount:      0,
+      context:            claim.context || "",
+      sourceQuote:        claim.source_quote || "",
     }));
 
+    // ── Stage 4: Updating Skill Tree ────────────────────────────────────────
+    await setProgress(userId, "Updating Skill Tree", 80, "Updating verified skill tree...");
+
+    // Persist the complete analysis
     await ResumeAnalysis.findOneAndUpdate(
       { candidateId: userId },
       {
-        candidateId: userId,
-        resumeUrl: fileUrl,
-        originalFileName: options.originalFileName,
-        mimeType: options.mimeType,
-        status: "Analysis Complete",
-        progress: 100,
-        stage: "Ready",
-        active: true,
-        claims: { skills }
+        candidateId:       userId,
+        resumeUrl:         fileUrl,
+        originalFileName:  options.originalFileName,
+        mimeType:          options.mimeType,
+        status:            "Analysis Complete",
+        progress:          100,
+        stage:             "Ready",
+        estimatedRemainingStage: "Complete",
+        active:            true,
+        truncatedText:     result.normalizedText?.substring(0, 2000) || "",
+        "claims.skills":   mappedSkills,
+        analysis: {
+          extractionSource:    result.analysis.extractionSource,
+          parsingConfidence:   mappedSkills.length > 0 ? 85 : 50,
+          resumeCompleteness:  Math.min(100, mappedSkills.length * 5),
+          parseErrors:         [],
+          missingFields:       [],
+        },
+        processedAt: new Date(),
+        error: "",
       },
       { upsert: true, new: true }
     );
 
+    // ── Stage 5: Mark user as Analyzed and advance pipelineStage ───────────
     const user = await User.findById(userId);
     if (user) {
       user.resumeStatus = "Analyzed";
+      
+      // Advance pipeline stage for candidates
+      if (["resume_upload", "resume_analysis"].includes(user.pipelineStage)) {
+        user.pipelineStage = "repository_analysis";
+      }
+
       await user.save();
     }
-    
-    // Attempt skill tree sync
-    try { await rebuildSkillProgression(userId); } catch (e) { }
 
+    // Rebuild skill progression from resume evidence
+    try {
+      await rebuildSkillProgression(userId);
+    } catch (e) {
+      console.warn("[Resume Intelligence] Skill progression rebuild failed:", e.message);
+    }
+
+    console.log(`[Resume Intelligence] Analysis complete for user ${userId}. ${mappedSkills.length} claims saved.`);
+
+    // ── Stage 6: Fire GitHub Analysis (non-blocking) ────────────────────────
+    if (user?.githubUsername) {
+      console.log(`[Resume Intelligence] Triggering GitHub analysis for @${user.githubUsername}`);
+      const { runGitHubAnalysis } = require("./githubIntelligenceService");
+      runGitHubAnalysis(userId).catch((err) => {
+        console.error("[GitHub Intelligence] Background analysis error:", err.message);
+      });
+    } else {
+      console.log(`[Resume Intelligence] No GitHub username — skipping repo analysis.`);
+    }
   } catch (err) {
     console.error("[Resume Intelligence] runAnalysis failed:", err);
     await ResumeAnalysis.findOneAndUpdate(
       { candidateId: userId },
-      { status: "Analysis Failed" },
+      {
+        status:  "Analysis Failed",
+        progress: 0,
+        stage:   "Analysis Failed",
+        error:   err.message || "Unknown error",
+      },
       { upsert: true }
     );
   }

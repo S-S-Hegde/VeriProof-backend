@@ -46,6 +46,8 @@ const projectSchema = new mongoose.Schema(
       commitsCount:  { type: Number, default: 0 },
       lastCommitDate:{ type: Date },
       languages:     { type: Object },
+      stars:         { type: Number, default: 0 },
+      forks:         { type: Number, default: 0 },
     },
     isVerified: { type: Boolean, default: false },
     status: {
@@ -53,9 +55,47 @@ const projectSchema = new mongoose.Schema(
       enum: ["Draft", "Published", "Pending", "Verified"],
       default: "Published",
     },
+
+    // ── AI-Generated Intelligence (populated by GitHub auto-analysis) ──────────
+    // NEVER overwritten if candidateEdits.summaryEdited = true
+    aiGenerated: {
+      projectSummary:       { type: String, default: "" },
+      architectureOverview: { type: String, default: "" },
+      techStack:            { type: [String], default: [] },
+      detectedApis:         { type: [String], default: [] },
+      authMethod:           { type: String, default: "" },
+      databaseLayer:        { type: String, default: "" },
+      folderStructure:      { type: String, default: "" },
+      majorFeatures:        { type: [String], default: [] },
+      howToRun:             { type: String, default: "" },
+      knownLimitations:     { type: [String], default: [] },
+      generatedReadme:      { type: String, default: "" },
+      wasReadmeGenerated:   { type: Boolean, default: false },
+      analyzedAt:           { type: Date },
+    },
+
+    // ── Candidate Edits ──────────────────────────────────────────────────────
+    // When summaryEdited = true, re-runs of GitHub analysis must NOT overwrite
+    // descriptionOverride or docsOverride.
+    candidateEdits: {
+      summaryEdited:        { type: Boolean, default: false },
+      descriptionOverride:  { type: String, default: "" },
+      docsOverride:         { type: String, default: "" },
+      lastEditedAt:         { type: Date },
+    },
+
+    // ── Source type flags ────────────────────────────────────────────────────
+    sourceType: {
+      type: String,
+      enum: ["manual", "github_auto"],
+      default: "manual",
+    },
   },
   { timestamps: true },
 );
+
+// Compound index to prevent duplicate auto-created projects per user+repo
+projectSchema.index({ user: 1, repositoryUrl: 1 }, { unique: true, sparse: true });
 
 const Project = mongoose.model("Project", projectSchema);
 module.exports = Project;

@@ -7,6 +7,7 @@ const User = require("../models/User");
 const Project = require("../models/Project");
 const ResumeAnalysis = require("../models/ResumeAnalysis");
 const RecruiterApplicant = require("../models/RecruiterApplicant");
+const InvitationRegistry = require("../models/InvitationRegistry");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
@@ -481,7 +482,23 @@ const uploadApplicantResumes = asyncHandler(async (req, res) => {
         reasoning,
         processedAt:   new Date(),
       });
+      await applicant.save();
 
+      // Register the candidate origin if an email was extracted
+      if (extractedEmail) {
+        await InvitationRegistry.findOneAndUpdate(
+          { email: extractedEmail.toLowerCase().trim() },
+          {
+            email: extractedEmail.toLowerCase().trim(),
+            recruiterId: req.user._id,
+            jobId: job._id,
+            status: "pending",
+          },
+          { upsert: true, new: true }
+        );
+      }
+
+      records.push(applicant);
 
       // ── Send invitation email ──
       if (extractedEmail) {

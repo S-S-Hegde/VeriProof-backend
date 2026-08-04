@@ -10,6 +10,7 @@ const projectRoutes = require("./routes/projectRoutes");
 const verifyRoutes  = require("./routes/verifyRoutes");
 const examRoutes    = require("./routes/examRoutes");
 const skillTreeRoutes = require("./routes/skillTreeRoutes");
+const githubRoutes  = require("./routes/githubRoutes");
 
 // Load env vars
 dotenv.config();
@@ -56,6 +57,7 @@ app.use("/api/projects", projectRoutes);
 app.use("/api/verify", verifyRoutes);
 app.use("/api/exams", examRoutes);
 app.use("/api/skill-tree", skillTreeRoutes);
+app.use("/api/github", githubRoutes);
 
 // Global Error Handler — never leak internals in production
 app.use((err, req, res, next) => {

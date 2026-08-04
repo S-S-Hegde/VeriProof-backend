@@ -1,6 +1,7 @@
 const User = require("../models/User");
 const Project = require("../models/Project");
 const VerificationResult = require("../models/VerificationResult");
+const InvitationRegistry = require("../models/InvitationRegistry");
 const generateToken = require("../utils/generateToken");
 const crypto = require("crypto");
 const sendEmail = require("../utils/sendEmail");
@@ -20,11 +21,34 @@ const registerUser = async (req, res) => {
     const userExists = await User.findOne({ email: normalizedEmail });
     if (userExists) return res.status(400).json({ message: "An account with this email address already exists." });
 
+    let assignedOrigin = "self_registered";
+    let assignedPipeline = "self_candidate_pipeline";
+    let assignedStage = "resume_upload";
+
+    if (role === "recruiter") {
+      assignedPipeline = "recruiter_pipeline";
+      assignedStage = "registration";
+    } else {
+      const invitation = await InvitationRegistry.findOne({ email: normalizedEmail });
+      if (invitation) {
+        assignedOrigin = "recruiter_invited";
+        assignedPipeline = "invited_candidate_pipeline";
+        assignedStage = "repository_analysis";
+        
+        // Mark invitation as registered
+        invitation.status = "registered";
+        await invitation.save();
+      }
+    }
+
     const user = await User.create({
       name: normalizedName,
       email: normalizedEmail,
       password,
       role: role || "student",
+      origin: assignedOrigin,
+      pipeline: assignedPipeline,
+      pipelineStage: assignedStage,
       githubUsername: githubUsername ? githubUsername.trim() : "",
     });
 
@@ -95,32 +119,15 @@ const getUserProfile = async (req, res) => {
     const user = await User.findById(req.user._id).select("-password");
     if (!user) return res.status(404).json({ message: "User not found" });
 
-    // Pipeline Stage 1: Resume Upload
-    const hasResume = !!user.resumeUrl;
-
-    // Pipeline Stage 2: Resume Analysis
-    const ResumeAnalysis = require("../models/ResumeAnalysis");
-    const activeAnalysis = await ResumeAnalysis.findOne({ candidateId: user._id, active: true });
-    const isResumeAnalyzed = activeAnalysis ? activeAnalysis.status === "Analysis Complete" : false;
-
-    // Pipeline Stage 3: Repository Analysis
-    // Relies on synced projects
-    const projectsCount = await Project.countDocuments({ user: user._id, "githubStats.commitsCount": { $exists: true, $gt: 0 } });
-    const hasRepoAnalysis = projectsCount > 0;
-
-    // Pipeline Stage 4: Technical Exam
-    const hasExamPassed = user.certificates && user.certificates.length > 0;
-
-    // Pipeline Stage 5: Verification Request
-    const verificationCount = await VerificationResult.countDocuments({ candidateId: user._id });
-    const hasVerificationRequest = verificationCount > 0;
+    const p = user.pipelineStage || "resume_upload";
+    const isInvited = user.origin === "recruiter_invited";
 
     const workflowState = {
-      hasResume,
-      isResumeAnalyzed,
-      hasRepoAnalysis,
-      hasExamPassed,
-      hasVerificationRequest,
+      hasResume: isInvited || ["resume_analysis", "repository_analysis", "project_intelligence", "technical_assessment", "candidate_complete", "waiting_for_recruiter", "verification_complete"].includes(p),
+      isResumeAnalyzed: isInvited || ["repository_analysis", "project_intelligence", "technical_assessment", "candidate_complete", "waiting_for_recruiter", "verification_complete"].includes(p),
+      hasRepoAnalysis: ["project_intelligence", "technical_assessment", "candidate_complete", "waiting_for_recruiter", "verification_complete"].includes(p),
+      hasExamPassed: ["candidate_complete", "waiting_for_recruiter", "verification_complete"].includes(p),
+      hasVerificationRequest: isInvited,
     };
 
     const userObj = user.toObject();

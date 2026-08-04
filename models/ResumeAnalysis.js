@@ -50,6 +50,9 @@ const resumeAnalysisSchema = new mongoose.Schema(
           source: { type: String, default: "Resume" },
           verificationStatus: { type: String, default: "Pending" },
           evidenceCount: { type: Number, default: 0 },
+          // Full claim object fields from Python /api/extract-claims-pdf
+          context: { type: String, default: "" },
+          sourceQuote: { type: String, default: "" },
         },
       ],
       projects: [
