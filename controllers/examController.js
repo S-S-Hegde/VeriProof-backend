@@ -205,6 +205,15 @@ const submitExam = async (req, res) => {
       }
     }
 
+    if (exam) {
+      exam.status = "Completed";
+      exam.score = score;
+      exam.timeTaken = 30;
+      exam.codeQuality = score;
+      exam.answers = answers;
+      await exam.save();
+    }
+
     const existingResult = await VerificationResult.findOne({
       candidateId: req.user._id,
       status: "Pending Exam",

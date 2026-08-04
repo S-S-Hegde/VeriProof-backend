@@ -13,6 +13,7 @@ const {
   getApplicantResumes,
   deleteJob,
   deleteApplicant,
+  runFullVerificationPipeline,
 } = require("../controllers/verifyController");
 
 const { protect, recruiterOnly } = require("../middleware/authMiddleware");
@@ -67,5 +68,8 @@ router.delete("/applicants/:id",   protect, recruiterOnly, deleteApplicant);
 router.get("/my-results", protect, getCandidateResults);
 router.get("/exam/:jobId", protect, getExamForJob);
 router.post("/exam/:resultId", protect, submitExam);
+
+// Module 12 Master Endpoint (V2 Orchestrator)
+router.post("/candidate/:candidateId", protect, recruiterOnly, runFullVerificationPipeline);
 
 module.exports = router;

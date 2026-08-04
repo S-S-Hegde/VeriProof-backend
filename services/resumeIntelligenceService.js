@@ -213,8 +213,68 @@ const analyzeResumeBuffer = async (buffer, options = {}) => {
   };
 };
 
+const ResumeAnalysis = require("../models/ResumeAnalysis");
+const User = require("../models/User");
+const { rebuildSkillProgression } = require("./skillProgressionService");
+
+const runAnalysis = async (userId, fileUrl, options) => {
+  try {
+    let buffer;
+    if (fileUrl.startsWith("http")) {
+      const response = await axios.get(fileUrl, { responseType: 'arraybuffer' });
+      buffer = Buffer.from(response.data);
+    } else {
+      const fs = require("fs");
+      const path = require("path");
+      buffer = fs.readFileSync(path.join(__dirname, "..", fileUrl));
+    }
+
+    const result = await analyzeResumeBuffer(buffer, options);
+
+    const skills = result.claims.skills.map(skill => ({
+      id: skill.toLowerCase().replace(/[^a-z0-9]/g, '-'),
+      name: skill,
+      source: "Resume"
+    }));
+
+    await ResumeAnalysis.findOneAndUpdate(
+      { candidateId: userId },
+      {
+        candidateId: userId,
+        resumeUrl: fileUrl,
+        originalFileName: options.originalFileName,
+        mimeType: options.mimeType,
+        status: "Analysis Complete",
+        progress: 100,
+        stage: "Ready",
+        active: true,
+        claims: { skills }
+      },
+      { upsert: true, new: true }
+    );
+
+    const user = await User.findById(userId);
+    if (user) {
+      user.resumeStatus = "Analyzed";
+      await user.save();
+    }
+    
+    // Attempt skill tree sync
+    try { await rebuildSkillProgression(userId); } catch (e) { }
+
+  } catch (err) {
+    console.error("[Resume Intelligence] runAnalysis failed:", err);
+    await ResumeAnalysis.findOneAndUpdate(
+      { candidateId: userId },
+      { status: "Analysis Failed" },
+      { upsert: true }
+    );
+  }
+};
+
 module.exports = {
   analyzeResumeBuffer,
   extractSkillsLocally,
   scoreAlignmentLocally,
+  runAnalysis,
 };

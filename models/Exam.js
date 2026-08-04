@@ -21,6 +21,13 @@ const examSchema = mongoose.Schema(
       required: true,
       default: 70, // 70%
     },
+    candidateId: { type: mongoose.Schema.Types.ObjectId, ref: "User", index: true },
+    status: { type: String, default: "Pending" },
+    score: { type: Number, default: 0 },
+    timeTaken: { type: Number, default: 0 },
+    codeQuality: { type: Number, default: 0 },
+    answers: { type: Array, default: [] },
+    integrityScore: { type: Number, default: 100 }
   },
   {
     timestamps: true,

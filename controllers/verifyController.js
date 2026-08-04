@@ -4,6 +4,7 @@ const Job = require("../models/Job");
 const VerificationResult = require("../models/VerificationResult");
 const Exam = require("../models/Exam");
 const User = require("../models/User");
+const Project = require("../models/Project");
 const ResumeAnalysis = require("../models/ResumeAnalysis");
 const RecruiterApplicant = require("../models/RecruiterApplicant");
 const fs = require("fs");
@@ -593,6 +594,87 @@ const deleteApplicant = asyncHandler(async (req, res) => {
   res.json({ message: "Applicant removed." });
 });
 
+// @desc    Run full End-to-End Candidate Verification Pipeline (Module 12)
+// @route   POST /api/verify/candidate/:candidateId
+// @access  Private (Recruiter)
+const runFullVerificationPipeline = asyncHandler(async (req, res) => {
+  const { candidateId } = req.params;
+  const { force } = req.body;
+
+  const applicant = await RecruiterApplicant.findById(candidateId).populate("jobId");
+  if (!applicant) {
+    res.status(404);
+    throw new Error("Applicant not found");
+  }
+
+  if (applicant.v2Report && !force) {
+    return res.json(applicant.v2Report);
+  }
+
+  const candidateEmail = applicant.extractedEmail;
+  const candidateUser = candidateEmail ? await User.findOne({ email: candidateEmail.toLowerCase() }) : null;
+
+  let repositories = [];
+  let technical_assessment = null;
+  let behavioral_assessment = null;
+  let professional_experience_years = 0;
+
+  if (candidateUser) {
+    professional_experience_years = candidateUser.experienceYears || (candidateUser.role === "student" ? 0 : 3);
+    
+    const projects = await Project.find({ user: candidateUser._id });
+    if (projects.length > 0) {
+      repositories = projects.map(p => ({
+        url: p.repositoryUrl || p.liveUrl || "",
+        commits: p.analysis?.commitCount || 0,
+        files: p.technologies || []
+      }));
+    }
+    
+    const exam = await Exam.findOne({ candidateId: candidateUser._id }).sort({ createdAt: -1 });
+    if (exam && exam.status === "Completed") {
+      technical_assessment = {
+        score: exam.score || 0,
+        time_taken_minutes: exam.timeTaken || 30,
+        questions_attempted: exam.questions?.length || 10,
+        code_quality_score: exam.codeQuality || (exam.score || 0)
+      };
+      
+      behavioral_assessment = {
+        answers: exam.answers || [],
+        integrity_score: exam.integrityScore || 100,
+      };
+    }
+  }
+
+  const pipelineRequest = {
+    job_requirements: applicant.jobId.targetSkills || ["Software Engineering"],
+    resume_text: applicant.resumeText || applicant.extractedName || "Candidate Resume",
+    repositories: repositories.length > 0 ? repositories : null,
+    technical_assessment: technical_assessment,
+    behavioral_assessment: behavioral_assessment,
+    professional_experience_years: professional_experience_years
+  };
+
+  try {
+    const pythonRes = await axios.post(`${PYTHON_API_BASE}/v2/verify-candidate`, pipelineRequest, { timeout: 45000 });
+    
+    applicant.v2Report = pythonRes.data;
+    applicant.status = "Completed";
+    await applicant.save();
+    
+    res.json(pythonRes.data);
+  } catch (error) {
+    const isConnErr = error.code === "ECONNREFUSED" || error.code === "ETIMEDOUT";
+    if (isConnErr) {
+      res.status(503);
+      throw new Error("Verification Engine is offline.");
+    }
+    res.status(500);
+    throw new Error(error.response?.data?.detail || error.message);
+  }
+});
+
 module.exports = {
   parseResume,
   getExamForJob,
@@ -606,6 +688,5 @@ module.exports = {
   getApplicantResumes,
   deleteJob,
   deleteApplicant,
+  runFullVerificationPipeline,
 };
-
-
