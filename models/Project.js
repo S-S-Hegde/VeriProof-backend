@@ -16,6 +16,15 @@ const snippetSchema = new mongoose.Schema({
   explanation: { type: String }
 }, { _id: false });
 
+const attachmentSchema = new mongoose.Schema({
+  filename:     { type: String, required: true },
+  originalName: { type: String, required: true },
+  mimeType:     { type: String, required: true },
+  size:         { type: Number, required: true },
+  url:          { type: String, required: true },
+  uploadedAt:   { type: Date, default: Date.now }
+}, { _id: true });
+
 const projectSchema = new mongoose.Schema(
   {
     user: {
@@ -30,6 +39,7 @@ const projectSchema = new mongoose.Schema(
     liveUrl:      { type: String },
     images:       { type: [String] },
     featuredSnippets: [snippetSchema],
+    attachments:  [attachmentSchema],
     cgpa:         { type: String, default: "" },
     rankings:     { type: rankingSchema, default: () => ({}) },
     githubStats: {

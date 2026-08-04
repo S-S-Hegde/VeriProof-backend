@@ -11,8 +11,18 @@ const PYTHON_API_BASE = "http://127.0.0.1:8000/api";
 // @route   POST /api/projects
 // @access  Private (Student)
 const createProject = async (req, res) => {
-  const { title, description, technologies, repositoryUrl, liveUrl, images } =
-    req.body;
+  const {
+    title,
+    description,
+    technologies,
+    repositoryUrl,
+    liveUrl,
+    images,
+    featuredSnippets,
+    cgpa,
+    rankings,
+    attachments,
+  } = req.body;
 
   try {
     const project = new Project({
@@ -23,6 +33,10 @@ const createProject = async (req, res) => {
       repositoryUrl,
       liveUrl,
       images,
+      featuredSnippets,
+      cgpa,
+      rankings,
+      attachments,
     });
 
     const createdProject = await project.save();
@@ -328,11 +342,127 @@ const getMyAnalytics = async (req, res) => {
   }
 };
 
+// @desc    Update a project
+// @route   PUT /api/projects/:id
+// @access  Private (Owner)
+const updateProject = async (req, res) => {
+  try {
+    const project = await Project.findById(req.params.id);
+
+    if (!project) {
+      return res.status(404).json({ message: "Project not found" });
+    }
+
+    if (project.user.toString() !== req.user._id.toString()) {
+      return res
+        .status(403)
+        .json({ message: "Not authorized to update this project" });
+    }
+
+    const fields = [
+      "title",
+      "description",
+      "technologies",
+      "repositoryUrl",
+      "liveUrl",
+      "images",
+      "featuredSnippets",
+      "cgpa",
+      "rankings",
+      "status",
+    ];
+
+    fields.forEach((field) => {
+      if (req.body[field] !== undefined) {
+        project[field] = req.body[field];
+      }
+    });
+
+    const updatedProject = await project.save();
+    res.json(updatedProject);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// @desc    Delete a project
+// @route   DELETE /api/projects/:id
+// @access  Private (Owner)
+const deleteProject = async (req, res) => {
+  try {
+    const project = await Project.findById(req.params.id);
+
+    if (!project) {
+      return res.status(404).json({ message: "Project not found" });
+    }
+
+    if (project.user.toString() !== req.user._id.toString()) {
+      return res
+        .status(403)
+        .json({ message: "Not authorized to delete this project" });
+    }
+
+    await project.deleteOne();
+    res.json({ message: "Project removed successfully" });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// @desc    Upload document/file attachment for a project
+// @route   POST /api/projects/:id/attachments
+// @access  Private (Owner)
+const uploadProjectAttachment = async (req, res) => {
+  try {
+    const project = await Project.findById(req.params.id);
+
+    if (!project) {
+      return res.status(404).json({ message: "Project not found" });
+    }
+
+    if (project.user.toString() !== req.user._id.toString()) {
+      return res
+        .status(403)
+        .json({ message: "Not authorized to add attachments to this project" });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ message: "Please upload a file" });
+    }
+
+    const fileUrl = `/uploads/documents/${req.file.filename}`;
+
+    const newAttachment = {
+      filename: req.file.filename,
+      originalName: req.file.originalname,
+      mimeType: req.file.mimetype,
+      size: req.file.size,
+      url: fileUrl,
+      uploadedAt: new Date(),
+    };
+
+    project.attachments = project.attachments || [];
+    project.attachments.push(newAttachment);
+    await project.save();
+
+    res.status(201).json({
+      message: "Attachment uploaded successfully",
+      attachment: newAttachment,
+      attachments: project.attachments,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
 module.exports = {
   createProject,
   getProjects,
   getMyProjects,
   getProjectById,
+  updateProject,
+  deleteProject,
+  uploadProjectAttachment,
   syncProject,
   getMyAnalytics,
 };

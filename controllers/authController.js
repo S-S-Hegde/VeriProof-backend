@@ -35,6 +35,7 @@ const registerUser = async (req, res) => {
         email: user.email,
         role: user.role,
         githubUsername: user.githubUsername,
+        profileImage: user.profileImage,
         token: generateToken(user._id),
       });
     } else {
@@ -77,6 +78,7 @@ const authUser = async (req, res) => {
       email: user.email,
       role: user.role,
       githubUsername: user.githubUsername,
+      profileImage: user.profileImage,
       token: generateToken(user._id),
     });
   } catch (error) {
