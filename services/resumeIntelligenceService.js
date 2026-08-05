@@ -126,8 +126,11 @@ const extractSkillsLocally = (text) => {
 // ── Alignment scorer (local, instant) ─────────────────────────────────────────
 const scoreAlignmentLocally = (resumeSkills = [], jobRequirements = []) => {
   if (!jobRequirements.length) return 0;
-  const resumeSet = new Set(resumeSkills.map(s => s.toLowerCase()));
-  const matched = jobRequirements.filter(r => resumeSet.has(r.toLowerCase()));
+  const normalizedResumeSkills = resumeSkills
+    .map(s => (typeof s === "string" ? s : s.skill || ""))
+    .filter(Boolean);
+  const resumeSet = new Set(normalizedResumeSkills.map(s => s.toLowerCase()));
+  const matched = jobRequirements.filter(r => typeof r === "string" && resumeSet.has(r.toLowerCase()));
   return Math.round((matched.length / jobRequirements.length) * 100);
 };
 
@@ -223,7 +226,8 @@ const runAnalysis = async (userId, fileUrl, options) => {
     } else {
       const fs = require("fs");
       const path = require("path");
-      buffer = fs.readFileSync(path.join(__dirname, "..", fileUrl));
+      const relativeUrl = fileUrl.startsWith('/') ? fileUrl.slice(1) : fileUrl;
+      buffer = fs.readFileSync(path.join(__dirname, "..", relativeUrl));
     }
 
     // ── Stage 2: Extracting Claims ──────────────────────────────────────────

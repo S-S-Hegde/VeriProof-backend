@@ -328,11 +328,14 @@ const getCandidateResults = asyncHandler(async (req, res) => {
 // @access  Private (Recruiter)
 const createJobRole = asyncHandler(async (req, res) => {
   const { title, description, targetSkills } = req.body;
+  const sanitizedTargetSkills = (targetSkills || [])
+    .map(s => (typeof s === "string" ? s : s.skill || ""))
+    .filter(Boolean);
   const job = await Job.create({
     recruiterId: req.user._id,
     title,
     description,
-    targetSkills,
+    targetSkills: sanitizedTargetSkills,
   });
   res.status(201).json(job);
 });
@@ -368,7 +371,10 @@ const createJobFromFile = asyncHandler(async (req, res) => {
       throw new Error("No readable text was found in the document.");
     }
 
-    const targetSkills = parsedData.claims.skills || [];
+    const rawSkills = parsedData.claims?.skills || [];
+    const targetSkills = rawSkills
+      .map(s => (typeof s === "string" ? s : s.skill || ""))
+      .filter(Boolean);
 
     const title = String(
       req.body.title || path.parse(req.file.originalname).name,
@@ -441,13 +447,16 @@ const uploadApplicantResumes = asyncHandler(async (req, res) => {
 
       // ── Alignment score (Python AI Engine with local fallback) ──
       let alignmentScore = 0;
-      const resumeSkills = parsed.claims.skills || [];
+      const resumeSkills = parsed.claims?.skills || [];
       const jobSkills = job.targetSkills || [];
-      const resumeSet = new Set(resumeSkills.map(s => s.toLowerCase()));
+      const resumeSkillStrings = resumeSkills
+        .map(s => (typeof s === "string" ? s : s.skill || ""))
+        .filter(Boolean);
+      const resumeSet = new Set(resumeSkillStrings.map(s => s.toLowerCase()));
 
       try {
         const pythonRes = await axios.post(`${PYTHON_API_BASE}/verify-claims`, {
-          claims: resumeSkills.map(s => ({ skill: s, context: "Resume claim", source_quote: s })),
+          claims: resumeSkills.map(s => (typeof s === "string" ? { skill: s, context: "Resume claim", source_quote: s } : s)),
           job_requirements: jobSkills,
         }, { timeout: 8000 });
         alignmentScore = pythonRes.data.result.score || 0;

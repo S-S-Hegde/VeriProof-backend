@@ -83,12 +83,17 @@ const resumeUpload = multer({
   storage,
   limits: { fileSize: RESUME_FILE_LIMIT_MB * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    const allowed = [
+    const allowedMime = [
       "application/pdf",
+      "application/x-pdf",
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "application/msword",
       "text/plain",
+      "application/octet-stream",
     ];
-    if (allowed.includes(file.mimetype)) {
+    const ext = path.extname(file.originalname || "").toLowerCase();
+    const allowedExts = [".pdf", ".docx", ".doc", ".txt"];
+    if (allowedMime.includes(file.mimetype) || allowedExts.includes(ext)) {
       cb(null, true);
     } else {
       cb(new Error("Only resume files are allowed (PDF, DOCX, TXT)"), false);
@@ -126,11 +131,15 @@ const detectedImageType = (buffer) => {
 };
 
 const isValidResumeFile = (file) => {
+  if (!file || !file.buffer) return false;
+  if (file.buffer.length >= 5 && file.buffer.subarray(0, 5).toString() === "%PDF-") return true;
+  if (file.buffer.length >= 4 && file.buffer[0] === 0x50 && file.buffer[1] === 0x4b) return true;
+  const ext = path.extname(file.originalname || "").toLowerCase();
+  if (file.mimetype === "text/plain" || ext === ".txt") return !file.buffer.includes(0x00);
   if (file.mimetype === "application/pdf") return file.buffer.subarray(0, 5).toString() === "%PDF-";
   if (file.mimetype === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
     return file.buffer.length >= 4 && file.buffer[0] === 0x50 && file.buffer[1] === 0x4b;
   }
-  if (file.mimetype === "text/plain") return !file.buffer.includes(0x00);
   return false;
 };
 
