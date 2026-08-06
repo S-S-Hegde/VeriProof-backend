@@ -439,13 +439,13 @@ const submitExam = async (req, res) => {
     const isPassed = score >= 70;
     let certificate = null;
 
-    if (isPassed) {
-      const user = await User.findById(req.user._id);
-      if (user) {
-        const categories = exam ? exam.skills : ["Software Engineering"];
-        const certTitle = `${categories[0] || "Software Engineering"} Professional Certificate`;
-        const credentialId = `VP-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
+    const user = await User.findById(req.user._id);
+    if (user) {
+      const categories = exam ? exam.skills : ["Software Engineering"];
+      const certTitle = `${categories[0] || "Software Engineering"} Professional Certificate`;
+      const credentialId = `VP-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
 
+      if (isPassed) {
         certificate = {
           title: certTitle,
           issuedAt: new Date(),
@@ -454,19 +454,23 @@ const submitExam = async (req, res) => {
           techStack: categories,
           verificationUrl: `/verify-credential/${credentialId}`,
         };
-
         user.certificates.push(certificate);
-        await user.save();
-        await rebuildSkillProgression(user._id, {
-          type: "exam",
-          label: certTitle,
-          technologies: categories,
-          score,
-          xp: 160,
-          completed: true,
-          source: credentialId,
-        });
       }
+
+      // Advance pipelineStage to verification_complete for all candidate types
+      user.pipelineStage = "verification_complete";
+      await user.save();
+
+      // Rebuild skill progression & skill tree from all evidence (resume, repo, exam)
+      await rebuildSkillProgression(user._id, {
+        type: "exam",
+        label: certTitle,
+        technologies: categories,
+        score,
+        xp: isPassed ? 160 : 60,
+        completed: isPassed,
+        source: credentialId || "assessment",
+      });
     }
 
     if (exam) {
@@ -478,14 +482,25 @@ const submitExam = async (req, res) => {
       await exam.save();
     }
 
-    const existingResult = await VerificationResult.findOne({
+    // Upsert VerificationResult for EVERY candidate type (Self-Registered, Invited, Recruiter)
+    let vResult = await VerificationResult.findOne({
       candidateId: req.user._id,
-      status: "Pending Exam",
     }).sort({ createdAt: -1 });
-    if (existingResult) {
-      existingResult.examScore = score;
-      existingResult.status = isPassed ? "Verified" : "Failed";
-      await existingResult.save();
+
+    if (vResult) {
+      vResult.examScore = score;
+      vResult.status = isPassed ? "Verified" : "Failed";
+      if (!vResult.alignmentScore) vResult.alignmentScore = score;
+      await vResult.save();
+    } else {
+      await VerificationResult.create({
+        candidateId: req.user._id,
+        examScore: score,
+        alignmentScore: score,
+        status: isPassed ? "Verified" : "Failed",
+        matchedSkills: exam?.skills || ["Software Engineering"],
+        missingSkills: [],
+      });
     }
 
     res.json({
@@ -497,6 +512,7 @@ const submitExam = async (req, res) => {
       score,
       status: isPassed ? "Passed" : "Needs Improvement",
       certificate,
+      pipelineStage: "verification_complete",
     });
   } catch (error) {
     res.status(500).json({ message: error.message });

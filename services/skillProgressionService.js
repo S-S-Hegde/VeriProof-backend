@@ -1,6 +1,7 @@
 const User = require("../models/User");
 const Project = require("../models/Project");
 const VerificationResult = require("../models/VerificationResult");
+const ResumeAnalysis = require("../models/ResumeAnalysis");
 const { skillCatalog, flatSkillCatalog } = require("../data/skillCatalog");
 
 const SKILL_MAP = new Map(flatSkillCatalog.map((skill) => [skill.id, skill]));
@@ -98,6 +99,7 @@ const deriveAchievements = (state, meta) => {
   const skills = [...state.values()];
   const verifiedCount = skills.filter((skill) => skill.status === "verified").length;
   const unlockedCount = skills.filter((skill) => skill.status !== "locked").length;
+
   const achievements = [];
 
   const push = (id, title, description, icon, unlocked) => {
@@ -199,10 +201,11 @@ const computeStreak = (dates) => {
 };
 
 const rebuildSkillProgression = async (userId, event = null) => {
-  const [user, projects, assessments] = await Promise.all([
+  const [user, projects, assessments, resumeAnalysis] = await Promise.all([
     User.findById(userId),
     Project.find({ user: userId }),
     VerificationResult.find({ candidateId: userId }),
+    ResumeAnalysis.findOne({ candidateId: userId, active: true }),
   ]);
 
   if (!user) return null;
@@ -226,6 +229,33 @@ const rebuildSkillProgression = async (userId, event = null) => {
         activityDates.push(evidence.createdAt);
       });
   });
+
+  if (resumeAnalysis?.claims?.skills?.length) {
+    resumeAnalysis.claims.skills.forEach((claim) => {
+      const claimName = claim.name || claim.skill || "";
+      const matchedIds = getSkillIdsFromText([claimName, claim.context || "", claim.sourceQuote || ""]);
+      
+      const normalizedName = normalize(claimName);
+      flatSkillCatalog.forEach((s) => {
+        if (normalize(s.name) === normalizedName || normalize(s.id) === normalizedName) {
+          matchedIds.push(s.id);
+        }
+      });
+
+      const uniqueSkillIds = [...new Set(matchedIds)];
+      uniqueSkillIds.forEach((skillId) => {
+        bumpSkill(state, skillId, {
+          score: 82,
+          xp: 120,
+          type: "resume_claim",
+          source: claim.id || "resume",
+          label: `Resume claim: ${claimName}`,
+          completed: true,
+        });
+      });
+    });
+    activityDates.push(resumeAnalysis.updatedAt || resumeAnalysis.createdAt);
+  }
 
   projects.forEach((project) => {
     const textValues = [

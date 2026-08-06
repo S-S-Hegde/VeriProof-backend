@@ -286,6 +286,12 @@ const submitExam = asyncHandler(async (req, res) => {
   result.status = newStatus;
   await result.save();
 
+  const candidateUser = await User.findById(result.candidateId);
+  if (candidateUser) {
+    candidateUser.pipelineStage = "verification_complete";
+    await candidateUser.save();
+  }
+
   await rebuildSkillProgression(result.candidateId, {
     type: "recruiter_assessment",
     label: `Recruiter exam: ${exam.topic}`,
@@ -296,7 +302,7 @@ const submitExam = asyncHandler(async (req, res) => {
     source: result._id.toString(),
   });
 
-  res.json({ examScore, status: newStatus });
+  res.json({ examScore, status: newStatus, pipelineStage: "verification_complete" });
 });
 
 // @desc    Get Recruiter Verification Dashboard Data

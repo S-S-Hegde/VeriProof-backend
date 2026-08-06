@@ -9,7 +9,7 @@ const verificationResultSchema = mongoose.Schema(
     },
     jobId: {
       type: mongoose.Schema.Types.ObjectId,
-      required: true,
+      required: false,
       ref: "Job",
     },
     resumeText: {

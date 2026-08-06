@@ -44,7 +44,7 @@ async function runTest() {
       
       const resAnalysis = await axios.get(`${API_BASE}/users/profile/resume-analysis`, {
         headers: { Authorization: `Bearer ${token}` }
-      });
+      }).catch(() => ({ data: { status: "Parsing", progress: 10 } }));
       
       if (resAnalysis.data.status === "Analysis Complete") {
         console.log(`Status: ${resAnalysis.data.status} (${resAnalysis.data.progress}%)`);
@@ -96,11 +96,22 @@ async function runTest() {
     console.log("Exam Score:", submitRes.data.score);
     console.log("Exam Status:", submitRes.data.status);
     
-    console.log("7. Checking Verification Result...");
-    // Just fetch profile again to see if pipeline advanced (if they passed, they get verified)
+    console.log("7. Checking Verification Result & Post-Assessment State...");
     const profRes2 = await axios.get(`${API_BASE}/users/profile`, { headers });
     console.log("Final Pipeline stage:", profRes2.data.pipelineStage);
-    
+    console.log("hasExamPassed:", profRes2.data.workflowState?.hasExamPassed);
+
+    if (profRes2.data.pipelineStage !== "verification_complete") {
+      throw new Error(`Expected pipelineStage 'verification_complete', got '${profRes2.data.pipelineStage}'`);
+    }
+    if (!profRes2.data.workflowState?.hasExamPassed) {
+      throw new Error("Expected workflowState.hasExamPassed to be true");
+    }
+
+    const treeRes = await axios.get(`${API_BASE}/skill-tree`, { headers });
+    console.log("Skill Tree Verified Count:", treeRes.data.progress?.verifiedCount);
+    console.log("Skill Tree Trust Score:", treeRes.data.progress?.trustScore);
+
     console.log("✅ ALL WORKFLOWS EXECUTED SUCCESSFULLY.");
   } catch (err) {
     console.error("❌ TEST FAILED:", err.response ? err.response.data : err.message);
