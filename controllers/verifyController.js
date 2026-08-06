@@ -523,8 +523,6 @@ const uploadApplicantResumes = asyncHandler(async (req, res) => {
         );
       }
 
-      records.push(applicant);
-
       // ── Send invitation email ──
       if (extractedEmail) {
         try {
