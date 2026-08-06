@@ -426,21 +426,21 @@ const resetPassword = async (req, res) => {
 // @access  Private
 const deleteUserAccount = async (req, res) => {
   try {
-    const { password } = req.body;
+    const password = req.body?.password || req.headers["x-confirm-password"] || req.query?.password;
     if (!password) {
       return res.status(400).json({ message: "Password is required to confirm account deletion." });
     }
 
     const userId = req.user._id;
-    const user = await User.findById(userId);
+    const user = await User.findById(userId).select("+password");
     if (!user) {
-      return res.status(404).json({ message: "User not found." });
+      return res.status(404).json({ message: "User account not found." });
     }
 
     // Verify Password
     const isMatch = await user.matchPassword(password);
     if (!isMatch) {
-      return res.status(401).json({ message: "Invalid credentials. Password mismatch." });
+      return res.status(401).json({ message: "Incorrect password. Unable to verify identity." });
     }
 
     // Save references to local files before database deletion
@@ -452,21 +452,34 @@ const deleteUserAccount = async (req, res) => {
       filesToDelete.push(user.resumeUrl);
     }
 
-    // Clean up database records
-    if (user.role === "student") {
+    const Exam = require("../models/Exam");
+    const InvitationRegistry = require("../models/InvitationRegistry");
+
+    // Clean up database records based on user role & email
+    if (user.role === "student" || user.role === "candidate") {
       const Project = require("../models/Project");
       const VerificationResult = require("../models/VerificationResult");
       const ResumeAnalysis = require("../models/ResumeAnalysis");
+      const RecruiterApplicant = require("../models/RecruiterApplicant");
 
       const resumeAnalyses = await ResumeAnalysis.find({ candidateId: userId }).select("resumeUrl");
       resumeAnalyses.forEach((analysis) => {
         if (analysis.resumeUrl?.startsWith("/uploads/")) filesToDelete.push(analysis.resumeUrl);
       });
 
-      // Delete user's projects and verification results and resume analysis
+      // Delete candidate artifacts
       await Project.deleteMany({ user: userId });
       await VerificationResult.deleteMany({ candidateId: userId });
       await ResumeAnalysis.deleteMany({ candidateId: userId });
+      await Exam.deleteMany({ candidateId: userId });
+
+      // Clean up invitation registries and recruiter applicant links for candidate's email
+      if (user.email) {
+        await InvitationRegistry.deleteMany({ email: user.email.toLowerCase().trim() });
+        await RecruiterApplicant.deleteMany({
+          $or: [{ extractedEmail: user.email.toLowerCase().trim() }, { candidateUser: userId }]
+        });
+      }
     } else if (user.role === "recruiter") {
       const Job = require("../models/Job");
       const VerificationResult = require("../models/VerificationResult");
@@ -476,6 +489,8 @@ const deleteUserAccount = async (req, res) => {
       const jobIds = jobs.map(j => j._id);
 
       await VerificationResult.deleteMany({ jobId: { $in: jobIds } });
+      await InvitationRegistry.deleteMany({ recruiterId: userId });
+      
       const applicants = await RecruiterApplicant.find({ recruiterId: userId }).select("fileUrl");
       applicants.forEach((applicant) => {
         if (applicant.fileUrl?.startsWith("/uploads/")) filesToDelete.push(applicant.fileUrl);
@@ -484,7 +499,7 @@ const deleteUserAccount = async (req, res) => {
       await Job.deleteMany({ recruiterId: userId });
     }
 
-    // Finally delete the user
+    // Finally delete the user account
     await User.findByIdAndDelete(userId);
 
     // Clean up local uploaded files on disk ONLY after DB deletion completes successfully
