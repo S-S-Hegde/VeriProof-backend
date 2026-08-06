@@ -21,12 +21,30 @@ const startExam = async (req, res) => {
       active: true,
       status: "Analysis Complete",
     });
+
+    const InvitationRegistry = require("../models/InvitationRegistry");
+    const Job = require("../models/Job");
+    const invitation = await InvitationRegistry.findOne({ email: req.user.email });
+    let jobTargetSkills = [];
+    let jobDifficulty = "intermediate";
+
+    if (invitation?.jobId) {
+      const job = await Job.findById(invitation.jobId);
+      if (job) {
+        jobTargetSkills = (job.targetSkills || []).map(s => (typeof s === "string" ? s : s.skill || "")).filter(Boolean);
+        jobDifficulty = job.difficulty || "intermediate";
+      }
+    }
+
     const claimedSkills = (analysis?.claims?.skills || []).map(
-      (skill) => skill.name,
-    );
-    const formattedClaims = claimedSkills.map((skill) => ({
+      (skill) => (typeof skill === "string" ? skill : skill.name || skill.skill || "")
+    ).filter(Boolean);
+
+    const combinedSkills = [...new Set([...jobTargetSkills, ...claimedSkills])];
+
+    const formattedClaims = (combinedSkills.length > 0 ? combinedSkills : ["Software Engineering"]).map((skill) => ({
       skill,
-      context: "Practice Assessment",
+      context: invitation ? "Job Alignment Assessment" : "Practice Assessment",
     }));
 
     // 1. Generate Assessment via Python AI Engine
@@ -35,34 +53,28 @@ const startExam = async (req, res) => {
       const pythonRes = await axios.post(
         `${PYTHON_API_BASE}/generate-assessment`,
         {
-          claims:
-            formattedClaims.length > 0
-              ? formattedClaims
-              : [{ skill: "Software Engineering", context: "General" }],
-          difficulty: "intermediate",
+          claims: formattedClaims,
+          difficulty: jobDifficulty,
         },
       );
       generatedMcqs = pythonRes.data.result?.mcq_questions || [];
     } catch (err) {
       console.warn(
-        "[Python Proxy] Start Exam Error (using 30-question catalog fallback):",
+        "[Python Proxy] Start Exam Error (using catalog fallback):",
         err.message,
       );
     }
 
-    // Fallback: If Python AI engine is offline or returns empty, use 30-question catalog
+    // Fallback: If Python AI engine is offline or returns empty/stub, use question catalog
     if (!generatedMcqs || generatedMcqs.length === 0) {
-      generatedMcqs = get30QuestionCatalog(claimedSkills);
+      generatedMcqs = get30QuestionCatalog(combinedSkills.length > 0 ? combinedSkills : claimedSkills);
     }
 
     // 2. Save to the Exam collection to grade against later
     const exam = await Exam.create({
       candidateId: req.user._id,
-      topic: "Dynamic Practice Exam",
-      skills:
-        claimedSkills.length > 0
-          ? claimedSkills
-          : ["Python", "SQL", "React", "Node.js", "MongoDB", "Git"],
+      topic: invitation ? "Job Alignment Assessment" : "Dynamic Practice Exam",
+      skills: combinedSkills.length > 0 ? combinedSkills : ["Python", "SQL", "React", "Node.js", "MongoDB", "Git"],
       passingScore: 70,
       questions: generatedMcqs.map((q) => {
         const correctIdx = q.options.indexOf(
@@ -72,7 +84,7 @@ const startExam = async (req, res) => {
           questionText: q.question_text || q.question,
           options: q.options,
           correctOption: correctIdx !== -1 ? correctIdx : 0,
-          skill: q.skill || q.category || "Technical",
+          skill: q.skill || q.category || combinedSkills[0] || "Technical",
         };
       }),
     });
@@ -80,8 +92,8 @@ const startExam = async (req, res) => {
     // 3. Format for the frontend UI
     const frontendQuestions = exam.questions.map((q, idx) => ({
       _id: q._id,
-      category: q.skill || claimedSkills[0] || "General",
-      difficulty: "Medium",
+      category: q.skill || combinedSkills[0] || "General",
+      difficulty: jobDifficulty,
       text: q.questionText,
       options: q.options,
     }));
@@ -483,24 +495,40 @@ const submitExam = async (req, res) => {
     }
 
     // Upsert VerificationResult for EVERY candidate type (Self-Registered, Invited, Recruiter)
+    const InvitationRegistry = require("../models/InvitationRegistry");
+    const RecruiterApplicant = require("../models/RecruiterApplicant");
+    const matchedInvitation = await InvitationRegistry.findOne({ email: req.user.email });
+    const jobId = matchedInvitation?.jobId || null;
+
     let vResult = await VerificationResult.findOne({
       candidateId: req.user._id,
+      ...(jobId ? { jobId } : {}),
     }).sort({ createdAt: -1 });
 
     if (vResult) {
       vResult.examScore = score;
       vResult.status = isPassed ? "Verified" : "Failed";
       if (!vResult.alignmentScore) vResult.alignmentScore = score;
+      if (jobId && !vResult.jobId) vResult.jobId = jobId;
       await vResult.save();
     } else {
       await VerificationResult.create({
         candidateId: req.user._id,
+        jobId,
         examScore: score,
         alignmentScore: score,
         status: isPassed ? "Verified" : "Failed",
         matchedSkills: exam?.skills || ["Software Engineering"],
         missingSkills: [],
       });
+    }
+
+    // Sync RecruiterApplicant status for recruiter workspace
+    if (matchedInvitation) {
+      await RecruiterApplicant.updateOne(
+        { recruiterId: matchedInvitation.recruiterId, jobId: matchedInvitation.jobId, extractedEmail: req.user.email },
+        { status: "Completed", candidateUser: req.user._id }
+      );
     }
 
     res.json({
@@ -519,7 +547,90 @@ const submitExam = async (req, res) => {
   }
 };
 
+// @desc    Get complete examination attempt history for candidate
+// @route   GET /api/exams/history
+// @access  Private
+const getExamHistory = async (req, res) => {
+  try {
+    const exams = await Exam.find({ candidateId: req.user._id }).sort({ createdAt: 1 });
+
+    let previousScore = 0;
+    const history = exams.map((exam, index) => {
+      const score = exam.score || 0;
+      const totalQuestions = exam.questions?.length || 0;
+      const correctAnswers = Math.round((score / 100) * totalQuestions);
+      const isPassed = score >= (exam.passingScore || 70);
+
+      // Group question accuracy by skill
+      const skillStats = {};
+      (exam.questions || []).forEach((q) => {
+        const skill = q.skill || "Technical";
+        if (!skillStats[skill]) skillStats[skill] = { total: 0, correct: 0 };
+        skillStats[skill].total += 1;
+
+        const candidateAnswer = (exam.answers || []).find((a) => String(a.questionId) === String(q._id));
+        if (candidateAnswer && candidateAnswer.answerIndex === q.correctOption) {
+          skillStats[skill].correct += 1;
+        }
+      });
+
+      const weakSkills = [];
+      const strongSkills = [];
+
+      Object.entries(skillStats).forEach(([skill, stat]) => {
+        const accuracy = stat.total > 0 ? (stat.correct / stat.total) * 100 : 0;
+        if (accuracy < 60) weakSkills.push(skill);
+        if (accuracy >= 80) strongSkills.push(skill);
+      });
+
+      const improvementDelta = index === 0 ? 0 : score - previousScore;
+      previousScore = score;
+
+      return {
+        _id: exam._id,
+        attemptNumber: index + 1,
+        date: exam.createdAt,
+        topic: exam.topic || "Technical Assessment",
+        score,
+        status: isPassed ? "Passed" : "Needs Improvement",
+        passingScore: exam.passingScore || 70,
+        totalQuestions,
+        correctAnswers,
+        weakSkills: weakSkills.length > 0 ? weakSkills : ["Edge Cases"],
+        strongSkills: strongSkills.length > 0 ? strongSkills : exam.skills || ["Core Engineering"],
+        improvementTrend: improvementDelta,
+        codeQuality: exam.codeQuality || score,
+      };
+    });
+
+    // Aggregated statistics
+    const totalAttempts = history.length;
+    const scores = history.map((h) => h.score);
+    const bestScore = totalAttempts > 0 ? Math.max(...scores) : 0;
+    const latestScore = totalAttempts > 0 ? scores[scores.length - 1] : 0;
+    const avgScore = totalAttempts > 0 ? Math.round(scores.reduce((a, b) => a + b, 0) / totalAttempts) : 0;
+    const passCount = history.filter((h) => h.status === "Passed").length;
+    const passRate = totalAttempts > 0 ? Math.round((passCount / totalAttempts) * 100) : 0;
+    const overallImprovement = totalAttempts > 1 ? scores[scores.length - 1] - scores[0] : 0;
+
+    res.json({
+      history,
+      analytics: {
+        totalAttempts,
+        latestScore,
+        bestScore,
+        avgScore,
+        passRate,
+        overallImprovement,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
 module.exports = {
   startExam,
   submitExam,
+  getExamHistory,
 };

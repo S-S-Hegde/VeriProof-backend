@@ -436,14 +436,24 @@ const uploadApplicantResumes = asyncHandler(async (req, res) => {
       fileUrl,
     });
 
+    const candidateEmailParam = (req.body.candidateEmail || req.body.email || "").toLowerCase().trim();
+    if (candidateEmailParam) {
+      await InvitationRegistry.findOneAndUpdate(
+        { email: candidateEmailParam },
+        { email: candidateEmailParam, recruiterId: req.user._id, jobId: job._id, status: "pending" },
+        { upsert: true, new: true }
+      );
+    }
+
     try {
       const parsed = await analyzeResumeBuffer(
         file.buffer,
         { mimeType: file.mimetype, fileName: file.originalname, strictMode },
       );
 
-      // ── Name + email: prefer Gemini extraction, fall back to regex ──
+      // ── Name + email: prefer Gemini extraction, fall back to request parameter / regex ──
       const extractedEmail =
+        candidateEmailParam ||
         parsed.analysis?.email ||
         extractEmailFromText(parsed.normalizedText);
       const extractedName =

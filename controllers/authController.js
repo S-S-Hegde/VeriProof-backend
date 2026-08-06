@@ -2,6 +2,9 @@ const User = require("../models/User");
 const Project = require("../models/Project");
 const VerificationResult = require("../models/VerificationResult");
 const InvitationRegistry = require("../models/InvitationRegistry");
+const ResumeAnalysis = require("../models/ResumeAnalysis");
+const RecruiterApplicant = require("../models/RecruiterApplicant");
+const { rebuildSkillProgression } = require("../services/skillProgressionService");
 const generateToken = require("../utils/generateToken");
 const crypto = require("crypto");
 const sendEmail = require("../utils/sendEmail");
@@ -24,20 +27,37 @@ const registerUser = async (req, res) => {
     let assignedOrigin = "self_registered";
     let assignedPipeline = "self_candidate_pipeline";
     let assignedStage = "resume_upload";
+    let matchedInvitation = null;
 
     if (role === "recruiter") {
       assignedPipeline = "recruiter_pipeline";
       assignedStage = "registration";
     } else {
-      const invitation = await InvitationRegistry.findOne({ email: normalizedEmail });
-      if (invitation) {
+      matchedInvitation = await InvitationRegistry.findOne({ email: new RegExp(`^${normalizedEmail.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") });
+      if (!matchedInvitation) {
+        const applicantMatch = await RecruiterApplicant.findOne({
+          $or: [
+            { extractedEmail: new RegExp(`^${normalizedEmail.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") },
+            { extractedEmail: normalizedEmail }
+          ]
+        });
+        if (applicantMatch) {
+          matchedInvitation = await InvitationRegistry.findOneAndUpdate(
+            { email: normalizedEmail },
+            { email: normalizedEmail, recruiterId: applicantMatch.recruiterId, jobId: applicantMatch.jobId, status: "pending" },
+            { upsert: true, new: true }
+          );
+        }
+      }
+
+      if (matchedInvitation) {
         assignedOrigin = "recruiter_invited";
         assignedPipeline = "invited_candidate_pipeline";
         assignedStage = "repository_analysis";
         
         // Mark invitation as registered
-        invitation.status = "registered";
-        await invitation.save();
+        matchedInvitation.status = "registered";
+        await matchedInvitation.save();
       }
     }
 
@@ -53,6 +73,60 @@ const registerUser = async (req, res) => {
     });
 
     if (user) {
+      // ── EVIDENCE HYDRATION FOR RECRUITER INVITED CANDIDATES ──
+      if (matchedInvitation) {
+        try {
+          const applicant = await RecruiterApplicant.findOne({
+            recruiterId: matchedInvitation.recruiterId,
+            jobId: matchedInvitation.jobId,
+            extractedEmail: normalizedEmail,
+          });
+
+          if (applicant) {
+            // 1. Hydrate ResumeAnalysis (Reuse pre-parsed recruiter evidence)
+            await ResumeAnalysis.findOneAndUpdate(
+              { candidateId: user._id, active: true },
+              {
+                candidateId: user._id,
+                resumeUrl: applicant.fileUrl,
+                originalFileName: applicant.originalFileName,
+                mimeType: applicant.mimeType,
+                claims: applicant.claims || {},
+                analysis: applicant.analysis || {},
+                status: "Analysis Complete",
+                progress: 100,
+                active: true,
+                processedAt: applicant.processedAt || new Date(),
+              },
+              { upsert: true, new: true }
+            );
+
+            // 2. Hydrate Canonical VerificationResult
+            await VerificationResult.findOneAndUpdate(
+              { candidateId: user._id, jobId: matchedInvitation.jobId },
+              {
+                candidateId: user._id,
+                jobId: matchedInvitation.jobId,
+                alignmentScore: applicant.alignmentScore || 0,
+                matchedSkills: applicant.matchedSkills || [],
+                missingSkills: applicant.missingSkills || [],
+                status: "Pending Exam",
+              },
+              { upsert: true, new: true }
+            );
+
+            // 3. Link Candidate User to RecruiterApplicant record
+            applicant.candidateUser = user._id;
+            await applicant.save();
+
+            // 4. Rebuild Candidate Skill Progression immediately
+            await rebuildSkillProgression(user._id);
+          }
+        } catch (hydrationErr) {
+          console.warn("[Auth] Evidence hydration warning for invited candidate:", hydrationErr.message);
+        }
+      }
+
       res.status(201).json({
         _id: user._id,
         name: user.name,
