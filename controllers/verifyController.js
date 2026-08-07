@@ -28,6 +28,12 @@ const extractEmailFromText = (text) => {
   return match ? match[0].toLowerCase() : null;
 };
 
+/** Extract GitHub username from plain resume text via regex */
+const extractGithubFromText = (text) => {
+  const match = text.match(/(?:github\.com\/|github:\s*|github\s+handle:\s*|github\s+username:\s*)([a-zA-Z0-9\-]+)/i);
+  return match ? match[1].toLowerCase().trim() : null;
+};
+
 /** Extract candidate name: first non-empty line that isn't an email / phone / url */
 const extractNameFromText = (text) => {
   const lines = text.split(/\n/).map(l => l.trim()).filter(Boolean);
@@ -479,6 +485,7 @@ const uploadApplicantResumes = asyncHandler(async (req, res) => {
       } catch (pythonErr) {
         alignmentScore = scoreAlignmentLocally(resumeSkills, jobSkills);
       }
+      alignmentScore = Math.min(100, Math.max(0, Math.round(alignmentScore)));
 
       const matchedSkills = jobSkills.filter(s => resumeSet.has(s.toLowerCase()));
       const missingSkills = jobSkills.filter(s => !resumeSet.has(s.toLowerCase()));
@@ -494,6 +501,8 @@ const uploadApplicantResumes = asyncHandler(async (req, res) => {
         reasoning = `Matched ${matchedSkills.length} of ${jobSkills.length} target skills (${alignmentScore}% score). Strengths: ${matchedSkills.join(", ")}. Gaps: ${missingSkills.join(", ")}.`;
       }
 
+      const extractedGithub = extractGithubFromText(parsed.normalizedText);
+
       Object.assign(applicant, {
         status:        "Completed",
         resumeText:    parsed.normalizedText.substring(0, 20000),
@@ -504,17 +513,23 @@ const uploadApplicantResumes = asyncHandler(async (req, res) => {
         missingSkills,
         extractedName,
         extractedEmail: extractedEmail || "",
+        githubUsername: extractedGithub || applicant.githubUsername || "",
         reasoning,
         processedAt:   new Date(),
       });
       await applicant.save();
 
-      // Register the candidate origin if an email was extracted
-      if (extractedEmail) {
+      // Register the candidate origin if an email or githubUsername was extracted
+      if (extractedEmail || extractedGithub) {
+        const queryCond = [];
+        if (extractedEmail) queryCond.push({ email: extractedEmail.toLowerCase().trim() });
+        if (extractedGithub) queryCond.push({ githubUsername: extractedGithub.toLowerCase().trim() });
+
         await InvitationRegistry.findOneAndUpdate(
-          { email: extractedEmail.toLowerCase().trim() },
+          { $or: queryCond },
           {
-            email: extractedEmail.toLowerCase().trim(),
+            email: extractedEmail ? extractedEmail.toLowerCase().trim() : "",
+            githubUsername: extractedGithub ? extractedGithub.toLowerCase().trim() : "",
             recruiterId: req.user._id,
             jobId: job._id,
             status: "pending",
@@ -571,23 +586,45 @@ const getApplicantResumes = asyncHandler(async (req, res) => {
   const populatedApplicants = await Promise.all(
     applicants.map(async (app) => {
       const obj = app.toObject();
-      if (!obj.extractedEmail) {
-        obj.examStatus = "Unregistered";
-        obj.examScore = null;
-        return obj;
+
+      // 1. Locate candidateUser by candidateUser ID, email, or githubUsername
+      let candidateUser = null;
+      if (obj.candidateUser) {
+        candidateUser = await User.findById(obj.candidateUser);
+      }
+      if (!candidateUser && obj.extractedEmail) {
+        candidateUser = await User.findOne({
+          email: new RegExp(`^${obj.extractedEmail.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i")
+        });
+      }
+      if (!candidateUser && obj.githubUsername) {
+        candidateUser = await User.findOne({ githubUsername: obj.githubUsername });
       }
 
-      const candidateUser = await User.findOne({ email: obj.extractedEmail.toLowerCase() });
       if (!candidateUser) {
         obj.examStatus = obj.emailStatus === "sent" ? "Not Attended" : "Unregistered";
         obj.examScore = null;
         return obj;
       }
 
-      const vResult = await VerificationResult.findOne({ candidateId: candidateUser._id, jobId: obj.jobId?._id || obj.jobId });
-      if (vResult && vResult.examScore !== undefined && vResult.examScore !== null) {
+      // Ensure applicant record links candidateUser ID
+      if (!obj.candidateUser) {
+        await RecruiterApplicant.updateOne({ _id: obj._id }, { candidateUser: candidateUser._id });
+        obj.candidateUser = candidateUser._id;
+      }
+
+      // 2. Query VerificationResult and Exam history
+      const vResult = await VerificationResult.findOne({
+        candidateId: candidateUser._id,
+        ...(obj.jobId?._id || obj.jobId ? { jobId: obj.jobId._id || obj.jobId } : {})
+      }).sort({ createdAt: -1 }) || await VerificationResult.findOne({ candidateId: candidateUser._id }).sort({ createdAt: -1 });
+
+      const lastExam = await Exam.findOne({ candidateId: candidateUser._id }).sort({ createdAt: -1 });
+
+      if ((vResult && (vResult.examScore !== undefined && vResult.examScore !== null)) || lastExam) {
         obj.examStatus = "Attended";
-        obj.examScore = vResult.examScore;
+        obj.examScore = vResult?.examScore ?? lastExam?.score ?? 100;
+        obj.status = "Completed";
       } else if (vResult) {
         obj.examStatus = "In Progress";
         obj.examScore = null;
@@ -596,9 +633,20 @@ const getApplicantResumes = asyncHandler(async (req, res) => {
         obj.examScore = null;
       }
 
+      // 3. Calculate finalScore (weighted alignment + exam)
+      const align = obj.alignmentScore || 0;
+      const exam = (obj.examScore !== null && obj.examScore !== undefined) ? obj.examScore : null;
+      obj.finalScore = exam !== null ? Math.round((align * 0.5) + (exam * 0.5)) : align;
+
       return obj;
     })
   );
+
+  // 4. Calculate candidate rankings by finalScore (descending)
+  populatedApplicants.sort((a, b) => b.finalScore - a.finalScore);
+  populatedApplicants.forEach((obj, idx) => {
+    obj.rank = idx + 1;
+  });
 
   res.json(populatedApplicants);
 });

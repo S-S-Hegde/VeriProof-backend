@@ -23,20 +23,47 @@ const startExam = async (req, res) => {
     });
 
     const InvitationRegistry = require("../models/InvitationRegistry");
+    const RecruiterApplicant = require("../models/RecruiterApplicant");
     const Job = require("../models/Job");
-    const invitation = await InvitationRegistry.findOne({ email: req.user.email });
+    const invitation = await InvitationRegistry.findOne({
+      $or: [
+        { email: req.user.email },
+        { email: new RegExp(`^${req.user.email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") },
+        ...(req.user.githubUsername ? [{ githubUsername: req.user.githubUsername }] : [])
+      ]
+    });
+
+    let applicant = null;
+    if (invitation) {
+      applicant = await RecruiterApplicant.findOne({
+        recruiterId: invitation.recruiterId,
+        jobId: invitation.jobId,
+        $or: [
+          { candidateUser: req.user._id },
+          { extractedEmail: req.user.email },
+          { extractedEmail: new RegExp(`^${req.user.email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") },
+          ...(req.user.githubUsername ? [{ githubUsername: req.user.githubUsername }] : [])
+        ]
+      });
+    }
+
     let jobTargetSkills = [];
     let jobDifficulty = "intermediate";
+    let jobTitle = "Senior Full Stack Software Engineer";
+    let jobDescription = "Design, develop, and test scalable web applications and APIs.";
 
     if (invitation?.jobId) {
       const job = await Job.findById(invitation.jobId);
       if (job) {
         jobTargetSkills = (job.targetSkills || []).map(s => (typeof s === "string" ? s : s.skill || "")).filter(Boolean);
         jobDifficulty = job.difficulty || "intermediate";
+        if (job.title) jobTitle = job.title;
+        if (job.description) jobDescription = job.description;
       }
     }
 
-    const claimedSkills = (analysis?.claims?.skills || []).map(
+    const resumeText = applicant?.resumeText || analysis?.analysis?.summary || analysis?.claims?.summary || "";
+    const claimedSkills = (analysis?.claims?.skills || applicant?.matchedSkills || []).map(
       (skill) => (typeof skill === "string" ? skill : skill.name || skill.skill || "")
     ).filter(Boolean);
 
@@ -44,10 +71,10 @@ const startExam = async (req, res) => {
 
     const formattedClaims = (combinedSkills.length > 0 ? combinedSkills : ["Software Engineering"]).map((skill) => ({
       skill,
-      context: invitation ? "Job Alignment Assessment" : "Practice Assessment",
+      context: invitation ? `Job Alignment Assessment (${jobTitle})` : "Practice Assessment",
     }));
 
-    // 1. Generate Assessment via Python AI Engine
+    // 1. Generate Assessment via Python AI Engine with full Resume & Job Intelligence
     let generatedMcqs = [];
     try {
       const pythonRes = await axios.post(
@@ -55,7 +82,11 @@ const startExam = async (req, res) => {
         {
           claims: formattedClaims,
           difficulty: jobDifficulty,
+          resume_description: resumeText,
+          job_description: jobDescription,
+          job_title: jobTitle,
         },
+        { timeout: 8000 }
       );
       generatedMcqs = pythonRes.data.result?.mcq_questions || [];
     } catch (err) {
@@ -66,7 +97,7 @@ const startExam = async (req, res) => {
     }
 
     // Fallback: If Python AI engine is offline or returns empty/stub, use question catalog
-    if (!generatedMcqs || generatedMcqs.length === 0) {
+    if (!generatedMcqs || !Array.isArray(generatedMcqs) || generatedMcqs.length === 0) {
       generatedMcqs = get30QuestionCatalog(combinedSkills.length > 0 ? combinedSkills : claimedSkills);
     }
 
@@ -77,12 +108,12 @@ const startExam = async (req, res) => {
       skills: combinedSkills.length > 0 ? combinedSkills : ["Python", "SQL", "React", "Node.js", "MongoDB", "Git"],
       passingScore: 70,
       questions: generatedMcqs.map((q) => {
-        const correctIdx = q.options.indexOf(
-          q.correct_answer || q.correctAnswer,
-        );
+        const options = Array.isArray(q.options) ? q.options : ["Option A", "Option B", "Option C", "Option D"];
+        const targetAns = q.correct_answer || q.correctAnswer || options[0];
+        const correctIdx = options.indexOf(targetAns);
         return {
-          questionText: q.question_text || q.question,
-          options: q.options,
+          questionText: q.question_text || q.question || "Technical Question",
+          options,
           correctOption: correctIdx !== -1 ? correctIdx : 0,
           skill: q.skill || q.category || combinedSkills[0] || "Technical",
         };
@@ -90,7 +121,7 @@ const startExam = async (req, res) => {
     });
 
     // 3. Format for the frontend UI
-    const frontendQuestions = exam.questions.map((q, idx) => ({
+    const frontendQuestions = exam.questions.map((q) => ({
       _id: q._id,
       category: q.skill || combinedSkills[0] || "General",
       difficulty: jobDifficulty,
@@ -100,7 +131,7 @@ const startExam = async (req, res) => {
 
     res.json(frontendQuestions);
   } catch (error) {
-    console.error("Start Exam Error:", error.message);
+    console.error("Start Exam Error:", error.stack || error.message);
     res.status(500).json({ message: "Failed to generate exam questions." });
   }
 };
@@ -494,42 +525,81 @@ const submitExam = async (req, res) => {
       await exam.save();
     }
 
-    // Upsert VerificationResult for EVERY candidate type (Self-Registered, Invited, Recruiter)
+    // Upsert VerificationResult & ResumeAnalysis for EVERY candidate type (Self-Registered, Invited, Recruiter)
     const InvitationRegistry = require("../models/InvitationRegistry");
     const RecruiterApplicant = require("../models/RecruiterApplicant");
-    const matchedInvitation = await InvitationRegistry.findOne({ email: req.user.email });
+    const matchedInvitation = await InvitationRegistry.findOne({
+      $or: [
+        { email: req.user.email },
+        { email: new RegExp(`^${req.user.email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") },
+        ...(req.user.githubUsername ? [{ githubUsername: req.user.githubUsername }] : [])
+      ]
+    });
     const jobId = matchedInvitation?.jobId || null;
 
     let vResult = await VerificationResult.findOne({
       candidateId: req.user._id,
       ...(jobId ? { jobId } : {}),
-    }).sort({ createdAt: -1 });
+    }).sort({ createdAt: -1 }) || await VerificationResult.findOne({ candidateId: req.user._id }).sort({ createdAt: -1 });
+
+    const alignScore = vResult?.alignmentScore || 85;
+    const compositeTrustScore = Math.min(100, Math.max(0, Math.round((alignScore * 0.4) + (score * 0.4) + 20)));
 
     if (vResult) {
       vResult.examScore = score;
+      vResult.trustScore = compositeTrustScore;
       vResult.status = isPassed ? "Verified" : "Failed";
-      if (!vResult.alignmentScore) vResult.alignmentScore = score;
+      if (!vResult.alignmentScore) vResult.alignmentScore = alignScore;
       if (jobId && !vResult.jobId) vResult.jobId = jobId;
       await vResult.save();
     } else {
-      await VerificationResult.create({
+      vResult = await VerificationResult.create({
         candidateId: req.user._id,
         jobId,
         examScore: score,
-        alignmentScore: score,
+        alignmentScore: alignScore,
+        trustScore: compositeTrustScore,
         status: isPassed ? "Verified" : "Failed",
         matchedSkills: exam?.skills || ["Software Engineering"],
         missingSkills: [],
       });
     }
 
-    // Sync RecruiterApplicant status for recruiter workspace
-    if (matchedInvitation) {
-      await RecruiterApplicant.updateOne(
-        { recruiterId: matchedInvitation.recruiterId, jobId: matchedInvitation.jobId, extractedEmail: req.user.email },
-        { status: "Completed", candidateUser: req.user._id }
-      );
+    // Update ResumeAnalysis with verification & trust score
+    await ResumeAnalysis.findOneAndUpdate(
+      { candidateId: req.user._id },
+      { status: "Analysis Complete", verificationScore: score, trustScore: compositeTrustScore },
+      { upsert: true, new: true }
+    );
+
+    // Update User model trustScore & verificationScore
+    if (user) {
+      if (!user.skillProgress) user.skillProgress = {};
+      user.skillProgress.trustScore = compositeTrustScore;
+      user.skillProgress.verificationScore = score;
+      user.skillProgress.completedAssessments = (user.skillProgress.completedAssessments || 0) + 1;
+      user.pipelineStage = "verification_complete";
+      await user.save();
     }
+
+    // Sync RecruiterApplicant status, exam score, and trust score for recruiter workspace
+    await RecruiterApplicant.updateMany(
+      {
+        $or: [
+          { candidateUser: req.user._id },
+          { extractedEmail: req.user.email },
+          { extractedEmail: new RegExp(`^${req.user.email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") },
+          ...(req.user.githubUsername ? [{ githubUsername: req.user.githubUsername }] : [])
+        ]
+      },
+      {
+        status: "Completed",
+        candidateUser: req.user._id,
+        examScore: score,
+        examStatus: "Attended",
+        reasoning: `Assessment completed. Score: ${score}%. Verification Verdict: ${isPassed ? 'VERIFIED' : 'NEEDS IMPROVEMENT'}. Composite Trust Score: ${compositeTrustScore}%.`
+      }
+    );
 
     res.json({
       totalQuestions,

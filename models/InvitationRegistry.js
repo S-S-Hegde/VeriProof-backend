@@ -9,6 +9,17 @@ const invitationRegistrySchema = new mongoose.Schema(
       lowercase: true,
       trim: true,
     },
+    inviteCode: {
+      type: String,
+      index: true,
+      trim: true,
+    },
+    githubUsername: {
+      type: String,
+      index: true,
+      trim: true,
+      lowercase: true,
+    },
     recruiterId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",

@@ -16,9 +16,10 @@ const recruiterApplicantSchema = new mongoose.Schema({
   alignmentScore:    { type: Number, min: 0, max: 100, default: 0 },
   error:             { type: String, default: "" },
   processedAt:       Date,
-  // Candidate outreach fields
+  candidateUser:     { type: mongoose.Schema.Types.ObjectId, ref: "User", index: true },
   extractedName:     { type: String, default: "" },
   extractedEmail:    { type: String, default: "" },
+  githubUsername:    { type: String, default: "", index: true },
   emailSentTo:       { type: String, default: "" },
   emailStatus:       { type: String, enum: ["sent", "failed", "not_found"], default: "not_found" },
   reasoning:         { type: String, default: "" },
