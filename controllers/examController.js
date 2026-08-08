@@ -23,6 +23,41 @@ const startExam = async (req, res) => {
 
     const isInvitedCandidate = req.user.origin === "recruiter_invited";
 
+    // ── STRICT SINGLE-ATTEMPT GUARD FOR CANDIDATES ─────────────────────
+    const existingExam = await Exam.findOne({
+      candidateId: req.user._id,
+      status: { $in: ["Completed", "Terminated", "Attended"] }
+    });
+
+    const existingResult = await VerificationResult.findOne({
+      candidateId: req.user._id,
+      status: { $in: ["Verified", "Failed", "Completed"] }
+    });
+
+    const existingApplicant = await RecruiterApplicant.findOne({
+      $or: [
+        { candidateUser: req.user._id },
+        { extractedEmail: req.user.email },
+        { extractedEmail: new RegExp(`^${req.user.email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") }
+      ],
+      $or: [
+        { status: "Completed" },
+        { examStatus: { $in: ["Attended", "Completed", "Terminated", "Terminated - Proctoring Violation"] } },
+        { examScore: { $exists: true, $ne: null } }
+      ]
+    });
+
+    if (existingExam || existingResult || (isInvitedCandidate && existingApplicant && existingApplicant.examStatus !== "Pending")) {
+      const finalScore = existingExam?.score ?? existingApplicant?.examScore ?? existingResult?.examScore ?? 0;
+      return res.status(403).json({
+        completed: true,
+        message: "SINGLE_ATTEMPT_LIMIT_REACHED",
+        error: "You have already completed your technical assessment. Retakes are strictly prohibited.",
+        score: finalScore,
+        status: existingResult?.status || existingApplicant?.status || "Completed"
+      });
+    }
+
     // ── Resolve invitation + applicant record ──────────────────────────
     const invitation = await InvitationRegistry.findOne({
       $or: [
@@ -449,23 +484,25 @@ const submitExam = async (req, res) => {
     const isInvitedCandidate = req.user.origin === "recruiter_invited";
 
     if (!isInvitedCandidate) {
-      // Ensure basic profile readiness for self-registered candidates only
-      const [hasRepoAnalysis, hasResumeAnalysis] = await Promise.all([
-        Project.exists({
-          user: req.user._id,
-          "githubStats.commitsCount": { $exists: true, $gt: 0 },
-        }),
-        ResumeAnalysis.exists({
-          candidateId: req.user._id,
-          active: true,
-          status: "Analysis Complete",
-        }),
-      ]);
-      if (!hasRepoAnalysis && !hasResumeAnalysis) {
-        return res.status(403).json({
-          message:
-            "Complete resume or repository analysis before the technical assessment.",
-        });
+      const hasActiveExam = await Exam.exists({ candidateId: req.user._id });
+      if (!hasActiveExam) {
+        const [hasRepoAnalysis, hasResumeAnalysis] = await Promise.all([
+          Project.exists({
+            user: req.user._id,
+            "githubStats.commitsCount": { $exists: true, $gt: 0 },
+          }),
+          ResumeAnalysis.exists({
+            candidateId: req.user._id,
+            active: true,
+            status: "Analysis Complete",
+          }),
+        ]);
+        if (!hasRepoAnalysis && !hasResumeAnalysis) {
+          return res.status(403).json({
+            message:
+              "Complete resume or repository analysis before the technical assessment.",
+          });
+        }
       }
     }
 
