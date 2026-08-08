@@ -164,8 +164,8 @@ async function runPhase40BrowserScenariosAudit() {
     await axios.post(`${NODE_API}/users/login`, { email: delEmail, password });
     throw new Error("FAIL: Deleted candidate was still able to log in!");
   } catch (err) {
-    if (err.response && err.response.status === 401) {
-      console.log(`✓ Login Attempt Post-Deletion Rejected cleanly with HTTP 401: "${err.response.data.message}"`);
+    if (err.response && (err.response.status === 401 || err.response.status === 404)) {
+      console.log(`✓ Login Attempt Post-Deletion Rejected cleanly with HTTP ${err.response.status}: "${err.response.data.message}"`);
     } else {
       throw err;
     }

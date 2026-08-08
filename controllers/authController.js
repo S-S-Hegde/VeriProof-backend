@@ -205,8 +205,17 @@ const authUser = async (req, res) => {
     const normalizedEmail = email.trim().toLowerCase();
     const user = await User.findOne({ email: normalizedEmail });
 
-    if (!user || !(await user.matchPassword(password))) {
-      return res.status(401).json({ message: "Invalid email or password." });
+    if (!user) {
+      return res.status(404).json({
+        message: "No account found with this email address. Redirecting to registration...",
+        userExists: false,
+        redirectTo: "/register",
+        email: normalizedEmail
+      });
+    }
+
+    if (!(await user.matchPassword(password))) {
+      return res.status(401).json({ message: "Incorrect password. Please verify your credentials or reset your password.", userExists: true });
     }
 
     // Role-mismatch guard: user exists but registered under a different role
@@ -218,6 +227,46 @@ const authUser = async (req, res) => {
       });
     }
 
+    // ── OTP Two-Factor Auth for recruiter_invited candidates on FIRST login ───
+    const needsOtp = user.origin === "recruiter_invited" && !user.otpVerified;
+    if (needsOtp) {
+      const otp = user.getOtpToken();
+      await user.save({ validateBeforeSave: false });
+
+      const otpHtml = `
+<!DOCTYPE html><html><head><meta charset="UTF-8"></head>
+<body style="font-family:sans-serif;background:#0a0e1a;color:#e8ecf4;padding:40px;">
+  <div style="max-width:520px;margin:0 auto;">
+    <h1 style="font-size:28px;font-weight:900;font-style:italic;letter-spacing:-1px;margin-bottom:4px;">
+      VERI<span style="color:#6b8aff">PROOF</span><span style="color:#6b8aff">.</span>
+    </h1>
+    <p style="font-family:monospace;font-size:10px;letter-spacing:3px;text-transform:uppercase;color:#5a6478;margin-top:0;">Identity Verification</p>
+    <hr style="border-color:#1a2040;margin:24px 0;">
+    <p>Hi <strong>${user.name || "Candidate"}</strong>,</p>
+    <p>Use the one-time code below to complete your sign-in. This code expires in <strong>10 minutes</strong>.</p>
+    <div style="background:#0d1226;border:1px solid #6b8aff;border-radius:12px;padding:32px;margin:24px 0;text-align:center;">
+      <div style="font-size:42px;font-weight:900;letter-spacing:12px;color:#6b8aff;font-family:monospace;">${otp}</div>
+      <div style="font-size:11px;color:#5a6478;margin-top:8px;font-family:monospace;">One-Time Access Code</div>
+    </div>
+    <p style="color:#5a6478;font-size:12px;">If you did not attempt to sign in, please ignore this email.</p>
+    <hr style="border-color:#1a2040;margin:24px 0;">
+    <p style="color:#5a6478;font-size:11px;font-family:monospace;">VeriProof &mdash; Screen Everyone &middot; Catch the Fraud &middot; Prove the Honest</p>
+  </div>
+</body></html>`;
+
+      try {
+        await sendEmail({
+          email: user.email,
+          subject: "[VeriProof] Your One-Time Sign-In Code",
+          html: otpHtml,
+        });
+      } catch (mailErr) {
+        console.warn("[OTP] Email delivery failed:", mailErr.message);
+      }
+
+      return res.json({ requiresOTP: true, email: normalizedEmail });
+    }
+
     res.json({
       _id: user._id,
       name: user.name,
@@ -225,11 +274,55 @@ const authUser = async (req, res) => {
       role: user.role,
       githubUsername: user.githubUsername,
       profileImage: user.profileImage,
+      mustChangePassword: user.mustChangePassword || false,
       token: generateToken(user._id),
     });
   } catch (error) {
     const isDev = process.env.NODE_ENV !== "production";
     res.status(500).json({ message: isDev ? error.message : "Login failed. Please try again." });
+  }
+};
+
+// @desc    Verify OTP and issue JWT
+// @route   POST /api/users/verify-otp
+// @access  Public
+const verifyOtp = async (req, res) => {
+  const { email, otp } = req.body;
+  try {
+    if (!email || !otp) {
+      return res.status(400).json({ message: "Email and OTP are required." });
+    }
+    const hashedOtp = crypto.createHash("sha256").update(String(otp)).digest("hex");
+    const user = await User.findOne({
+      email: email.trim().toLowerCase(),
+      otpCode: hashedOtp,
+      otpExpire: { $gt: Date.now() },
+    });
+
+    if (!user) {
+      return res.status(400).json({ message: "Invalid or expired OTP. Please request a new sign-in." });
+    }
+
+    // Mark OTP as verified — won't require OTP on subsequent logins
+    user.otpVerified = true;
+    user.mustChangePassword = true; // Force password change after first sign-in
+    user.otpCode = undefined;
+    user.otpExpire = undefined;
+    await user.save({ validateBeforeSave: false });
+
+    res.json({
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      githubUsername: user.githubUsername,
+      profileImage: user.profileImage,
+      mustChangePassword: true,
+      token: generateToken(user._id),
+    });
+  } catch (error) {
+    const isDev = process.env.NODE_ENV !== "production";
+    res.status(500).json({ message: isDev ? error.message : "OTP verification failed. Please try again." });
   }
 };
 
@@ -479,6 +572,10 @@ const deleteUserAccount = async (req, res) => {
       return res.status(400).json({ message: "Password is required to confirm account deletion." });
     }
 
+    if (!req.user || !req.user._id) {
+      return res.status(401).json({ message: "Authentication required. User session is invalid." });
+    }
+
     const userId = req.user._id;
     const user = await User.findById(userId).select("+password");
     if (!user) {
@@ -575,6 +672,7 @@ const deleteUserAccount = async (req, res) => {
 module.exports = {
   registerUser,
   authUser,
+  verifyOtp,
   getUserProfile,
   updateUserProfile,
   uploadResume,

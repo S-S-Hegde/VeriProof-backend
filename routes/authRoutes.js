@@ -4,6 +4,7 @@ const User = require("../models/User");
 const {
   registerUser,
   authUser,
+  verifyOtp,
   getUserProfile,
   updateUserProfile,
   uploadResume,
@@ -266,8 +267,42 @@ router.post(
 router.get("/profile/resume-analysis", protect, async (req, res) => {
   try {
     const ResumeAnalysis = require("../models/ResumeAnalysis");
-    const analysis = await ResumeAnalysis.findOne({ candidateId: req.user._id, active: true });
-    
+    const RecruiterApplicant = require("../models/RecruiterApplicant");
+    let analysis = await ResumeAnalysis.findOne({ candidateId: req.user._id, active: true });
+
+    // Fallback: If candidate is recruiter_invited or has a pre-analyzed RecruiterApplicant record
+    if (!analysis) {
+      const applicant = await RecruiterApplicant.findOne({
+        $or: [
+          { candidateUser: req.user._id },
+          { extractedEmail: req.user.email },
+          { extractedEmail: new RegExp(`^${req.user.email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") },
+          ...(req.user.githubUsername ? [{ githubUsername: req.user.githubUsername }] : [])
+        ]
+      });
+
+      if (applicant) {
+        analysis = await ResumeAnalysis.findOneAndUpdate(
+          { candidateId: req.user._id },
+          {
+            candidateId: req.user._id,
+            resumeUrl: applicant.fileUrl || "hydrated_resume.pdf",
+            originalFileName: applicant.originalFileName || "recruiter_intake_resume.pdf",
+            mimeType: applicant.mimeType || "application/pdf",
+            claims: applicant.claims && Object.keys(applicant.claims).length > 0
+              ? applicant.claims
+              : { skills: (applicant.matchedSkills || []).map(s => typeof s === "string" ? { name: s, level: "Advanced" } : s) },
+            analysis: applicant.analysis || { summary: applicant.reasoning || "Pre-analyzed candidate profile from recruiter intake." },
+            status: "Analysis Complete",
+            progress: 100,
+            active: true,
+            processedAt: applicant.processedAt || new Date(),
+          },
+          { upsert: true, new: true }
+        );
+      }
+    }
+
     if (!analysis) {
       return res.status(404).json({ message: "No active resume analysis found." });
     }
@@ -304,6 +339,7 @@ router.get("/profile/resume-analyses", protect, async (req, res) => {
 
 router.post("/", authLimiter, registerValidator, validate, registerUser);
 router.post("/login", authLimiter, loginValidator, validate, authUser);
+router.post("/verify-otp", authLimiter, verifyOtp);
 router.post("/forgotpassword", authLimiter, forgotPasswordValidator, validate, forgotPassword);
 router.put("/resetpassword/:resettoken", authLimiter, resetPasswordValidator, validate, resetPassword);
 router.get("/profile", protect, getUserProfile);

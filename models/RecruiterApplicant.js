@@ -24,6 +24,15 @@ const recruiterApplicantSchema = new mongoose.Schema({
   emailStatus:       { type: String, enum: ["sent", "failed", "not_found"], default: "not_found" },
   reasoning:         { type: String, default: "" },
   v2Report:          { type: mongoose.Schema.Types.Mixed, default: null },
+
+  // Post-exam daily digest fields
+  examCompletedAt:   Date,
+  examDigestPending: { type: Boolean, default: false },
+  examFailedReasons: { type: [String], default: [] },
+
+  // Recruiter shortlist ordering (drag-and-drop)
+  shortlistRank:     { type: Number, default: null },
+  shortlisted:       { type: Boolean, default: false },
 }, { timestamps: true });
 
 module.exports = mongoose.model("RecruiterApplicant", recruiterApplicantSchema);

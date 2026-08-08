@@ -164,6 +164,14 @@ const userSchema = new mongoose.Schema(
 
     resetPasswordToken: String,
     resetPasswordExpire: Date,
+
+    // OTP Two-Factor Authentication (for recruiter-invited candidates on first login)
+    otpCode:        String,
+    otpExpire:      Date,
+    otpVerified:    { type: Boolean, default: false },
+
+    // Force password change after first invited sign-in
+    mustChangePassword: { type: Boolean, default: false },
   },
   { timestamps: true },
 );
@@ -192,6 +200,14 @@ userSchema.methods.getResetPasswordToken = function () {
   this.resetPasswordExpire = Date.now() + 10 * 60 * 1000;
 
   return resetToken;
+};
+
+// Generate and hash a 6-digit OTP for two-factor auth
+userSchema.methods.getOtpToken = function () {
+  const otp = Math.floor(100000 + Math.random() * 900000).toString();
+  this.otpCode = crypto.createHash("sha256").update(otp).digest("hex");
+  this.otpExpire = Date.now() + 10 * 60 * 1000; // 10 minutes
+  return otp;
 };
 
 const User = mongoose.model("User", userSchema);

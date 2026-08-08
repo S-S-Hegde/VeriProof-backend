@@ -5,6 +5,7 @@ const Project = require("../models/Project");
 const VerificationResult = require("../models/VerificationResult");
 const ResumeAnalysis = require("../models/ResumeAnalysis");
 const crypto = require("crypto");
+const sendEmail = require("../utils/sendEmail");
 const {
   rebuildSkillProgression,
 } = require("../services/skillProgressionService");
@@ -16,15 +17,13 @@ const PYTHON_API_BASE = "http://127.0.0.1:8000/api";
 // @access  Private
 const startExam = async (req, res) => {
   try {
-    const analysis = await ResumeAnalysis.findOne({
-      candidateId: req.user._id,
-      active: true,
-      status: "Analysis Complete",
-    });
-
     const InvitationRegistry = require("../models/InvitationRegistry");
     const RecruiterApplicant = require("../models/RecruiterApplicant");
     const Job = require("../models/Job");
+
+    const isInvitedCandidate = req.user.origin === "recruiter_invited";
+
+    // ── Resolve invitation + applicant record ──────────────────────────
     const invitation = await InvitationRegistry.findOne({
       $or: [
         { email: req.user.email },
@@ -47,13 +46,26 @@ const startExam = async (req, res) => {
       });
     }
 
+    // Fallback: find any applicant linked directly to this user
+    if (!applicant && isInvitedCandidate) {
+      applicant = await RecruiterApplicant.findOne({
+        $or: [
+          { candidateUser: req.user._id },
+          { extractedEmail: req.user.email },
+          { extractedEmail: new RegExp(`^${req.user.email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") }
+        ]
+      }).sort({ createdAt: -1 });
+    }
+
+    // ── Resolve job context ────────────────────────────────────────────
     let jobTargetSkills = [];
     let jobDifficulty = "intermediate";
     let jobTitle = "Senior Full Stack Software Engineer";
     let jobDescription = "Design, develop, and test scalable web applications and APIs.";
 
-    if (invitation?.jobId) {
-      const job = await Job.findById(invitation.jobId);
+    const jobId = invitation?.jobId || applicant?.jobId || null;
+    if (jobId) {
+      const job = await Job.findById(jobId);
       if (job) {
         jobTargetSkills = (job.targetSkills || []).map(s => (typeof s === "string" ? s : s.skill || "")).filter(Boolean);
         jobDifficulty = job.difficulty || "intermediate";
@@ -62,19 +74,44 @@ const startExam = async (req, res) => {
       }
     }
 
-    const resumeText = applicant?.resumeText || analysis?.analysis?.summary || analysis?.claims?.summary || "";
-    const claimedSkills = (analysis?.claims?.skills || applicant?.matchedSkills || []).map(
-      (skill) => (typeof skill === "string" ? skill : skill.name || skill.skill || "")
+    // ── Resolve resume analysis (ResumeAnalysis or applicant record) ──
+    const analysis = await ResumeAnalysis.findOne({
+      candidateId: req.user._id,
+      active: true,
+      status: "Analysis Complete",
+    });
+
+    // Build resume text — prefer ResumeAnalysis, fall back to applicant raw text
+    const resumeText = analysis?.analysis?.summary
+      || analysis?.claims?.summary
+      || applicant?.resumeText
+      || "";
+
+    // ── Skill resolution: job skills ∪ resume/applicant skills ─────────
+    const analysisSkills = (analysis?.claims?.skills || []).map(
+      s => (typeof s === "string" ? s : s.name || s.skill || "")
     ).filter(Boolean);
 
+    const applicantSkills = (applicant?.matchedSkills || applicant?.claimedSkills || []).map(
+      s => (typeof s === "string" ? s : s.name || s.skill || "")
+    ).filter(Boolean);
+
+    const claimedSkills = analysisSkills.length > 0 ? analysisSkills : applicantSkills;
     const combinedSkills = [...new Set([...jobTargetSkills, ...claimedSkills])];
 
-    const formattedClaims = (combinedSkills.length > 0 ? combinedSkills : ["Software Engineering"]).map((skill) => ({
+    // Ensure invited candidates always have at least the job skills to generate questions from
+    const effectiveSkills = combinedSkills.length > 0
+      ? combinedSkills
+      : isInvitedCandidate
+        ? ["Software Engineering", "Full Stack Development", "API Design", "Databases"]
+        : ["Python", "SQL", "React", "Node.js", "MongoDB", "Git"];
+
+    const formattedClaims = effectiveSkills.map((skill) => ({
       skill,
-      context: invitation ? `Job Alignment Assessment (${jobTitle})` : "Practice Assessment",
+      context: (invitation || applicant) ? `Job Alignment Assessment (${jobTitle})` : "Practice Assessment",
     }));
 
-    // 1. Generate Assessment via Python AI Engine with full Resume & Job Intelligence
+    // ── Generate Assessment via Python AI Engine ────────────────────────
     let generatedMcqs = [];
     try {
       const pythonRes = await axios.post(
@@ -96,16 +133,16 @@ const startExam = async (req, res) => {
       );
     }
 
-    // Fallback: If Python AI engine is offline or returns empty/stub, use question catalog
+    // Fallback catalog if AI engine offline or empty
     if (!generatedMcqs || !Array.isArray(generatedMcqs) || generatedMcqs.length === 0) {
-      generatedMcqs = get30QuestionCatalog(combinedSkills.length > 0 ? combinedSkills : claimedSkills);
+      generatedMcqs = get30QuestionCatalog(effectiveSkills);
     }
 
-    // 2. Save to the Exam collection to grade against later
+    // ── Save exam to DB ────────────────────────────────────────────────
     const exam = await Exam.create({
       candidateId: req.user._id,
-      topic: invitation ? "Job Alignment Assessment" : "Dynamic Practice Exam",
-      skills: combinedSkills.length > 0 ? combinedSkills : ["Python", "SQL", "React", "Node.js", "MongoDB", "Git"],
+      topic: (invitation || applicant) ? "Job Alignment Assessment" : "Dynamic Practice Exam",
+      skills: effectiveSkills,
       passingScore: 70,
       questions: generatedMcqs.map((q) => {
         const options = Array.isArray(q.options) ? q.options : ["Option A", "Option B", "Option C", "Option D"];
@@ -115,15 +152,15 @@ const startExam = async (req, res) => {
           questionText: q.question_text || q.question || "Technical Question",
           options,
           correctOption: correctIdx !== -1 ? correctIdx : 0,
-          skill: q.skill || q.category || combinedSkills[0] || "Technical",
+          skill: q.skill || q.category || effectiveSkills[0] || "Technical",
         };
       }),
     });
 
-    // 3. Format for the frontend UI
+    // ── Format for frontend UI ─────────────────────────────────────────
     const frontendQuestions = exam.questions.map((q) => ({
       _id: q._id,
-      category: q.skill || combinedSkills[0] || "General",
+      category: q.skill || effectiveSkills[0] || "General",
       difficulty: jobDifficulty,
       text: q.questionText,
       options: q.options,
@@ -394,23 +431,28 @@ const get30QuestionCatalog = (skills) => [
 // @access  Private
 const submitExam = async (req, res) => {
   try {
-    // Ensure basic profile readiness
-    const [hasRepoAnalysis, hasResumeAnalysis] = await Promise.all([
-      Project.exists({
-        user: req.user._id,
-        "githubStats.commitsCount": { $exists: true, $gt: 0 },
-      }),
-      ResumeAnalysis.exists({
-        candidateId: req.user._id,
-        active: true,
-        status: "Analysis Complete",
-      }),
-    ]);
-    if (!hasRepoAnalysis && !hasResumeAnalysis) {
-      return res.status(403).json({
-        message:
-          "Complete resume or repository analysis before the technical assessment.",
-      });
+    // Invited candidates are pre-verified by the recruiter pipeline — bypass the guard
+    const isInvitedCandidate = req.user.origin === "recruiter_invited";
+
+    if (!isInvitedCandidate) {
+      // Ensure basic profile readiness for self-registered candidates only
+      const [hasRepoAnalysis, hasResumeAnalysis] = await Promise.all([
+        Project.exists({
+          user: req.user._id,
+          "githubStats.commitsCount": { $exists: true, $gt: 0 },
+        }),
+        ResumeAnalysis.exists({
+          candidateId: req.user._id,
+          active: true,
+          status: "Analysis Complete",
+        }),
+      ]);
+      if (!hasRepoAnalysis && !hasResumeAnalysis) {
+        return res.status(403).json({
+          message:
+            "Complete resume or repository analysis before the technical assessment.",
+        });
+      }
     }
 
     const { answers = [], code_snippet, behavioral_response } = req.body;
@@ -600,6 +642,113 @@ const submitExam = async (req, res) => {
         reasoning: `Assessment completed. Score: ${score}%. Verification Verdict: ${isPassed ? 'VERIFIED' : 'NEEDS IMPROVEMENT'}. Composite Trust Score: ${compositeTrustScore}%.`
       }
     );
+
+    // ── Post-Exam Emails ───────────────────────────────────────────────
+    try {
+      // Build failed question analysis list
+      const failedQuestions = [];
+      if (exam) {
+        const questionMap = new Map(
+          exam.questions.map((q) => [q._id.toString(), q])
+        );
+        answers.forEach(({ questionId, answerIndex }) => {
+          const q = questionMap.get(String(questionId));
+          if (q && q.correctOption !== answerIndex) {
+            failedQuestions.push({
+              question: q.questionText,
+              yourAnswer: q.options[answerIndex] || "Not answered",
+              correctAnswer: q.options[q.correctOption],
+              skill: q.skill || "Technical",
+            });
+          }
+        });
+      }
+
+      const failedHtml = failedQuestions.length > 0
+        ? `<table style="width:100%;border-collapse:collapse;margin-top:12px;font-size:12px;">
+            <thead><tr style="background:#1a2040;">
+              <th style="padding:8px 10px;text-align:left;color:#94a0b8;">Skill</th>
+              <th style="padding:8px 10px;text-align:left;color:#94a0b8;">Question</th>
+              <th style="padding:8px 10px;text-align:left;color:#f87171;">Your Answer</th>
+              <th style="padding:8px 10px;text-align:left;color:#34d399;">Correct Answer</th>
+            </tr></thead>
+            <tbody>${failedQuestions.map((fq, i) => `
+              <tr style="background:${i % 2 === 0 ? '#0d1226' : '#0a0e1a'};">
+                <td style="padding:8px 10px;color:#6b8aff;font-weight:600;">${fq.skill}</td>
+                <td style="padding:8px 10px;color:#c8d0e4;">${fq.question}</td>
+                <td style="padding:8px 10px;color:#f87171;">${fq.yourAnswer}</td>
+                <td style="padding:8px 10px;color:#34d399;">${fq.correctAnswer}</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>`
+        : `<p style="color:#34d399;font-weight:600;">Perfect score — no incorrect answers!</p>`;
+
+      const scoreColor = isPassed ? "#34d399" : "#f87171";
+      const verdict = isPassed ? "PASSED \u2705" : "NEEDS IMPROVEMENT \u274c";
+
+      // ─ Email to candidate ───────────────────────────────────────────
+      if (user?.email) {
+        const candidateHtml = `
+<!DOCTYPE html><html><head><meta charset="UTF-8"></head>
+<body style="font-family:sans-serif;background:#0a0e1a;color:#e8ecf4;padding:40px;">
+  <div style="max-width:620px;margin:0 auto;">
+    <h1 style="font-size:28px;font-weight:900;font-style:italic;letter-spacing:-1px;margin-bottom:4px;">
+      VERI<span style="color:#6b8aff">PROOF</span><span style="color:#6b8aff">.</span>
+    </h1>
+    <p style="font-family:monospace;font-size:10px;letter-spacing:3px;text-transform:uppercase;color:#5a6478;margin-top:0;">Forensic Credential Intelligence</p>
+    <hr style="border-color:#1a2040;margin:24px 0;">
+    <p>Hi <strong>${user.name || "Candidate"}</strong>,</p>
+    <p>You have completed your technical assessment. Here are your results:</p>
+    <div style="background:#0d1226;border:1px solid #1a2040;border-radius:12px;padding:24px;margin:20px 0;text-align:center;">
+      <div style="font-size:48px;font-weight:900;color:${scoreColor};">${score}%</div>
+      <div style="font-size:14px;font-weight:700;color:${scoreColor};margin-top:4px;">${verdict}</div>
+      <div style="font-size:12px;color:#5a6478;margin-top:8px;">Passing threshold: 70% &bull; Questions: ${totalQuestions} &bull; Correct: ${correctCount}</div>
+    </div>
+    ${failedQuestions.length > 0 ? `
+    <h3 style="color:#e8ecf4;font-size:14px;font-weight:700;margin-bottom:8px;">Areas for Improvement (${failedQuestions.length} question${failedQuestions.length !== 1 ? 's' : ''}):</h3>
+    ${failedHtml}` : ""}
+    <hr style="border-color:#1a2040;margin:24px 0;">
+    <p style="color:#5a6478;font-size:11px;font-family:monospace;">VeriProof &mdash; Screen Everyone &middot; Catch the Fraud &middot; Prove the Honest</p>
+  </div>
+</body></html>`;
+
+        await sendEmail({
+          email: user.email,
+          subject: `[VeriProof] Your Assessment Results: ${score}% — ${verdict}`,
+          html: candidateHtml,
+        }).catch((err) => console.warn("[PostExam] Candidate email failed:", err.message));
+      }
+
+      // ─ Store exam completion event on RecruiterApplicant for daily digest ──
+      const InvitationRegistry = require("../models/InvitationRegistry");
+      const matchedInv = await InvitationRegistry.findOne({
+        $or: [
+          { email: req.user.email },
+          { email: new RegExp(`^${req.user.email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") }
+        ]
+      });
+
+      if (matchedInv?.recruiterId) {
+        const RecruiterApplicant = require("../models/RecruiterApplicant");
+        await RecruiterApplicant.updateMany(
+          {
+            recruiterId: matchedInv.recruiterId,
+            $or: [
+              { candidateUser: req.user._id },
+              { extractedEmail: req.user.email }
+            ]
+          },
+          {
+            examCompletedAt: new Date(),
+            examDigestPending: true,
+            examFailedReasons: failedQuestions.map(fq => `[${fq.skill}] ${fq.question} → Correct: ${fq.correctAnswer}`),
+          }
+        );
+      }
+    } catch (emailErr) {
+      console.warn("[PostExam] Email/digest error (non-fatal):", emailErr.message);
+    }
+
 
     res.json({
       totalQuestions,
