@@ -187,6 +187,7 @@ userSchema.methods.matchPassword = async function (enteredPassword) {
 };
 
 // Generate and hash password token
+// Generate and hash password token or 6-digit reset OTP
 userSchema.methods.getResetPasswordToken = function () {
   const resetToken = crypto.randomBytes(20).toString("hex");
 
@@ -200,6 +201,14 @@ userSchema.methods.getResetPasswordToken = function () {
   this.resetPasswordExpire = Date.now() + 10 * 60 * 1000;
 
   return resetToken;
+};
+
+// Generate and hash a 6-digit OTP for Password Reset
+userSchema.methods.getResetOtpToken = function () {
+  const otp = Math.floor(100000 + Math.random() * 900000).toString();
+  this.resetPasswordToken = crypto.createHash("sha256").update(otp).digest("hex");
+  this.resetPasswordExpire = Date.now() + 10 * 60 * 1000; // 10 minutes
+  return otp;
 };
 
 // Generate and hash a 6-digit OTP for two-factor auth

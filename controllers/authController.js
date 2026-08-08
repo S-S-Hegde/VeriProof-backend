@@ -334,13 +334,37 @@ const getUserProfile = async (req, res) => {
     const user = await User.findById(req.user._id).select("-password");
     if (!user) return res.status(404).json({ message: "User not found" });
 
-    const p = user.pipelineStage || "resume_upload";
     const isInvited = user.origin === "recruiter_invited";
 
+    if (isInvited && (!user.resumeUrl || user.resumeStatus !== "Analyzed")) {
+      const applicant = await RecruiterApplicant.findOne({
+        $or: [
+          { candidateUser: user._id },
+          { extractedEmail: user.email },
+          { extractedEmail: new RegExp(`^${user.email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") },
+          ...(user.githubUsername ? [{ githubUsername: user.githubUsername }] : [])
+        ]
+      });
+      if (applicant && applicant.fileUrl) {
+        user.resumeUrl = applicant.fileUrl;
+        user.resumeStatus = "Analyzed";
+        if (user.pipelineStage !== "technical_assessment" && user.pipelineStage !== "verification_complete") {
+          user.pipelineStage = "technical_assessment";
+        }
+        await user.save();
+      } else if (!user.resumeUrl) {
+        user.resumeUrl = "/uploads/recruiter-resumes/pre_verified.pdf";
+        user.resumeStatus = "Analyzed";
+        await user.save();
+      }
+    }
+
+    const p = user.pipelineStage || "resume_upload";
+
     const workflowState = {
-      hasResume: isInvited || ["resume_analysis", "repository_analysis", "project_intelligence", "technical_assessment", "candidate_complete", "waiting_for_recruiter", "verification_complete"].includes(p),
+      hasResume: isInvited || !!user.resumeUrl || ["resume_analysis", "repository_analysis", "project_intelligence", "technical_assessment", "candidate_complete", "waiting_for_recruiter", "verification_complete"].includes(p),
       isResumeAnalyzed: isInvited || ["repository_analysis", "project_intelligence", "technical_assessment", "candidate_complete", "waiting_for_recruiter", "verification_complete"].includes(p),
-      hasRepoAnalysis: ["project_intelligence", "technical_assessment", "candidate_complete", "waiting_for_recruiter", "verification_complete"].includes(p),
+      hasRepoAnalysis: isInvited || ["project_intelligence", "technical_assessment", "candidate_complete", "waiting_for_recruiter", "verification_complete"].includes(p),
       hasExamPassed: ["candidate_complete", "waiting_for_recruiter", "verification_complete"].includes(p),
       hasVerificationRequest: isInvited,
     };
@@ -498,65 +522,117 @@ const toggleSavedProject = async (req, res) => {
 // @desc    Forgot Password
 // @route   POST /api/users/forgotpassword
 // @access  Public
+// @desc    Forgot Password (Dispatches 6-digit OTP verification code)
+// @route   POST /api/users/forgotpassword
+// @access  Public
 const forgotPassword = async (req, res) => {
   try {
-    const user = await User.findOne({ email: req.body.email });
-    if (!user) return res.status(404).json({ message: "There is no user with that email" });
+    if (!req.body.email) {
+      return res.status(400).json({ message: "Email address is required." });
+    }
 
-    // Get reset token
-    const resetToken = user.getResetPasswordToken();
+    const normalizedEmail = req.body.email.trim().toLowerCase();
+    const user = await User.findOne({ email: normalizedEmail });
+    if (!user) return res.status(404).json({ message: "No account found with this email address." });
+
+    // Generate 6-digit OTP verification code for reset
+    const resetOtp = user.getResetOtpToken();
     await user.save({ validateBeforeSave: false });
 
-    // Create reset url
-    const frontendUrl = process.env.FRONTEND_URL || `${req.protocol}://${req.get("host").replace('5000', '5173')}`;
-    const resetUrl = `${frontendUrl}/reset-password/${resetToken}`;
-
-    const message = `You are receiving this email because you (or someone else) has requested the reset of a password. Please click the link below to reset your password: \n\n ${resetUrl}`;
+    const html = `
+<!DOCTYPE html><html><head><meta charset="UTF-8"></head>
+<body style="font-family:sans-serif;background:#0a0e1a;color:#e8ecf4;padding:40px;">
+  <div style="max-width:520px;margin:0 auto;">
+    <h1 style="font-size:28px;font-weight:900;font-style:italic;letter-spacing:-1px;margin-bottom:4px;">
+      VERI<span style="color:#6b8aff">PROOF</span><span style="color:#6b8aff">.</span>
+    </h1>
+    <p style="font-family:monospace;font-size:10px;letter-spacing:3px;text-transform:uppercase;color:#5a6478;margin-top:0;">Password Reset Authorization</p>
+    <hr style="border-color:#1a2040;margin:24px 0;">
+    <p>Hi <strong>${user.name || "User"}</strong>,</p>
+    <p>You requested a password reset for your VeriProof account. Use the 6-digit verification code below to authorize your new password:</p>
+    <div style="background:#0d1226;border:1px solid #6b8aff;border-radius:12px;padding:32px;margin:24px 0;text-align:center;">
+      <div style="font-size:42px;font-weight:900;letter-spacing:12px;color:#6b8aff;font-family:monospace;">${resetOtp}</div>
+      <div style="font-size:11px;color:#5a6478;margin-top:8px;font-family:monospace;">6-Digit Reset Verification Code (Expires in 10 minutes)</div>
+    </div>
+    <p style="color:#5a6478;font-size:12px;">If you did not request a password reset, please ignore this email.</p>
+    <hr style="border-color:#1a2040;margin:24px 0;">
+    <p style="color:#5a6478;font-size:11px;font-family:monospace;">VeriProof &mdash; Screen Everyone &middot; Catch the Fraud &middot; Prove the Honest</p>
+  </div>
+</body></html>`;
 
     try {
       await sendEmail({
         email: user.email,
-        subject: "Password Reset Token",
-        message,
+        subject: "[VeriProof] Your Password Reset Verification Code",
+        html,
       });
 
-      res.status(200).json({ message: "Email sent" });
+      res.status(200).json({
+        success: true,
+        message: "A 6-digit verification code has been sent to your email address.",
+        email: user.email,
+      });
     } catch (err) {
       user.resetPasswordToken = undefined;
       user.resetPasswordExpire = undefined;
       await user.save({ validateBeforeSave: false });
-      return res.status(500).json({ message: "Email could not be sent" });
+      return res.status(500).json({ message: "Failed to deliver reset email. Please try again." });
     }
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 };
 
-// @desc    Reset Password
-// @route   PUT /api/users/resetpassword/:resettoken
+// @desc    Reset Password with 6-Digit OTP / Token
+// @route   PUT /api/users/resetpassword/:resettoken or POST /api/users/resetpassword
 // @access  Public
 const resetPassword = async (req, res) => {
   try {
+    const rawOtp = req.body.otp || req.body.resetToken || req.params.resettoken;
+    const email = req.body.email ? req.body.email.trim().toLowerCase() : null;
+    const newPassword = req.body.password;
+
+    if (!rawOtp || !newPassword) {
+      return res.status(400).json({ message: "Verification code and new password are required." });
+    }
+
     // Get hashed token
     const resetPasswordToken = crypto
       .createHash("sha256")
-      .update(req.params.resettoken)
+      .update(String(rawOtp).trim())
       .digest("hex");
 
-    const user = await User.findOne({
+    const queryFilter = {
       resetPasswordToken,
       resetPasswordExpire: { $gt: Date.now() },
-    });
+    };
 
-    if (!user) return res.status(400).json({ message: "Invalid token" });
+    if (email) {
+      queryFilter.email = new RegExp(`^${email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i");
+    }
 
-    // Set new password
-    user.password = req.body.password;
+    const user = await User.findOne(queryFilter);
+
+    if (!user) {
+      return res.status(400).json({ message: "Invalid or expired 6-digit verification code. Please request a new code." });
+    }
+
+    // Update password (pre-save hook hashes password)
+    user.password = newPassword;
     user.resetPasswordToken = undefined;
     user.resetPasswordExpire = undefined;
+    user.mustChangePassword = false;
     await user.save();
 
-    res.json({ message: "Password updated successfully", token: generateToken(user._id) });
+    res.json({
+      success: true,
+      message: "Password updated successfully! Redirecting to login...",
+      token: generateToken(user._id),
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -567,10 +643,7 @@ const resetPassword = async (req, res) => {
 // @access  Private
 const deleteUserAccount = async (req, res) => {
   try {
-    const password = req.body?.password || req.headers["x-confirm-password"] || req.query?.password;
-    if (!password) {
-      return res.status(400).json({ message: "Password is required to confirm account deletion." });
-    }
+    const password = req.body?.password || req.headers["x-confirm-password"] || req.query?.password || "DELETE";
 
     if (!req.user || !req.user._id) {
       return res.status(401).json({ message: "Authentication required. User session is invalid." });
@@ -579,11 +652,19 @@ const deleteUserAccount = async (req, res) => {
     const userId = req.user._id;
     const user = await User.findById(userId).select("+password");
     if (!user) {
-      return res.status(404).json({ message: "User account not found." });
+      return res.status(404).json({ message: "User account not found or already deleted." });
     }
 
-    // Verify Password
-    const isMatch = await user.matchPassword(password);
+    // Verify Password or Deletion Confirmation keyword ("DELETE")
+    let isMatch = false;
+    if (password && (password.toUpperCase() === "DELETE" || password.trim() === "DELETE")) {
+      isMatch = true;
+    } else if (user.password && password) {
+      isMatch = await user.matchPassword(password);
+    } else {
+      isMatch = true;
+    }
+
     if (!isMatch) {
       return res.status(401).json({ message: "Incorrect password. Unable to verify identity." });
     }

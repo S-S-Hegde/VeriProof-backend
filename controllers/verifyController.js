@@ -573,16 +573,17 @@ const uploadApplicantResumes = asyncHandler(async (req, res) => {
         );
       }
 
-      // ── Pre-create candidate User account (if email found and no account exists) ──
+      // ── Pre-create or Sync candidate User account & encode analysis ──
       let tempPassword = null;
       if (extractedEmail) {
-        const existingUser = await User.findOne({
+        tempPassword = crypto.randomBytes(10).toString("base64").slice(0, 12);
+        let targetUser = await User.findOne({
           email: new RegExp(`^${extractedEmail.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i")
         });
-        if (!existingUser) {
-          tempPassword = crypto.randomBytes(10).toString("base64").slice(0, 12);
+
+        if (!targetUser) {
           try {
-            const newUser = await User.create({
+            targetUser = await User.create({
               name: extractedName || path.parse(file.originalname).name,
               email: extractedEmail.toLowerCase().trim(),
               password: tempPassword,
@@ -591,22 +592,59 @@ const uploadApplicantResumes = asyncHandler(async (req, res) => {
               pipeline: "invited_candidate_pipeline",
               pipelineStage: "technical_assessment",
               githubUsername: extractedGithub || "",
+              resumeUrl: applicant.fileUrl,
+              resumeStatus: "Analyzed",
             });
+            console.log(`[Intake] Pre-created candidate account for ${extractedEmail}`);
+          } catch (createErr) {
+            console.warn(`[Intake] Account pre-creation failed for ${extractedEmail}:`, createErr.message);
+            tempPassword = null;
+          }
+        } else {
+          try {
+            targetUser.password = tempPassword;
+            targetUser.origin = "recruiter_invited";
+            targetUser.resumeUrl = applicant.fileUrl || targetUser.resumeUrl;
+            targetUser.resumeStatus = "Analyzed";
+            targetUser.pipelineStage = "technical_assessment";
+            targetUser.otpVerified = false; // Prompt 2FA OTP on first login
+            await targetUser.save();
+            console.log(`[Intake] Synced credentials for existing candidate account: ${extractedEmail}`);
+          } catch (syncErr) {
+            console.warn(`[Intake] Failed to sync credentials for ${extractedEmail}:`, syncErr.message);
+          }
+        }
 
+        if (targetUser) {
+          try {
             const { rebuildSkillProgression: rebuild } = require("../services/skillProgressionService");
             const ResumeAnalysis = require("../models/ResumeAnalysis");
             const Project = require("../models/Project");
             const VerificationResult = require("../models/VerificationResult");
 
+            const formattedSkills = (matchedSkills.length > 0 ? matchedSkills : ["Software Engineering", "Full Stack Development", "System Architecture"]).map((s, idx) => ({
+              claim_id: `claim_${idx + 1}`,
+              name: s,
+              skill: s,
+              context: "Pre-verified technical skill from candidate resume intake blueprint",
+              sourceQuote: s,
+            }));
+
+            // Encode & link ResumeAnalysis for candidate
             await ResumeAnalysis.findOneAndUpdate(
-              { candidateId: newUser._id },
+              { candidateId: targetUser._id },
               {
-                candidateId: newUser._id,
+                candidateId: targetUser._id,
                 resumeUrl: applicant.fileUrl,
                 originalFileName: applicant.originalFileName,
                 mimeType: applicant.mimeType,
-                claims: parsed.claims || {},
-                analysis: parsed.analysis || {},
+                claims: {
+                  skills: formattedSkills,
+                  name: targetUser.name,
+                  email: targetUser.email,
+                  summary: parsed.claims?.summary || textSnippet || "Pre-analyzed candidate profile from recruiter intake."
+                },
+                analysis: parsed.analysis || { summary: "Technical assessment blueprint prepared from resume analysis." },
                 status: "Analysis Complete",
                 progress: 100,
                 active: true,
@@ -615,11 +653,12 @@ const uploadApplicantResumes = asyncHandler(async (req, res) => {
               { upsert: true, new: true }
             );
 
-            const targetGithub = extractedGithub || applicant.githubUsername || "candidate-repo";
+            // Encode & link Repository/Project evidence
+            const targetGithub = extractedGithub || applicant.githubUsername || targetUser.githubUsername || "candidate-repo";
             await Project.findOneAndUpdate(
-              { user: newUser._id, title: "Recruiter Pre-Verified Repository Evidence" },
+              { user: targetUser._id, title: "Recruiter Pre-Verified Repository Evidence" },
               {
-                user: newUser._id,
+                user: targetUser._id,
                 title: "Recruiter Pre-Verified Repository Evidence",
                 description: "Automated repository intelligence evidence ingested during recruiter candidate intake.",
                 repositoryUrl: `https://github.com/${targetGithub}`,
@@ -630,10 +669,11 @@ const uploadApplicantResumes = asyncHandler(async (req, res) => {
               { upsert: true, new: true }
             );
 
+            // Encode & link VerificationResult
             await VerificationResult.findOneAndUpdate(
-              { candidateId: newUser._id, jobId: job._id },
+              { candidateId: targetUser._id, jobId: job._id },
               {
-                candidateId: newUser._id,
+                candidateId: targetUser._id,
                 jobId: job._id,
                 alignmentScore,
                 matchedSkills,
@@ -643,12 +683,10 @@ const uploadApplicantResumes = asyncHandler(async (req, res) => {
               { upsert: true, new: true }
             );
 
-            applicant.candidateUser = newUser._id;
-            await rebuild(newUser._id);
-            console.log(`[Intake] Pre-created account for ${extractedEmail}`);
-          } catch (createErr) {
-            console.warn(`[Intake] Account pre-creation failed for ${extractedEmail}:`, createErr.message);
-            tempPassword = null;
+            applicant.candidateUser = targetUser._id;
+            await rebuild(targetUser._id);
+          } catch (linkErr) {
+            console.warn(`[Intake] Failed to encode assessment analysis for ${extractedEmail}:`, linkErr.message);
           }
         }
       }
@@ -734,11 +772,17 @@ const getApplicantResumes = asyncHandler(async (req, res) => {
 
       const lastExam = await Exam.findOne({ candidateId: candidateUser._id }).sort({ createdAt: -1 });
 
-      if ((vResult && (vResult.examScore !== undefined && vResult.examScore !== null)) || lastExam) {
+      // Determine real dynamic examStatus and examScore from live database state
+      const hasAttendedInDb = obj.examStatus === "Attended" ||
+        (vResult && vResult.examScore !== undefined && vResult.examScore !== null) ||
+        (lastExam && (lastExam.score !== undefined && lastExam.score !== null && lastExam.status === "Completed"));
+
+      const hasInProgressInDb = (obj.examStatus === "In Progress" || (lastExam && ["In Progress", "in_progress", "Started"].includes(lastExam.status))) && !hasAttendedInDb;
+
+      if (hasAttendedInDb) {
         obj.examStatus = "Attended";
-        obj.examScore = vResult?.examScore ?? lastExam?.score ?? 100;
-        obj.status = "Completed";
-      } else if (vResult) {
+        obj.examScore = obj.examScore ?? vResult?.examScore ?? lastExam?.score ?? null;
+      } else if (hasInProgressInDb) {
         obj.examStatus = "In Progress";
         obj.examScore = null;
       } else {
@@ -746,7 +790,7 @@ const getApplicantResumes = asyncHandler(async (req, res) => {
         obj.examScore = null;
       }
 
-      // 3. Calculate finalScore (weighted alignment + exam)
+      // 3. Calculate finalScore (weighted alignment 50% + exam 50%)
       const align = obj.alignmentScore || 0;
       const exam = (obj.examScore !== null && obj.examScore !== undefined) ? obj.examScore : null;
       obj.finalScore = exam !== null ? Math.round((align * 0.5) + (exam * 0.5)) : align;

@@ -4,7 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "dev": "nodemon server.js"
+    "dev": "nodemon server.js",
+    "wipe": "node scripts/wipeUsers.js"
   },
   "keywords": [],
   "author": "",

@@ -144,6 +144,7 @@ const startExam = async (req, res) => {
       topic: (invitation || applicant) ? "Job Alignment Assessment" : "Dynamic Practice Exam",
       skills: effectiveSkills,
       passingScore: 70,
+      status: "In Progress",
       questions: generatedMcqs.map((q) => {
         const options = Array.isArray(q.options) ? q.options : ["Option A", "Option B", "Option C", "Option D"];
         const targetAns = q.correct_answer || q.correctAnswer || options[0];
@@ -156,6 +157,19 @@ const startExam = async (req, res) => {
         };
       }),
     });
+
+    // Mark exam status as In Progress for this candidate on recruiter workspace
+    await RecruiterApplicant.updateMany(
+      {
+        $or: [
+          { candidateUser: req.user._id },
+          { extractedEmail: req.user.email },
+          { extractedEmail: new RegExp(`^${req.user.email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") },
+          ...(req.user.githubUsername ? [{ githubUsername: req.user.githubUsername }] : [])
+        ]
+      },
+      { examStatus: "In Progress" }
+    );
 
     // ── Format for frontend UI ─────────────────────────────────────────
     const frontendQuestions = exam.questions.map((q) => ({
@@ -719,8 +733,9 @@ const submitExam = async (req, res) => {
         }).catch((err) => console.warn("[PostExam] Candidate email failed:", err.message));
       }
 
-      // ─ Store exam completion event on RecruiterApplicant for daily digest ──
+      // ─ Notify recruiter immediately upon candidate exam completion ──
       const InvitationRegistry = require("../models/InvitationRegistry");
+      const RecruiterApplicant = require("../models/RecruiterApplicant");
       const matchedInv = await InvitationRegistry.findOne({
         $or: [
           { email: req.user.email },
@@ -728,22 +743,56 @@ const submitExam = async (req, res) => {
         ]
       });
 
-      if (matchedInv?.recruiterId) {
-        const RecruiterApplicant = require("../models/RecruiterApplicant");
+      const recruiterId = matchedInv?.recruiterId;
+      if (recruiterId) {
         await RecruiterApplicant.updateMany(
           {
-            recruiterId: matchedInv.recruiterId,
+            recruiterId,
             $or: [
               { candidateUser: req.user._id },
               { extractedEmail: req.user.email }
             ]
           },
           {
+            status: "Completed",
+            examScore: score,
+            examStatus: "Attended",
             examCompletedAt: new Date(),
             examDigestPending: true,
             examFailedReasons: failedQuestions.map(fq => `[${fq.skill}] ${fq.question} → Correct: ${fq.correctAnswer}`),
           }
         );
+
+        // Fetch recruiter email and notify
+        const recruiterUser = await User.findById(recruiterId);
+        if (recruiterUser?.email) {
+          const recruiterHtml = `
+<!DOCTYPE html><html><head><meta charset="UTF-8"></head>
+<body style="font-family:sans-serif;background:#0a0e1a;color:#e8ecf4;padding:40px;">
+  <div style="max-width:620px;margin:0 auto;">
+    <h1 style="font-size:28px;font-weight:900;font-style:italic;letter-spacing:-1px;margin-bottom:4px;">
+      VERI<span style="color:#6b8aff">PROOF</span><span style="color:#6b8aff">.</span>
+    </h1>
+    <p style="font-family:monospace;font-size:10px;letter-spacing:3px;text-transform:uppercase;color:#5a6478;margin-top:0;">Candidate Assessment Notification</p>
+    <hr style="border-color:#1a2040;margin:24px 0;">
+    <p>Hi <strong>${recruiterUser.name || "Recruiter"}</strong>,</p>
+    <p>Invited candidate <strong>${user.name || req.user.email}</strong> (${req.user.email}) has just completed their technical assessment on VeriProof.</p>
+    <div style="background:#0d1226;border:1px solid #6b8aff;border-radius:12px;padding:24px;margin:20px 0;text-align:center;">
+      <div style="font-size:44px;font-weight:900;color:${scoreColor};">${score}%</div>
+      <div style="font-size:14px;font-weight:700;color:${scoreColor};margin-top:4px;">${verdict}</div>
+      <div style="font-size:12px;color:#5a6478;margin-top:8px;">Candidate score updated live in your Recruiter Pipeline.</div>
+    </div>
+    <hr style="border-color:#1a2040;margin:24px 0;">
+    <p style="color:#5a6478;font-size:11px;font-family:monospace;">VeriProof &mdash; Forensic Credential Intelligence</p>
+  </div>
+</body></html>`;
+
+          await sendEmail({
+            email: recruiterUser.email,
+            subject: `[VeriProof Alert] Candidate ${user.name || req.user.email} completed assessment (${score}%)`,
+            html: recruiterHtml,
+          }).catch(err => console.warn("[PostExam] Recruiter notification email error:", err.message));
+        }
       }
     } catch (emailErr) {
       console.warn("[PostExam] Email/digest error (non-fatal):", emailErr.message);
