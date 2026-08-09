@@ -494,9 +494,22 @@ const uploadApplicantResumes = asyncHandler(async (req, res) => {
 
     let parsedSkills = [];
     if (skillsRaw) {
-      if (Array.isArray(skillsRaw)) parsedSkills = skillsRaw;
-      else if (typeof skillsRaw === "string") {
-        parsedSkills = skillsRaw.split(/[,;|]/).map(s => s.trim()).filter(Boolean);
+      const cleanString = (str) => String(str).replace(/^['"\[\s]+|['"\]\s]+$/g, "").trim();
+      if (Array.isArray(skillsRaw)) {
+        parsedSkills = skillsRaw.map(cleanString).filter(Boolean);
+      } else if (typeof skillsRaw === "string") {
+        let rawStr = skillsRaw.trim();
+        try {
+          const jsonParsed = JSON.parse(rawStr.replace(/'/g, '"'));
+          if (Array.isArray(jsonParsed)) {
+            parsedSkills = jsonParsed.map(cleanString).filter(Boolean);
+          }
+        } catch (e) {
+          parsedSkills = rawStr
+            .split(/[,;|]/)
+            .map(cleanString)
+            .filter(Boolean);
+        }
       }
     }
 
@@ -505,7 +518,7 @@ const uploadApplicantResumes = asyncHandler(async (req, res) => {
       email: email ? email.toLowerCase() : "",
       phone: phone || "",
       skills: parsedSkills,
-      resumeText: resumeText || `${name} - ${skillsRaw || "Technical Applicant profile"}`,
+      resumeText: resumeText || `${name} - ${parsedSkills.join(", ") || "Technical Applicant profile"}`,
       github: github || "",
     };
   };
@@ -516,7 +529,18 @@ const uploadApplicantResumes = asyncHandler(async (req, res) => {
     const filename = `${crypto.randomBytes(16).toString("hex")}${extension}`;
     const fileUrl = `/uploads/recruiter-resumes/${filename}`;
 
-    const fileBuffer = buffer || Buffer.from(candidateMetaData?.resumeText || "Candidate ATS Profile", "utf-8");
+    const candidateText = candidateMetaData?.resumeText || "";
+    const metaSkillsText = (candidateMetaData?.skills || []).join(", ");
+    const fullCandidateDocText = `
+Name: ${candidateMetaData?.name || "Candidate"}
+Email: ${candidateMetaData?.email || ""}
+GitHub: ${candidateMetaData?.github || ""}
+Technical Skills & Qualifications: ${metaSkillsText}
+Resume Summary & Work Experience:
+${candidateText}
+`.trim();
+
+    const fileBuffer = buffer || Buffer.from(fullCandidateDocText, "utf-8");
     fs.writeFileSync(path.join(uploadDir, filename), fileBuffer);
 
     const applicant = await RecruiterApplicant.create({
@@ -537,28 +561,26 @@ const uploadApplicantResumes = asyncHandler(async (req, res) => {
     }
 
     try {
-      let parsed = { normalizedText: "", claims: { skills: [] }, analysis: {} };
-      if (buffer) {
-        parsed = await analyzeResumeBuffer(
-          buffer,
-          { mimeType: mimeType || "application/pdf", fileName: originalFileName, strictMode }
-        );
-      } else {
-        const text = candidateMetaData?.resumeText || "";
-        const skillsFromCatalog = extractSkillsLocally(text);
-        const combinedSkills = [...new Set([...(candidateMetaData?.skills || []), ...skillsFromCatalog])];
-        parsed = {
-          normalizedText: text,
-          claims: {
-            skills: combinedSkills.map((s, idx) => ({
-              claim_id: `claim_${idx + 1}`,
-              skill: s,
-              context: "Extracted skill from ATS dataset",
-              source_quote: s
-            }))
-          },
-          analysis: { summary: "Ingested from ATS table row data" }
-        };
+      // Execute full LLM AI claim extraction pipeline for all candidates
+      const parsed = await analyzeResumeBuffer(
+        fileBuffer,
+        { mimeType: mimeType || "text/plain", fileName: originalFileName || "resume.txt", strictMode }
+      );
+
+      // Merge explicit ATS skills into claims if present
+      if (candidateMetaData?.skills?.length > 0) {
+        const existingSkillSet = new Set((parsed.claims?.skills || []).map(s => (typeof s === "string" ? s : s.skill || "").toLowerCase()));
+        for (const metaSk of candidateMetaData.skills) {
+          if (metaSk && !existingSkillSet.has(metaSk.toLowerCase())) {
+            parsed.claims.skills.push({
+              claim_id: `claim_${parsed.claims.skills.length + 1}`,
+              skill: metaSk,
+              context: "Explicit ATS candidate profile skill",
+              source_quote: metaSk
+            });
+            existingSkillSet.add(metaSk.toLowerCase());
+          }
+        }
       }
 
       const extractedEmail =
@@ -571,27 +593,51 @@ const uploadApplicantResumes = asyncHandler(async (req, res) => {
         extractNameFromText(parsed.normalizedText) ||
         path.parse(originalFileName).name;
 
-      let alignmentScore = 0;
+      const normalizeSkillToken = (s) =>
+        String(typeof s === "string" ? s : s.skill || s.name || "")
+          .toLowerCase()
+          .replace(/\.js$/g, "")
+          .replace(/[^a-z0-9]/g, "")
+          .trim();
+
+      const isSkillMatch = (skillA, skillB) => {
+        const normA = normalizeSkillToken(skillA);
+        const normB = normalizeSkillToken(skillB);
+        if (!normA || !normB) return false;
+        return normA === normB || normA.includes(normB) || normB.includes(normA);
+      };
+
       const resumeSkills = parsed.claims?.skills || [];
-      const jobSkills = job.targetSkills || [];
+      const jobSkills = (job.targetSkills || []).map(s => typeof s === "string" ? s : s.skill || s.name || "").filter(Boolean);
       const resumeSkillStrings = resumeSkills
         .map(s => (typeof s === "string" ? s : s.skill || ""))
         .filter(Boolean);
-      const resumeSet = new Set(resumeSkillStrings.map(s => s.toLowerCase()));
+
+      const matchedSkills = jobSkills.filter(jobSk =>
+        resumeSkillStrings.some(resSk => isSkillMatch(jobSk, resSk))
+      );
+      const missingSkills = jobSkills.filter(jobSk =>
+        !resumeSkillStrings.some(resSk => isSkillMatch(jobSk, resSk))
+      );
+
+      const effectiveReqCount = Math.min(jobSkills.length, 8) || 1;
+      let calculatedScore = jobSkills.length > 0
+        ? Math.round(Math.min(100, (matchedSkills.length / effectiveReqCount) * 100))
+        : 85;
 
       try {
         const pythonRes = await axios.post(`${PYTHON_API_BASE}/verify-claims`, {
           claims: resumeSkills.map(s => (typeof s === "string" ? { skill: s, context: "Resume claim", source_quote: s } : s)),
           job_requirements: jobSkills,
         }, { timeout: 3000 });
-        alignmentScore = pythonRes.data.result.score || 0;
+        if (pythonRes.data?.result?.score !== undefined && pythonRes.data?.result?.score > 0) {
+          calculatedScore = Math.max(calculatedScore, Math.round(pythonRes.data.result.score));
+        }
       } catch (pythonErr) {
-        alignmentScore = scoreAlignmentLocally(resumeSkills, jobSkills);
+        console.warn("[Intake] Python claim verifier fallback used:", pythonErr.message);
       }
-      alignmentScore = Math.min(100, Math.max(0, Math.round(alignmentScore)));
 
-      const matchedSkills = jobSkills.filter(s => resumeSet.has(s.toLowerCase()));
-      const missingSkills = jobSkills.filter(s => !resumeSet.has(s.toLowerCase()));
+      const alignmentScore = Math.min(100, Math.max(0, calculatedScore));
 
       let reasoning = "";
       if (jobSkills.length === 0) {
@@ -876,11 +922,20 @@ const uploadApplicantResumes = asyncHandler(async (req, res) => {
     throw new Error("No processable candidates or resume documents were found in the uploaded file(s).");
   }
 
-  // Cap batch execution at 150 candidates max per request execution to honor API tier constraints
-  const BATCH_LIMIT = 150;
-  const targetItems = candidateWorkItems.slice(0, BATCH_LIMIT);
+  // Process 100% of candidates in paced sub-batches to ensure equal LLM quality for all items
+  const SUB_BATCH_SIZE = 100;
+  const records = [];
 
-  const records = await Promise.all(targetItems.map(item => processSingleCandidateUnit(item)));
+  for (let i = 0; i < candidateWorkItems.length; i += SUB_BATCH_SIZE) {
+    const chunk = candidateWorkItems.slice(i, i + SUB_BATCH_SIZE);
+    const chunkRecords = await Promise.all(chunk.map(item => processSingleCandidateUnit(item)));
+    records.push(...chunkRecords);
+
+    if (i + SUB_BATCH_SIZE < candidateWorkItems.length) {
+      await new Promise(resolve => setTimeout(resolve, 1500));
+    }
+  }
+
   res.status(201).json(records);
 });
 
@@ -1049,7 +1104,7 @@ const deleteApplicant = asyncHandler(async (req, res) => {
       candidateUser.origin = "self_registered";
       candidateUser.pipelineStage = "resume_upload";
       candidateUser.resumeUrl = "";
-      candidateUser.resumeStatus = "Not_Uploaded";
+      candidateUser.resumeStatus = "Pending Evaluation";
       await candidateUser.save();
     }
   }
@@ -1057,6 +1112,61 @@ const deleteApplicant = asyncHandler(async (req, res) => {
   // 5. Permanently remove RecruiterApplicant document
   await applicant.deleteOne();
   res.json({ message: "Applicant resume and all associated analysis records permanently deleted." });
+});
+
+// @desc    Bulk delete/remove multiple selected applicants
+// @route   POST /api/verify/applicants/bulk-delete
+// @access  Private (Recruiter)
+const bulkDeleteApplicants = asyncHandler(async (req, res) => {
+  const { applicantIds } = req.body;
+  if (!Array.isArray(applicantIds) || applicantIds.length === 0) {
+    res.status(400);
+    throw new Error("No applicant IDs provided for bulk deletion.");
+  }
+
+  const applicants = await RecruiterApplicant.find({
+    _id: { $in: applicantIds },
+    recruiterId: req.user._id,
+  });
+
+  let deletedCount = 0;
+  for (const applicant of applicants) {
+    const email = applicant.extractedEmail || applicant.emailSentTo;
+    const github = applicant.githubUsername;
+
+    if (email) {
+      await InvitationRegistry.deleteMany({ email: email.toLowerCase() });
+    }
+
+    let candidateUser = null;
+    if (applicant.candidateUser) {
+      candidateUser = await User.findById(applicant.candidateUser);
+    }
+    if (!candidateUser && email) {
+      candidateUser = await User.findOne({
+        email: new RegExp(`^${email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i")
+      });
+    }
+    if (!candidateUser && github) {
+      candidateUser = await User.findOne({ githubUsername: github });
+    }
+
+    if (candidateUser) {
+      await ResumeAnalysis.deleteMany({ candidateId: candidateUser._id });
+      if (candidateUser.pipelineStage !== "verification_complete") {
+        candidateUser.origin = "self_registered";
+        candidateUser.pipelineStage = "resume_upload";
+        candidateUser.resumeUrl = "";
+        candidateUser.resumeStatus = "Pending Evaluation";
+        await candidateUser.save();
+      }
+    }
+
+    await applicant.deleteOne();
+    deletedCount++;
+  }
+
+  res.json({ message: `Successfully deleted ${deletedCount} applicants.`, deletedCount });
 });
 
 // @desc    Run full End-to-End Candidate Verification Pipeline (Module 12)
@@ -1237,6 +1347,7 @@ module.exports = {
   getApplicantResumes,
   deleteJob,
   deleteApplicant,
+  bulkDeleteApplicants,
   runFullVerificationPipeline,
   sendDailyDigest,
   updateShortlistRank,

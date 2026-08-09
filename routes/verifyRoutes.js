@@ -13,6 +13,7 @@ const {
   getApplicantResumes,
   deleteJob,
   deleteApplicant,
+  bulkDeleteApplicants,
   runFullVerificationPipeline,
   sendDailyDigest,
   updateShortlistRank,
@@ -98,6 +99,7 @@ router.post("/applicants/upload",  protect, recruiterOnly, receiveDocuments("res
 router.get("/applicants",          protect, recruiterOnly, getApplicantResumes);
 router.put("/applicants/shortlist", protect, recruiterOnly, updateShortlistRank);
 router.delete("/applicants/:id",   protect, recruiterOnly, deleteApplicant);
+router.post("/applicants/bulk-delete", protect, recruiterOnly, bulkDeleteApplicants);
 router.post("/daily-digest",       protect, recruiterOnly, sendDailyDigest);
 
 

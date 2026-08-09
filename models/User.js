@@ -119,7 +119,7 @@ const userSchema = new mongoose.Schema(
     resumeUrl:      { type: String, default: "" },
     resumeStatus:   {
       type: String,
-      enum: ["Pending Evaluation", "Analyzed", "Verified", "Rejected"],
+      enum: ["Pending Evaluation", "Analyzed", "Verified", "Rejected", "Not_Uploaded", "Not Uploaded"],
       default: "Pending Evaluation",
     },
 
