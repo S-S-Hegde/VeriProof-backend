@@ -24,10 +24,13 @@ const path = require("path");
 
 const documentUpload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 15 * 1024 * 1024, files: 20 }, // 15MB limit, up to 20 files
+  limits: { fileSize: 50 * 1024 * 1024, files: 150 }, // 50MB payload limit, up to 150 files per batch
   fileFilter: (req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
-    const allowedExts = new Set([".pdf", ".docx", ".doc", ".txt"]);
+    const allowedExts = new Set([
+      ".pdf", ".docx", ".doc", ".txt",
+      ".csv", ".xlsx", ".xls", ".json", ".zip"
+    ]);
     const allowedMimeTypes = new Set([
       "application/pdf",
       "application/x-pdf",
@@ -37,12 +40,20 @@ const documentUpload = multer({
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       "application/msword",
       "text/plain",
+      "text/csv",
+      "application/csv",
+      "text/x-csv",
+      "application/vnd.ms-excel",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "application/json",
+      "application/zip",
+      "application/x-zip-compressed",
       "application/octet-stream",
     ]);
     if (allowedMimeTypes.has(file.mimetype) || allowedExts.has(ext)) {
       return cb(null, true);
     }
-    return cb(new Error("Only PDF, DOCX, and TXT files are supported."));
+    return cb(new Error("Supported file formats: PDF, DOCX, TXT, CSV, Excel (XLSX/XLS), JSON, ZIP archives."));
   },
 });
 
@@ -56,14 +67,15 @@ const receiveDocuments = (field, maxCount) => (req, res, next) => {
         const ext = path.extname(file.originalname || "").toLowerCase();
         const isPdf = file.mimetype?.includes("pdf") || ext === ".pdf";
         const isDocx = file.mimetype?.includes("wordprocessingml") || file.mimetype?.includes("msword") || ext === ".docx" || ext === ".doc";
+        const isZip = file.mimetype?.includes("zip") || ext === ".zip";
 
         if (isPdf) {
           // According to PDF spec, %PDF- header occurs within the first 1024 bytes
           const headerStr = file.buffer.subarray(0, 1024).toString("latin1");
           return headerStr.includes("%PDF-") || file.buffer.length > 50;
         }
-        if (isDocx) {
-          return file.buffer[0] === 0x50 && file.buffer[1] === 0x4b;
+        if (isDocx || isZip) {
+          return file.buffer.length >= 4 && file.buffer[0] === 0x50 && file.buffer[1] === 0x4b;
         }
         return true;
       });
@@ -82,7 +94,7 @@ router.post("/job",                protect, recruiterOnly, createJobRole);
 router.post("/job/from-file",      protect, recruiterOnly, receiveDocuments("jobDescription", 1), createJobFromFile);
 router.delete("/job/:id",          protect, recruiterOnly, deleteJob);
 router.get("/my-jobs",             protect, recruiterOnly, getMyJobs);
-router.post("/applicants/upload",  protect, recruiterOnly, receiveDocuments("resumes", 10), uploadApplicantResumes);
+router.post("/applicants/upload",  protect, recruiterOnly, receiveDocuments("resumes", 150), uploadApplicantResumes);
 router.get("/applicants",          protect, recruiterOnly, getApplicantResumes);
 router.put("/applicants/shortlist", protect, recruiterOnly, updateShortlistRank);
 router.delete("/applicants/:id",   protect, recruiterOnly, deleteApplicant);

@@ -13,6 +13,7 @@
   "type": "commonjs",
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
+    "adm-zip": "^0.6.0",
     "axios": "^1.13.6",
     "bcryptjs": "^3.0.3",
     "cloudinary": "^2.9.0",
@@ -30,7 +31,8 @@
     "multer": "^2.1.1",
     "nodemailer": "^9.0.3",
     "pdf-parse": "^1.1.1",
-    "pdfkit": "^0.18.0"
+    "pdfkit": "^0.18.0",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "nodemon": "^3.1.14"

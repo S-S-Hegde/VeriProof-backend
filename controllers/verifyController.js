@@ -446,6 +446,9 @@ const createJobFromFile = asyncHandler(async (req, res) => {
 });
 
 const uploadApplicantResumes = asyncHandler(async (req, res) => {
+  const XLSX = require("xlsx");
+  const AdmZip = require("adm-zip");
+
   const job = await Job.findOne({ _id: req.body.jobId, recruiterId: req.user._id });
   if (!job) {
     res.status(404);
@@ -453,7 +456,7 @@ const uploadApplicantResumes = asyncHandler(async (req, res) => {
   }
   if (!req.files?.length) {
     res.status(400);
-    throw new Error("Select at least one resume.");
+    throw new Error("Select at least one resume or ATS data file.");
   }
 
   const uploadDir = path.join(__dirname, "..", "uploads", "recruiter-resumes");
@@ -465,22 +468,66 @@ const uploadApplicantResumes = asyncHandler(async (req, res) => {
 
   const strictMode = req.body.strictMode === "true";
 
-  // ── Concurrent high-speed processing ─────────────────────────────────────
-  const processSingleFile = async (file) => {
-    const extension = path.extname(file.originalname).toLowerCase();
+  // Helper to map dynamic ATS field names from CSV / Excel / JSON
+  const extractCandidateDataFromRow = (row) => {
+    if (!row || typeof row !== "object") return null;
+
+    const findKey = (candidates) => {
+      const keys = Object.keys(row);
+      for (const cand of candidates) {
+        const match = keys.find(k => k.toLowerCase().replace(/[^a-z0-9]/g, "") === cand.toLowerCase().replace(/[^a-z0-9]/g, ""));
+        if (match && row[match] !== undefined && row[match] !== null && String(row[match]).trim() !== "") {
+          return String(row[match]).trim();
+        }
+      }
+      return "";
+    };
+
+    const name = findKey(["name", "candidate_name", "candidatename", "full_name", "fullname", "first_name", "applicant_name"]);
+    const email = findKey(["email", "candidate_email", "candidateemail", "email_address", "emailaddress"]);
+    const phone = findKey(["phone", "mobile", "contact", "phone_number"]);
+    const skillsRaw = findKey(["skills", "key_skills", "technical_skills", "claims", "matched_skills", "skill_set"]);
+    const resumeText = findKey(["resume_text", "resumetext", "summary", "profile", "experience", "description", "bio", "notes", "cv_text"]);
+    const github = findKey(["github", "github_username", "portfolio", "linkedin"]);
+
+    if (!name && !email && !resumeText) return null;
+
+    let parsedSkills = [];
+    if (skillsRaw) {
+      if (Array.isArray(skillsRaw)) parsedSkills = skillsRaw;
+      else if (typeof skillsRaw === "string") {
+        parsedSkills = skillsRaw.split(/[,;|]/).map(s => s.trim()).filter(Boolean);
+      }
+    }
+
+    return {
+      name: name || "Candidate",
+      email: email ? email.toLowerCase() : "",
+      phone: phone || "",
+      skills: parsedSkills,
+      resumeText: resumeText || `${name} - ${skillsRaw || "Technical Applicant profile"}`,
+      github: github || "",
+    };
+  };
+
+  // ── Unified Candidate Intake Processor ─────────────────────────────────────
+  const processSingleCandidateUnit = async ({ originalFileName, mimeType, buffer, candidateMetaData }) => {
+    const extension = path.extname(originalFileName || "resume.pdf").toLowerCase() || ".pdf";
     const filename = `${crypto.randomBytes(16).toString("hex")}${extension}`;
     const fileUrl = `/uploads/recruiter-resumes/${filename}`;
-    fs.writeFileSync(path.join(uploadDir, filename), file.buffer);
+
+    const fileBuffer = buffer || Buffer.from(candidateMetaData?.resumeText || "Candidate ATS Profile", "utf-8");
+    fs.writeFileSync(path.join(uploadDir, filename), fileBuffer);
 
     const applicant = await RecruiterApplicant.create({
       recruiterId: req.user._id,
       jobId: job._id,
-      originalFileName: file.originalname,
-      mimeType: file.mimetype,
+      originalFileName: originalFileName || `${candidateMetaData?.name || "Candidate"}_resume${extension}`,
+      mimeType: mimeType || "application/pdf",
       fileUrl,
     });
 
-    const candidateEmailParam = (req.body.candidateEmail || req.body.email || "").toLowerCase().trim();
+    const candidateEmailParam = (candidateMetaData?.email || req.body.candidateEmail || req.body.email || "").toLowerCase().trim();
     if (candidateEmailParam) {
       await InvitationRegistry.findOneAndUpdate(
         { email: candidateEmailParam },
@@ -490,19 +537,39 @@ const uploadApplicantResumes = asyncHandler(async (req, res) => {
     }
 
     try {
-      const parsed = await analyzeResumeBuffer(
-        file.buffer,
-        { mimeType: file.mimetype, fileName: file.originalname, strictMode },
-      );
+      let parsed = { normalizedText: "", claims: { skills: [] }, analysis: {} };
+      if (buffer) {
+        parsed = await analyzeResumeBuffer(
+          buffer,
+          { mimeType: mimeType || "application/pdf", fileName: originalFileName, strictMode }
+        );
+      } else {
+        const text = candidateMetaData?.resumeText || "";
+        const skillsFromCatalog = extractSkillsLocally(text);
+        const combinedSkills = [...new Set([...(candidateMetaData?.skills || []), ...skillsFromCatalog])];
+        parsed = {
+          normalizedText: text,
+          claims: {
+            skills: combinedSkills.map((s, idx) => ({
+              claim_id: `claim_${idx + 1}`,
+              skill: s,
+              context: "Extracted skill from ATS dataset",
+              source_quote: s
+            }))
+          },
+          analysis: { summary: "Ingested from ATS table row data" }
+        };
+      }
 
       const extractedEmail =
         candidateEmailParam ||
         parsed.analysis?.email ||
         extractEmailFromText(parsed.normalizedText);
       const extractedName =
+        candidateMetaData?.name ||
         parsed.analysis?.name ||
         extractNameFromText(parsed.normalizedText) ||
-        path.parse(file.originalname).name;
+        path.parse(originalFileName).name;
 
       let alignmentScore = 0;
       const resumeSkills = parsed.claims?.skills || [];
@@ -537,7 +604,7 @@ const uploadApplicantResumes = asyncHandler(async (req, res) => {
         reasoning = `Matched ${matchedSkills.length} of ${jobSkills.length} target skills (${alignmentScore}% score). Strengths: ${matchedSkills.join(", ")}. Gaps: ${missingSkills.join(", ")}.`;
       }
 
-      const extractedGithub = extractGithubFromText(parsed.normalizedText);
+      const extractedGithub = candidateMetaData?.github || extractGithubFromText(parsed.normalizedText);
 
       Object.assign(applicant, {
         status:        "Completed",
@@ -584,7 +651,7 @@ const uploadApplicantResumes = asyncHandler(async (req, res) => {
         if (!targetUser) {
           try {
             targetUser = await User.create({
-              name: extractedName || path.parse(file.originalname).name,
+              name: extractedName || path.parse(originalFileName).name,
               email: extractedEmail.toLowerCase().trim(),
               password: tempPassword,
               role: "student",
@@ -642,7 +709,7 @@ const uploadApplicantResumes = asyncHandler(async (req, res) => {
                   skills: formattedSkills,
                   name: targetUser.name,
                   email: targetUser.email,
-                  summary: parsed.claims?.summary || textSnippet || "Pre-analyzed candidate profile from recruiter intake."
+                  summary: parsed.claims?.summary || parsed.normalizedText.substring(0, 500) || "Pre-analyzed candidate profile from recruiter intake."
                 },
                 analysis: parsed.analysis || { summary: "Technical assessment blueprint prepared from resume analysis." },
                 status: "Analysis Complete",
@@ -722,7 +789,98 @@ const uploadApplicantResumes = asyncHandler(async (req, res) => {
     return await applicant.save();
   };
 
-  const records = await Promise.all(req.files.map(file => processSingleFile(file)));
+  // ── Multi-Format File Unification & Batch Chunking ──────────────────────────
+  const candidateWorkItems = [];
+
+  for (const file of req.files) {
+    const ext = path.extname(file.originalname || "").toLowerCase();
+
+    // Case A: ZIP Archive containing multiple resumes / manifest
+    if (ext === ".zip" || file.mimetype?.includes("zip")) {
+      try {
+        const zip = new AdmZip(file.buffer);
+        const zipEntries = zip.getEntries();
+
+        for (const entry of zipEntries) {
+          if (entry.isDirectory) continue;
+          const entryExt = path.extname(entry.entryName).toLowerCase();
+          const validDocExts = [".pdf", ".docx", ".doc", ".txt"];
+
+          if (validDocExts.includes(entryExt)) {
+            const entryBuffer = entry.getData();
+            candidateWorkItems.push({
+              originalFileName: path.basename(entry.entryName),
+              mimeType: entryExt === ".pdf" ? "application/pdf" : entryExt === ".txt" ? "text/plain" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+              buffer: entryBuffer,
+            });
+          }
+        }
+      } catch (zipErr) {
+        console.warn(`[Intake] Error unzipping ${file.originalname}:`, zipErr.message);
+      }
+    }
+    // Case B: CSV / Excel Spreadsheet (`.csv`, `.xlsx`, `.xls`)
+    else if ([".csv", ".xlsx", ".xls"].includes(ext) || file.mimetype?.includes("csv") || file.mimetype?.includes("spreadsheet") || file.mimetype?.includes("excel")) {
+      try {
+        const workbook = XLSX.read(file.buffer, { type: "buffer" });
+        const sheetName = workbook.SheetNames[0];
+        const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName]);
+
+        for (const row of rows) {
+          const candidateData = extractCandidateDataFromRow(row);
+          if (candidateData) {
+            candidateWorkItems.push({
+              originalFileName: `${candidateData.name.replace(/\s+/g, "_")}_ats.csv`,
+              mimeType: "text/csv",
+              candidateMetaData: candidateData,
+            });
+          }
+        }
+      } catch (excelErr) {
+        console.warn(`[Intake] Error reading spreadsheet ${file.originalname}:`, excelErr.message);
+      }
+    }
+    // Case C: JSON ATS Export (`.json`)
+    else if (ext === ".json" || file.mimetype?.includes("json")) {
+      try {
+        const jsonStr = file.buffer.toString("utf-8");
+        const parsed = JSON.parse(jsonStr);
+        const list = Array.isArray(parsed) ? parsed : (parsed.candidates || parsed.data || parsed.applicants || [parsed]);
+
+        for (const item of list) {
+          const candidateData = extractCandidateDataFromRow(item);
+          if (candidateData) {
+            candidateWorkItems.push({
+              originalFileName: `${candidateData.name.replace(/\s+/g, "_")}_ats.json`,
+              mimeType: "application/json",
+              candidateMetaData: candidateData,
+            });
+          }
+        }
+      } catch (jsonErr) {
+        console.warn(`[Intake] Error reading JSON ATS export ${file.originalname}:`, jsonErr.message);
+      }
+    }
+    // Case D: Single Document Resume (PDF, DOCX, TXT)
+    else {
+      candidateWorkItems.push({
+        originalFileName: file.originalname,
+        mimeType: file.mimetype,
+        buffer: file.buffer,
+      });
+    }
+  }
+
+  if (candidateWorkItems.length === 0) {
+    res.status(400);
+    throw new Error("No processable candidates or resume documents were found in the uploaded file(s).");
+  }
+
+  // Cap batch execution at 150 candidates max per request execution to honor API tier constraints
+  const BATCH_LIMIT = 150;
+  const targetItems = candidateWorkItems.slice(0, BATCH_LIMIT);
+
+  const records = await Promise.all(targetItems.map(item => processSingleCandidateUnit(item)));
   res.status(201).json(records);
 });
 
