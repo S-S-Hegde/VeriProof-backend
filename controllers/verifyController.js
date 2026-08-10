@@ -63,45 +63,61 @@ const buildInviteEmail = ({ candidateName, recruiterName, jobTitle, loginUrl, re
   html: `
 <!DOCTYPE html>
 <html>
-<head><meta charset="UTF-8"></head>
-<body style="font-family:sans-serif;background:#0a0e1a;color:#e8ecf4;padding:40px;">
-  <div style="max-width:580px;margin:0 auto;">
-    <h1 style="font-size:28px;font-weight:900;font-style:italic;letter-spacing:-1px;margin-bottom:4px;">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#0a0e1a;color:#e8ecf4;margin:0;padding:24px 16px;">
+  <div style="max-width:560px;margin:0 auto;background:#0d1226;border:1px solid #1a2040;border-radius:16px;padding:32px 24px;box-sizing:border-box;">
+    <h1 style="font-size:26px;font-weight:900;font-style:italic;letter-spacing:-1px;margin:0 0 4px 0;color:#ffffff;">
       VERI<span style="color:#6b8aff">PROOF</span><span style="color:#6b8aff">.</span>
     </h1>
-    <p style="font-family:monospace;font-size:10px;letter-spacing:3px;text-transform:uppercase;color:#5a6478;margin-top:0;">
+    <p style="font-family:monospace;font-size:10px;letter-spacing:3px;text-transform:uppercase;color:#5a6478;margin:0 0 20px 0;">
       Forensic Credential Intelligence
     </p>
-    <hr style="border-color:#1a2040;margin:24px 0;">
-    <p>Hi <strong>${candidateName || "Candidate"}</strong>,</p>
-    <p>
-      <strong>${recruiterName}</strong> reviewed your resume for the role of
-      <strong>${jobTitle}</strong> and has invited you to complete a verified technical assessment on VeriProof.
+    <hr style="border:none;border-top:1px solid #1a2040;margin:20px 0;">
+    <p style="font-size:15px;line-height:1.5;margin:0 0 16px 0;">Hi <strong style="color:#ffffff;">${candidateName || "Candidate"}</strong>,</p>
+    <p style="font-size:14px;line-height:1.6;color:#c0c9db;margin:0 0 20px 0;">
+      <strong style="color:#ffffff;">${recruiterName}</strong> reviewed your resume for the role of
+      <strong style="color:#6b8aff;">${jobTitle}</strong> and has invited you to complete a verified technical assessment on VeriProof.
     </p>
     ${username && tempPassword ? `
-    <p style="color:#94a0b8;">Your account has been pre-created. Use the credentials below to sign in directly — no registration required:</p>
-    <div style="background:#0d1226;border:1px solid #6b8aff;border-radius:12px;padding:24px;margin:20px 0;">
-      <table style="width:100%;font-size:13px;">
-        <tr><td style="color:#5a6478;padding:6px 0;font-family:monospace;">SIGN-IN URL</td><td style="color:#6b8aff;"><a href="${loginUrl}" style="color:#6b8aff;">${loginUrl}</a></td></tr>
-        <tr><td style="color:#5a6478;padding:6px 0;font-family:monospace;">USERNAME</td><td style="color:#e8ecf4;font-family:monospace;">${username}</td></tr>
-        <tr><td style="color:#5a6478;padding:6px 0;font-family:monospace;">PASSWORD</td><td style="color:#e8ecf4;font-family:monospace;font-weight:700;">${tempPassword}</td></tr>
+    <p style="color:#94a0b8;font-size:13px;margin:0 0 12px 0;">Your account has been pre-created. Use the credentials below to sign in directly — no registration required:</p>
+    <div style="background:#060913;border:1px solid #6b8aff;border-radius:12px;padding:18px 16px;margin:16px 0;box-sizing:border-box;">
+      <table style="width:100%;border-collapse:collapse;table-layout:fixed;">
+        <tr>
+          <td style="width:28%;color:#5a6478;padding:8px 0;font-family:monospace;font-size:11px;vertical-align:top;font-weight:bold;">SIGN-IN URL</td>
+          <td style="width:72%;padding:8px 0;font-family:monospace;font-size:12px;word-break:break-all;word-wrap:break-word;overflow-wrap:anywhere;">
+            <a href="${loginUrl}" style="color:#6b8aff;text-decoration:underline;word-break:break-all;">${loginUrl}</a>
+          </td>
+        </tr>
+        <tr><td colspan="2" style="border-top:1px dashed #1a2040;height:1px;padding:0;"></td></tr>
+        <tr>
+          <td style="width:28%;color:#5a6478;padding:8px 0;font-family:monospace;font-size:11px;vertical-align:top;font-weight:bold;">USERNAME</td>
+          <td style="width:72%;color:#e8ecf4;padding:8px 0;font-family:monospace;font-size:12px;word-break:break-all;word-wrap:break-word;overflow-wrap:anywhere;">${username}</td>
+        </tr>
+        <tr><td colspan="2" style="border-top:1px dashed #1a2040;height:1px;padding:0;"></td></tr>
+        <tr>
+          <td style="width:28%;color:#5a6478;padding:8px 0;font-family:monospace;font-size:11px;vertical-align:top;font-weight:bold;">PASSWORD</td>
+          <td style="width:72%;color:#6b8aff;padding:8px 0;font-family:monospace;font-size:13px;font-weight:700;word-break:break-all;word-wrap:break-word;overflow-wrap:anywhere;">${tempPassword}</td>
+        </tr>
       </table>
     </div>
-    <p style="color:#f87171;font-size:12px;">⚠️ You will be prompted to change your password after your first sign-in.</p>` : `
-    <p style="color:#94a0b8;">VeriProof is a forensic credential platform. Click below to create your profile and link your evidence (GitHub, projects, certifications).</p>
-    <div style="text-align:center;margin:32px 0;">
-      <a href="${registerUrl}" style="background:#6b8aff;color:#fff;font-weight:700;font-size:12px;letter-spacing:2px;text-transform:uppercase;text-decoration:none;padding:14px 32px;border-radius:8px;display:inline-block;">
+    <p style="color:#f87171;font-size:12px;margin:12px 0 20px 0;">⚠️ You will be prompted to change your password after your first sign-in.</p>` : `
+    <p style="color:#94a0b8;font-size:13px;margin:0 0 20px 0;">VeriProof is a forensic credential platform. Click below to create your profile and link your evidence (GitHub, projects, certifications).</p>
+    <div style="text-align:center;margin:24px 0;">
+      <a href="${registerUrl}" style="background:#6b8aff;color:#fff;font-weight:700;font-size:12px;letter-spacing:2px;text-transform:uppercase;text-decoration:none;padding:14px 28px;border-radius:8px;display:inline-block;">
         Create Your Profile
       </a>
     </div>`}
-    <div style="text-align:center;margin:24px 0;">
-      <a href="${loginUrl}" style="background:#6b8aff;color:#fff;font-weight:700;font-size:12px;letter-spacing:2px;text-transform:uppercase;text-decoration:none;padding:14px 32px;border-radius:8px;display:inline-block;">
-        Sign In &amp; Take Assessment
+    <div style="text-align:center;margin:28px 0 20px 0;">
+      <a href="${loginUrl}" style="background:#6b8aff;color:#ffffff;font-weight:700;font-size:13px;letter-spacing:1.5px;text-transform:uppercase;text-decoration:none;padding:14px 28px;border-radius:8px;display:inline-block;box-shadow:0 4px 14px rgba(107,138,255,0.35);">
+        Sign In &amp; Take Assessment &rarr;
       </a>
     </div>
-    <p style="color:#5a6478;font-size:12px;">If you were not expecting this, you can safely ignore this email.</p>
-    <hr style="border-color:#1a2040;margin:24px 0;">
-    <p style="color:#5a6478;font-size:11px;font-family:monospace;">VeriProof &mdash; Screen Everyone &middot; Catch the Fraud &middot; Prove the Honest</p>
+    <p style="color:#5a6478;font-size:12px;margin:20px 0 0 0;">If you were not expecting this, you can safely ignore this email.</p>
+    <hr style="border:none;border-top:1px solid #1a2040;margin:24px 0 16px 0;">
+    <p style="color:#5a6478;font-size:11px;font-family:monospace;margin:0;text-align:center;">VeriProof &mdash; Screen Everyone &middot; Catch the Fraud &middot; Prove the Honest</p>
   </div>
 </body>
 </html>`,
@@ -513,12 +529,16 @@ const uploadApplicantResumes = asyncHandler(async (req, res) => {
       }
     }
 
+    let cleanName = (name || "Candidate")
+      .replace(/^(name|candidate_name|candidate|applicant|full_name)[:\s\-\_]+/i, "")
+      .trim();
+
     return {
-      name: name || "Candidate",
+      name: cleanName || "Candidate",
       email: email ? email.toLowerCase() : "",
       phone: phone || "",
       skills: parsedSkills,
-      resumeText: resumeText || `${name} - ${parsedSkills.join(", ") || "Technical Applicant profile"}`,
+      resumeText: resumeText || `${cleanName} - ${parsedSkills.join(", ") || "Technical Applicant profile"}`,
       github: github || "",
     };
   };
@@ -620,18 +640,16 @@ ${candidateText}
         !resumeSkillStrings.some(resSk => isSkillMatch(jobSk, resSk))
       );
 
-      const effectiveReqCount = Math.min(jobSkills.length, 8) || 1;
-      let calculatedScore = jobSkills.length > 0
-        ? Math.round(Math.min(100, (matchedSkills.length / effectiveReqCount) * 100))
-        : 85;
+      const totalJobSkillsCount = jobSkills.length || 1;
+      let calculatedScore = Math.round(Math.min(100, (matchedSkills.length / totalJobSkillsCount) * 100));
 
       try {
         const pythonRes = await axios.post(`${PYTHON_API_BASE}/verify-claims`, {
           claims: resumeSkills.map(s => (typeof s === "string" ? { skill: s, context: "Resume claim", source_quote: s } : s)),
           job_requirements: jobSkills,
         }, { timeout: 3000 });
-        if (pythonRes.data?.result?.score !== undefined && pythonRes.data?.result?.score > 0) {
-          calculatedScore = Math.max(calculatedScore, Math.round(pythonRes.data.result.score));
+        if (pythonRes.data?.result?.score !== undefined && pythonRes.data?.result?.score >= 0) {
+          calculatedScore = Math.round(pythonRes.data.result.score);
         }
       } catch (pythonErr) {
         console.warn("[Intake] Python claim verifier fallback used:", pythonErr.message);
@@ -849,13 +867,21 @@ ${candidateText}
 
         for (const entry of zipEntries) {
           if (entry.isDirectory) continue;
-          const entryExt = path.extname(entry.entryName).toLowerCase();
+          const entryName = entry.entryName;
+          const baseName = path.basename(entryName);
+
+          // Ignore hidden OS resource fork files (macOS __MACOSX / ._ files / .DS_Store / thumbs.db)
+          if (entryName.includes("__MACOSX") || baseName.startsWith("._") || baseName.startsWith(".") || baseName.toLowerCase() === "thumbs.db") {
+            continue;
+          }
+
+          const entryExt = path.extname(entryName).toLowerCase();
           const validDocExts = [".pdf", ".docx", ".doc", ".txt"];
 
           if (validDocExts.includes(entryExt)) {
             const entryBuffer = entry.getData();
             candidateWorkItems.push({
-              originalFileName: path.basename(entry.entryName),
+              originalFileName: baseName,
               mimeType: entryExt === ".pdf" ? "application/pdf" : entryExt === ".txt" ? "text/plain" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
               buffer: entryBuffer,
             });
@@ -876,7 +902,7 @@ ${candidateText}
           const candidateData = extractCandidateDataFromRow(row);
           if (candidateData) {
             candidateWorkItems.push({
-              originalFileName: `${candidateData.name.replace(/\s+/g, "_")}_ats.csv`,
+              originalFileName: file.originalname || `${candidateData.name.replace(/[^a-zA-Z0-9]/g, "_")}.csv`,
               mimeType: "text/csv",
               candidateMetaData: candidateData,
             });
@@ -897,7 +923,7 @@ ${candidateText}
           const candidateData = extractCandidateDataFromRow(item);
           if (candidateData) {
             candidateWorkItems.push({
-              originalFileName: `${candidateData.name.replace(/\s+/g, "_")}_ats.json`,
+              originalFileName: file.originalname || `${candidateData.name.replace(/[^a-zA-Z0-9]/g, "_")}.json`,
               mimeType: "application/json",
               candidateMetaData: candidateData,
             });
@@ -1006,14 +1032,23 @@ const getApplicantResumes = asyncHandler(async (req, res) => {
       // 3. Calculate finalScore (weighted alignment 50% + exam 50%)
       const align = obj.alignmentScore || 0;
       const exam = (obj.examScore !== null && obj.examScore !== undefined) ? obj.examScore : null;
-      obj.finalScore = exam !== null ? Math.round((align * 0.5) + (exam * 0.5)) : align;
+      obj.finalScore = exam !== null ? Math.round((align * 0.5) + (exam * 0.5)) : null;
 
       return obj;
     })
   );
 
-  // 4. Calculate candidate rankings by finalScore (descending)
-  populatedApplicants.sort((a, b) => b.finalScore - a.finalScore);
+  // 4. Calculate candidate rankings
+  // Candidates who completed the exam are ranked first by finalScore (descending).
+  // Candidates pending exam are ordered by alignmentScore below exam-completed candidates.
+  populatedApplicants.sort((a, b) => {
+    if (a.finalScore !== null && b.finalScore !== null) {
+      return b.finalScore - a.finalScore;
+    }
+    if (a.finalScore !== null) return -1;
+    if (b.finalScore !== null) return 1;
+    return (b.alignmentScore || 0) - (a.alignmentScore || 0);
+  });
   populatedApplicants.forEach((obj, idx) => {
     obj.rank = idx + 1;
   });
