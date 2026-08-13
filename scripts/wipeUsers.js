@@ -3,74 +3,71 @@ const path = require("path");
 const fs = require("fs");
 const dotenv = require("dotenv");
 
-// Load env variables relative to this scripts directory
+// Load env variables relative to this script's directory
 dotenv.config({ path: path.join(__dirname, "..", ".env") });
 
-const mongoUri = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/veriproof";
+// Collect target MongoDB database URIs to purge (env URI + known default database names)
+const configuredUri = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/skillproof";
+const defaultUris = [
+  configuredUri,
+  "mongodb://127.0.0.1:27017/skillproof",
+  "mongodb://127.0.0.1:27017/veriproof",
+  "mongodb://localhost:27017/skillproof",
+  "mongodb://localhost:27017/veriproof"
+];
+
+// Unique database URIs list
+const targetUris = Array.from(new Set(defaultUris));
+
+const wipeSingleDatabase = async (uri) => {
+  let conn = null;
+  try {
+    console.log(`\n[Wiper] 🔌 Connecting to MongoDB Target: ${uri}`);
+    // Create an isolated connection for this target URI
+    conn = await mongoose.createConnection(uri).asPromise();
+    const db = conn.db;
+    const dbName = db.databaseName;
+    console.log(`[Wiper] Connected to database: "${dbName}"`);
+
+    // Fetch all collections directly from MongoDB Native Driver
+    const collections = await db.collections();
+    console.log(`[Wiper] Found ${collections.length} collection(s) in "${dbName}".`);
+
+    for (const col of collections) {
+      const colName = col.collectionName;
+      if (colName.startsWith("system.")) continue; // Skip system collections
+
+      try {
+        const deleteResult = await col.deleteMany({});
+        console.log(`  ✓ Wiped ${deleteResult.deletedCount} document(s) from collection "${colName}".`);
+        await col.drop();
+        console.log(`  ✓ Dropped collection "${colName}".`);
+      } catch (colErr) {
+        // Ignore collection drop errors if already empty or gone
+      }
+    }
+
+    // Drop database atomically to eliminate all indexes, collections, and system tables
+    await db.dropDatabase();
+    console.log(`  ✓ Atomically dropped database "${dbName}"`);
+
+    await conn.close();
+  } catch (err) {
+    console.error(`[Wiper] Warning: Failed to purge database at ${uri}:`, err.message);
+    if (conn) {
+      try { await conn.close(); } catch (_) {}
+    }
+  }
+};
 
 const wipeData = async () => {
   try {
     console.log("=========================================================");
     console.log("   VERIPROOF SYSTEM ANNIHILATOR — TOTAL DATA PURGE        ");
     console.log("=========================================================");
-    console.log(`[Wiper] Connecting to MongoDB: ${mongoUri}`);
-    await mongoose.connect(mongoUri);
-    console.log("[Wiper] Database connected successfully.");
 
-    // Define all database models to ensure complete schema purging
-    const User = mongoose.models.User || mongoose.model("User", new mongoose.Schema({}, { strict: false }));
-    const Project = mongoose.models.Project || mongoose.model("Project", new mongoose.Schema({}, { strict: false }));
-    const ResumeAnalysis = mongoose.models.ResumeAnalysis || mongoose.model("ResumeAnalysis", new mongoose.Schema({}, { strict: false }));
-    const VerificationResult = mongoose.models.VerificationResult || mongoose.model("VerificationResult", new mongoose.Schema({}, { strict: false }));
-    const Job = mongoose.models.Job || mongoose.model("Job", new mongoose.Schema({}, { strict: false }));
-    const Exam = mongoose.models.Exam || mongoose.model("Exam", new mongoose.Schema({}, { strict: false }));
-    const RecruiterApplicant = mongoose.models.RecruiterApplicant || mongoose.model("RecruiterApplicant", new mongoose.Schema({}, { strict: false }));
-    const InvitationRegistry = mongoose.models.InvitationRegistry || mongoose.model("InvitationRegistry", new mongoose.Schema({}, { strict: false }));
-    const AIMetrics = mongoose.models.AIMetrics || mongoose.model("AIMetrics", new mongoose.Schema({}, { strict: false }));
-    const Question = mongoose.models.Question || mongoose.model("Question", new mongoose.Schema({}, { strict: false }));
-
-    // Delete records from all models
-    console.log("\n[Wiper] 💥 Purging all database collections...");
-    
-    const uCount = await User.deleteMany({});
-    console.log(`  ✓ Wiped ${uCount.deletedCount} User documents.`);
-
-    const pCount = await Project.deleteMany({});
-    console.log(`  ✓ Wiped ${pCount.deletedCount} Project documents.`);
-
-    const rCount = await ResumeAnalysis.deleteMany({});
-    console.log(`  ✓ Wiped ${rCount.deletedCount} ResumeAnalysis documents.`);
-
-    const vCount = await VerificationResult.deleteMany({});
-    console.log(`  ✓ Wiped ${vCount.deletedCount} VerificationResult documents.`);
-
-    const jCount = await Job.deleteMany({});
-    console.log(`  ✓ Wiped ${jCount.deletedCount} Job documents.`);
-
-    const eCount = await Exam.deleteMany({});
-    console.log(`  ✓ Wiped ${eCount.deletedCount} Exam documents.`);
-
-    const aCount = await RecruiterApplicant.deleteMany({});
-    console.log(`  ✓ Wiped ${aCount.deletedCount} RecruiterApplicant documents.`);
-
-    const iCount = await InvitationRegistry.deleteMany({});
-    console.log(`  ✓ Wiped ${iCount.deletedCount} InvitationRegistry documents.`);
-
-    const mCount = await AIMetrics.deleteMany({});
-    console.log(`  ✓ Wiped ${mCount.deletedCount} AIMetrics documents.`);
-
-    const qCount = await Question.deleteMany({});
-    console.log(`  ✓ Wiped ${qCount.deletedCount} Question documents.`);
-
-    // Drop all collections in MongoDB to clear any orphaned documents or indexes
-    const collections = await mongoose.connection.db.collections();
-    for (let collection of collections) {
-      try {
-        await collection.drop();
-        console.log(`  ✓ Dropped collection: ${collection.collectionName}`);
-      } catch (dropErr) {
-        // Ignore collection not found errors
-      }
+    for (const uri of targetUris) {
+      await wipeSingleDatabase(uri);
     }
 
     // Physical uploaded files cleanup across all upload directories
@@ -99,15 +96,15 @@ const wipeData = async () => {
 
     console.log("\n=========================================================");
     console.log("   ✅ TOTAL SYSTEM WIPE COMPLETE!                        ");
-    console.log("   All database documents, resumes, and accounts erased. ");
+    console.log("   All database documents, exams, and accounts erased. ");
     console.log("=========================================================");
-    await mongoose.disconnect();
     process.exit(0);
   } catch (error) {
     console.error("[Wiper] Error purging system database:", error);
-    await mongoose.disconnect();
     process.exit(1);
   }
 };
 
 wipeData();
+
+

@@ -678,6 +678,7 @@ ${candidateText}
         alignmentScore,
         matchedSkills,
         missingSkills,
+        claimedSkills: resumeSkillStrings,
         extractedName,
         extractedEmail: extractedEmail || "",
         githubUsername: extractedGithub || applicant.githubUsername || "",
@@ -1033,6 +1034,35 @@ const getApplicantResumes = asyncHandler(async (req, res) => {
       const align = obj.alignmentScore || 0;
       const exam = (obj.examScore !== null && obj.examScore !== undefined) ? obj.examScore : null;
       obj.finalScore = exam !== null ? Math.round((align * 0.5) + (exam * 0.5)) : null;
+
+      // Ensure claimedSkills is populated from claims and matched skills if empty
+      const claimsSkillList = (obj.claims?.skills || [])
+        .map(s => (typeof s === "string" ? s : s.skill || s.name || ""))
+        .filter(Boolean);
+      const combinedSkills = Array.from(new Set([
+        ...(obj.claimedSkills || []),
+        ...claimsSkillList,
+        ...(obj.matchedSkills || [])
+      ]));
+      obj.claimedSkills = combinedSkills;
+
+      // Ensure reasoning explanation is populated for score transparency
+      if (!obj.reasoning) {
+        const matched = obj.matchedSkills || [];
+        const missing = obj.missingSkills || [];
+        const total = matched.length + missing.length;
+        if (total > 0) {
+          if (matched.length === total) {
+            obj.reasoning = `Candidate scored ${align}% alignment by matching all ${total} required job skills: ${matched.join(", ")}.`;
+          } else if (matched.length === 0) {
+            obj.reasoning = `Candidate scored ${align}% alignment. No direct matches found for required job skills: ${missing.join(", ")}.`;
+          } else {
+            obj.reasoning = `Candidate scored ${align}% alignment by matching ${matched.length} of ${total} required job skills. Strengths: ${matched.join(", ")}. Missing gaps: ${missing.join(", ")}.`;
+          }
+        } else {
+          obj.reasoning = `Candidate resume evaluated at ${align}% alignment based on overall technical skill relevance and job profile match.`;
+        }
+      }
 
       return obj;
     })

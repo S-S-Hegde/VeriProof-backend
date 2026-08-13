@@ -41,7 +41,6 @@ const startExam = async (req, res) => {
         { extractedEmail: new RegExp(`^${req.user.email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") }
       ],
       $or: [
-        { status: "Completed" },
         { examStatus: { $in: ["Attended", "Completed", "Terminated", "Terminated - Proctoring Violation"] } },
         { examScore: { $exists: true, $ne: null } }
       ]
