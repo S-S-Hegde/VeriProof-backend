@@ -56,8 +56,36 @@ const userSchema = new mongoose.Schema(
   {
     name:           { type: String, required: true },
     email:          { type: String, required: true, unique: true },
-    password:       { type: String, required: true },
+    password:       { type: String },
     role:           { type: String, enum: ["student", "recruiter"], default: "student" },
+
+    // Firebase Google OAuth Identity & Verification
+    firebaseUid:                 { type: String, unique: true, sparse: true, index: true },
+    authProvider:                { type: String, enum: ["local", "google"], default: "local" },
+    identityVerified:            { type: Boolean, default: false },
+    googleEmail:                 { type: String, default: "" },
+    googleDisplayName:           { type: String, default: "" },
+    googlePhotoURL:              { type: String, default: "" },
+
+    // Recruiter Onboarding & Verification State Model
+    recruiterVerificationStatus: {
+      type: String,
+      enum: [
+        "UNAUTHENTICATED",
+        "GOOGLE_AUTHENTICATED",
+        "COMPANY_DETAILS_PENDING",
+        "COMPANY_EMAIL_VERIFICATION_PENDING",
+        "COMPANY_EMAIL_VERIFIED",
+      ],
+      default: "UNAUTHENTICATED",
+    },
+    companyName:                 { type: String, default: "" },
+    companyWebsite:              { type: String, default: "" },
+    companyEmail:                { type: String, default: "" },
+    companyEmailVerified:        { type: Boolean, default: false },
+    companyEmailOtpHash:         String,
+    companyEmailOtpExpire:       Date,
+    companyEmailOtpAttempts:     { type: Number, default: 0 },
 
     // Single source of truth for candidate workflow architecture
     origin: {
@@ -177,12 +205,13 @@ const userSchema = new mongoose.Schema(
 );
 
 userSchema.pre("save", async function () {
-  if (!this.isModified("password")) return;
+  if (!this.isModified("password") || !this.password) return;
   const salt = await bcrypt.genSalt(10);
   this.password = await bcrypt.hash(this.password, salt);
 });
 
 userSchema.methods.matchPassword = async function (enteredPassword) {
+  if (!this.password) return false;
   return await bcrypt.compare(enteredPassword, this.password);
 };
 

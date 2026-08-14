@@ -23,7 +23,25 @@ const registerUser = async (req, res) => {
     const normalizedName = name.trim();
     const normalizedGithub = githubUsername ? githubUsername.trim().toLowerCase() : "";
     const userExists = await User.findOne({ email: normalizedEmail });
-    if (userExists) return res.status(400).json({ message: "An account with this email address already exists." });
+    if (userExists) {
+      if (userExists.origin === "recruiter_invited") {
+        userExists.name = normalizedName || userExists.name;
+        userExists.password = password;
+        if (normalizedGithub) userExists.githubUsername = normalizedGithub;
+        await userExists.save();
+        return res.status(200).json({
+          _id: userExists._id,
+          name: userExists.name,
+          email: userExists.email,
+          role: userExists.role,
+          origin: userExists.origin,
+          githubUsername: userExists.githubUsername,
+          profileImage: userExists.profileImage,
+          token: generateToken(userExists._id),
+        });
+      }
+      return res.status(400).json({ message: "An account with this email address already exists." });
+    }
 
     let assignedOrigin = "self_registered";
     let assignedPipeline = "self_candidate_pipeline";
@@ -750,6 +768,418 @@ const deleteUserAccount = async (req, res) => {
   }
 };
 
+const PUBLIC_EMAIL_PROVIDERS = new Set([
+  "gmail.com", "googlemail.com", "yahoo.com", "ymail.com", "outlook.com",
+  "hotmail.com", "live.com", "msn.com", "icloud.com", "me.com", "mac.com",
+  "aol.com", "zoho.com", "protonmail.com", "proton.me", "gmx.com", "mail.com"
+]);
+
+const extractDomain = (str) => {
+  if (!str) return "";
+  let clean = str.trim().toLowerCase();
+  clean = clean.replace(/^https?:\/\//, "").replace(/^www\./, "").split("/")[0].split(":")[0];
+  return clean;
+};
+
+// @desc    Mandatory Firebase Google OAuth Authentication & Verification
+// @route   POST /api/users/firebase-auth
+// @access  Public (Requires Bearer Firebase ID Token)
+const firebaseGoogleAuth = async (req, res) => {
+  const { verifyFirebaseIdToken, FirebaseConfigError, FirebaseTokenError } = require("../config/firebaseAdmin");
+
+  let idToken;
+  if (req.headers.authorization && req.headers.authorization.startsWith("Bearer")) {
+    idToken = req.headers.authorization.split(" ")[1];
+  } else if (req.body.idToken) {
+    idToken = req.body.idToken;
+  }
+
+  if (!idToken) {
+    return res.status(401).json({ message: "Mandatory Firebase ID token missing." });
+  }
+
+  try {
+    // 1. Cryptographically verify token server-side via Firebase Admin SDK
+    const decodedToken = await verifyFirebaseIdToken(idToken);
+    const firebaseUid = decodedToken.uid;
+    const verifiedEmail = decodedToken.email ? decodedToken.email.trim().toLowerCase() : "";
+    const displayName = decodedToken.name || "";
+    const photoURL = decodedToken.picture || "";
+
+    if (!verifiedEmail) {
+      return res.status(400).json({ message: "Google account must have a verified email address." });
+    }
+
+    const { role = "student", inviteCode } = req.body;
+    const targetRole = role === "recruiter" ? "recruiter" : "student";
+
+    // 2. Search existing user by firebaseUid
+    let user = await User.findOne({ firebaseUid });
+
+    if (user) {
+      // Update Google profile information
+      user.googleEmail = verifiedEmail;
+      if (displayName) user.googleDisplayName = displayName;
+      if (photoURL) user.googlePhotoURL = photoURL;
+      user.identityVerified = true;
+      user.authProvider = "google";
+
+      if (user.role === "recruiter" && user.recruiterVerificationStatus === "UNAUTHENTICATED") {
+        user.recruiterVerificationStatus = "GOOGLE_AUTHENTICATED";
+      }
+
+      await user.save();
+
+      return res.json({
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        origin: user.origin,
+        identityVerified: user.identityVerified,
+        authProvider: user.authProvider,
+        recruiterVerificationStatus: user.recruiterVerificationStatus,
+        companyName: user.companyName,
+        companyWebsite: user.companyWebsite,
+        companyEmail: user.companyEmail,
+        companyEmailVerified: user.companyEmailVerified,
+        profileImage: user.profileImage || photoURL,
+        token: generateToken(user._id),
+      });
+    }
+
+    // 3. Search existing user by verified email (Safe Account Linking)
+    user = await User.findOne({ email: verifiedEmail });
+
+    if (user) {
+      // Safely link Firebase UID to existing account, preserving user._id and all existing data
+      user.firebaseUid = firebaseUid;
+      user.authProvider = "google";
+      user.identityVerified = true;
+      user.googleEmail = verifiedEmail;
+      if (displayName) user.googleDisplayName = displayName;
+      if (photoURL) user.googlePhotoURL = photoURL;
+
+      if (user.role === "recruiter" && user.recruiterVerificationStatus === "UNAUTHENTICATED") {
+        user.recruiterVerificationStatus = "GOOGLE_AUTHENTICATED";
+      }
+
+      await user.save();
+
+      return res.json({
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        origin: user.origin,
+        identityVerified: user.identityVerified,
+        authProvider: user.authProvider,
+        recruiterVerificationStatus: user.recruiterVerificationStatus,
+        companyName: user.companyName,
+        companyWebsite: user.companyWebsite,
+        companyEmail: user.companyEmail,
+        companyEmailVerified: user.companyEmailVerified,
+        profileImage: user.profileImage || photoURL,
+        token: generateToken(user._id),
+      });
+    }
+
+    // 4. Handle Candidate Invitation matching (Invitation Security Check)
+    let assignedOrigin = "self_registered";
+    let assignedPipeline = "self_candidate_pipeline";
+    let assignedStage = "resume_upload";
+    let matchedInvitation = null;
+
+    if (targetRole === "student") {
+      if (inviteCode && inviteCode.trim()) {
+        matchedInvitation = await InvitationRegistry.findOne({ inviteCode: inviteCode.trim() });
+      }
+
+      if (!matchedInvitation) {
+        matchedInvitation = await InvitationRegistry.findOne({
+          email: new RegExp(`^${verifiedEmail.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i")
+        });
+      }
+
+      if (!matchedInvitation) {
+        const applicantMatch = await RecruiterApplicant.findOne({
+          $or: [
+            { extractedEmail: new RegExp(`^${verifiedEmail.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") },
+            { extractedEmail: verifiedEmail }
+          ]
+        });
+        if (applicantMatch) {
+          matchedInvitation = await InvitationRegistry.findOneAndUpdate(
+            { email: verifiedEmail },
+            { email: verifiedEmail, recruiterId: applicantMatch.recruiterId, jobId: applicantMatch.jobId, status: "pending" },
+            { upsert: true, new: true }
+          );
+        }
+      }
+
+      // INVITATION SECURITY CHECK: Ensure invitation email matches authenticated Google email
+      if (matchedInvitation) {
+        const inviteEmail = matchedInvitation.email.trim().toLowerCase();
+        if (inviteEmail !== verifiedEmail) {
+          return res.status(403).json({
+            message: `Invitation email mismatch. The invitation was sent to ${inviteEmail}, but you authenticated as ${verifiedEmail}. Please sign in with the Google account corresponding to your invitation.`
+          });
+        }
+
+        assignedOrigin = "recruiter_invited";
+        assignedPipeline = "invited_candidate_pipeline";
+        assignedStage = "technical_assessment";
+        matchedInvitation.status = "registered";
+        await matchedInvitation.save();
+      }
+    }
+
+    // 5. Create New Application User with Verified Firebase Identity
+    const newUser = await User.create({
+      name: displayName || (targetRole === "recruiter" ? "Recruiter" : "Candidate"),
+      email: verifiedEmail,
+      role: targetRole,
+      firebaseUid,
+      authProvider: "google",
+      identityVerified: true,
+      googleEmail: verifiedEmail,
+      googleDisplayName: displayName,
+      googlePhotoURL: photoURL,
+      profileImage: photoURL,
+      origin: targetRole === "recruiter" ? "self_registered" : assignedOrigin,
+      pipeline: targetRole === "recruiter" ? "recruiter_pipeline" : assignedPipeline,
+      pipelineStage: targetRole === "recruiter" ? "registration" : assignedStage,
+      recruiterVerificationStatus: targetRole === "recruiter" ? "GOOGLE_AUTHENTICATED" : "UNAUTHENTICATED",
+    });
+
+    // 6. Hydrate evidence for recruiter invited candidate
+    if (matchedInvitation) {
+      try {
+        const applicant = await RecruiterApplicant.findOne({
+          recruiterId: matchedInvitation.recruiterId,
+          jobId: matchedInvitation.jobId,
+          $or: [
+            { extractedEmail: verifiedEmail },
+            { extractedEmail: new RegExp(`^${verifiedEmail.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") }
+          ]
+        });
+
+        if (applicant) {
+          newUser.resumeUrl = applicant.fileUrl || "hydrated_resume.pdf";
+          newUser.resumeStatus = "Analyzed";
+          newUser.pipelineStage = "technical_assessment";
+          await newUser.save();
+
+          await ResumeAnalysis.findOneAndUpdate(
+            { candidateId: newUser._id },
+            {
+              candidateId: newUser._id,
+              resumeUrl: applicant.fileUrl,
+              originalFileName: applicant.originalFileName,
+              mimeType: applicant.mimeType,
+              claims: applicant.claims || {},
+              analysis: applicant.analysis || {},
+              status: "Analysis Complete",
+              progress: 100,
+              active: true,
+              processedAt: applicant.processedAt || new Date(),
+            },
+            { upsert: true, new: true }
+          );
+
+          applicant.candidateUser = newUser._id;
+          await applicant.save();
+          await rebuildSkillProgression(newUser._id);
+        }
+      } catch (hydrErr) {
+        console.warn("[Firebase Auth] Evidence hydration warning:", hydrErr.message);
+      }
+    }
+
+    res.status(201).json({
+      _id: newUser._id,
+      name: newUser.name,
+      email: newUser.email,
+      role: newUser.role,
+      origin: newUser.origin,
+      identityVerified: newUser.identityVerified,
+      authProvider: newUser.authProvider,
+      recruiterVerificationStatus: newUser.recruiterVerificationStatus,
+      companyName: newUser.companyName,
+      companyWebsite: newUser.companyWebsite,
+      companyEmail: newUser.companyEmail,
+      companyEmailVerified: newUser.companyEmailVerified,
+      profileImage: newUser.profileImage,
+      token: generateToken(newUser._id),
+    });
+  } catch (error) {
+    if (error instanceof FirebaseConfigError) {
+      return res.status(503).json({ message: error.message });
+    }
+    if (error instanceof FirebaseTokenError) {
+      return res.status(401).json({ message: error.message });
+    }
+    console.error("[Firebase Auth] Error:", error);
+    res.status(500).json({ message: "Authentication failed. Please try again." });
+  }
+};
+
+// @desc    Recruiter Step 2: Update Company Details & Send Domain Email Verification OTP
+// @route   POST /api/users/recruiter/company-info
+// @access  Private (Recruiter only)
+const updateCompanyInfo = async (req, res) => {
+  const { companyName, companyWebsite, companyEmail } = req.body;
+
+  if (!companyName || !companyWebsite || !companyEmail) {
+    return res.status(400).json({ message: "Company name, company website, and professional email address are required." });
+  }
+
+  const normName = companyName.trim();
+  const normWebsite = companyWebsite.trim().toLowerCase();
+  const normEmail = companyEmail.trim().toLowerCase();
+
+  const emailDomain = normEmail.split("@")[1] || "";
+  const websiteDomain = extractDomain(normWebsite);
+
+  if (!emailDomain || !websiteDomain) {
+    return res.status(400).json({ message: "Invalid company website URL or email address format." });
+  }
+
+  // 1. Check for public free email providers
+  if (PUBLIC_EMAIL_PROVIDERS.has(emailDomain)) {
+    return res.status(400).json({
+      message: `Company verification requires a professional domain email. Public email providers (@${emailDomain}) are not accepted.`
+    });
+  }
+
+  // 2. Validate domain match between website and email
+  const isDomainMatch = emailDomain === websiteDomain ||
+    emailDomain.endsWith("." + websiteDomain) ||
+    websiteDomain.endsWith("." + emailDomain);
+
+  if (!isDomainMatch) {
+    return res.status(400).json({
+      message: `Domain mismatch: Company email domain (@${emailDomain}) does not match company website domain (${websiteDomain}). Please provide an email address belonging to ${websiteDomain}.`
+    });
+  }
+
+  const user = await User.findById(req.user._id);
+  if (!user) return res.status(404).json({ message: "Recruiter account not found." });
+
+  // Generate cryptographically secure 6-digit OTP
+  const rawOtp = crypto.randomInt(100000, 1000000).toString();
+  const otpHash = crypto.createHash("sha256").update(rawOtp).digest("hex");
+
+  user.companyName = normName;
+  user.companyWebsite = normWebsite;
+  user.companyEmail = normEmail;
+  user.companyEmailVerified = false;
+  user.companyEmailOtpHash = otpHash;
+  user.companyEmailOtpExpire = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+  user.companyEmailOtpAttempts = 0;
+  user.recruiterVerificationStatus = "COMPANY_EMAIL_VERIFICATION_PENDING";
+
+  await user.save();
+
+  // Send plaintext OTP via email ONLY
+  const otpHtml = `
+<!DOCTYPE html><html><head><meta charset="UTF-8"></head>
+<body style="font-family:sans-serif;background:#0a0e1a;color:#e8ecf4;padding:40px;">
+  <div style="max-width:520px;margin:0 auto;">
+    <h1 style="font-size:28px;font-weight:900;font-style:italic;letter-spacing:-1px;margin-bottom:4px;">
+      VERI<span style="color:#6b8aff">PROOF</span><span style="color:#6b8aff">.</span>
+    </h1>
+    <p style="font-family:monospace;font-size:10px;letter-spacing:3px;text-transform:uppercase;color:#5a6478;margin-top:0;">Company Domain Verification</p>
+    <hr style="border-color:#1a2040;margin:24px 0;">
+    <p>Hi <strong>${user.name}</strong>,</p>
+    <p>Please enter the 6-digit verification code below to verify domain control for <strong>${normName}</strong> (${normEmail}).</p>
+    <div style="background:#0d1226;border:1px solid #6b8aff;border-radius:12px;padding:32px;margin:24px 0;text-align:center;">
+      <div style="font-size:42px;font-weight:900;letter-spacing:12px;color:#6b8aff;font-family:monospace;">${rawOtp}</div>
+      <div style="font-size:11px;color:#5a6478;margin-top:8px;font-family:monospace;">Company Verification Code (Expires in 10 mins)</div>
+    </div>
+    <p style="color:#5a6478;font-size:12px;">If you did not request this, please ignore this message.</p>
+    <hr style="border-color:#1a2040;margin:24px 0;">
+    <p style="color:#5a6478;font-size:11px;font-family:monospace;">VeriProof Platform &mdash; Recruiter Verification Engine</p>
+  </div>
+</body></html>`;
+
+  try {
+    await sendEmail({
+      email: normEmail,
+      subject: `[VeriProof] Verify ${normName} Company Domain`,
+      html: otpHtml,
+    });
+  } catch (err) {
+    console.warn("[Company Onboarding] Email delivery warning:", err.message);
+  }
+
+  res.json({
+    success: true,
+    message: `Company details saved. A 6-digit verification code was sent to ${normEmail}.`,
+    recruiterVerificationStatus: "COMPANY_EMAIL_VERIFICATION_PENDING",
+    companyName: user.companyName,
+    companyWebsite: user.companyWebsite,
+    companyEmail: user.companyEmail,
+  });
+};
+
+// @desc    Recruiter Step 3: Verify Company Email OTP
+// @route   POST /api/users/recruiter/verify-company-email
+// @access  Private (Recruiter only)
+const verifyCompanyEmail = async (req, res) => {
+  const { otp } = req.body;
+  if (!otp) return res.status(400).json({ message: "Verification OTP code is required." });
+
+  const user = await User.findById(req.user._id);
+  if (!user) return res.status(404).json({ message: "User account not found." });
+
+  if (!user.companyEmailOtpHash || !user.companyEmailOtpExpire) {
+    return res.status(400).json({ message: "No active verification request found. Please request a new verification code." });
+  }
+
+  if (new Date() > new Date(user.companyEmailOtpExpire)) {
+    user.companyEmailOtpHash = undefined;
+    user.companyEmailOtpExpire = undefined;
+    await user.save();
+    return res.status(400).json({ message: "Verification code has expired. Please request a new verification code." });
+  }
+
+  if ((user.companyEmailOtpAttempts || 0) >= 5) {
+    user.companyEmailOtpHash = undefined;
+    user.companyEmailOtpExpire = undefined;
+    user.companyEmailOtpAttempts = 0;
+    await user.save();
+    return res.status(429).json({ message: "Maximum verification attempts exceeded (5/5). Please request a new code." });
+  }
+
+  const submittedHash = crypto.createHash("sha256").update(String(otp).trim()).digest("hex");
+
+  if (submittedHash !== user.companyEmailOtpHash) {
+    user.companyEmailOtpAttempts = (user.companyEmailOtpAttempts || 0) + 1;
+    await user.save();
+    const remaining = 5 - user.companyEmailOtpAttempts;
+    return res.status(400).json({
+      message: `Invalid verification code. ${remaining} attempt${remaining !== 1 ? "s" : ""} remaining.`
+    });
+  }
+
+  // OTP verified successfully — clear OTP state immediately
+  user.companyEmailOtpHash = undefined;
+  user.companyEmailOtpExpire = undefined;
+  user.companyEmailOtpAttempts = 0;
+  user.companyEmailVerified = true;
+  user.recruiterVerificationStatus = "COMPANY_EMAIL_VERIFIED";
+
+  await user.save();
+
+  res.json({
+    success: true,
+    message: "Company email domain verified successfully.",
+    recruiterVerificationStatus: "COMPANY_EMAIL_VERIFIED",
+    companyEmailVerified: true,
+  });
+};
+
 module.exports = {
   registerUser,
   authUser,
@@ -764,4 +1194,7 @@ module.exports = {
   forgotPassword,
   resetPassword,
   deleteUserAccount,
+  firebaseGoogleAuth,
+  updateCompanyInfo,
+  verifyCompanyEmail,
 };

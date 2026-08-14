@@ -15,6 +15,9 @@ const {
   forgotPassword,
   resetPassword,
   deleteUserAccount,
+  firebaseGoogleAuth,
+  updateCompanyInfo,
+  verifyCompanyEmail,
 } = require("../controllers/authController");
 
 const { protect, recruiterOnly } = require("../middleware/authMiddleware");
@@ -374,7 +377,12 @@ router.get("/profile/resume-analyses", protect, async (req, res) => {
   }
 });
 
-// ====================== OTHER ROUTES ======================
+// Mandatory Firebase Google OAuth Identity Route
+router.post("/firebase-auth", authLimiter, firebaseGoogleAuth);
+
+// Recruiter Onboarding & Verification Routes
+router.post("/recruiter/company-info", protect, recruiterOnly, updateCompanyInfo);
+router.post("/recruiter/verify-company-email", protect, recruiterOnly, verifyCompanyEmail);
 
 router.post("/", authLimiter, registerValidator, validate, registerUser);
 router.post("/login", authLimiter, loginValidator, validate, authUser);
