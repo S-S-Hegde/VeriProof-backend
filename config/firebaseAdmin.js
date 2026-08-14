@@ -9,11 +9,20 @@ const initFirebaseAdmin = () => {
     return true;
   }
 
+  if (!process.env.FIREBASE_PROJECT_ID) {
+    try {
+      require("dotenv").config();
+    } catch (e) {
+      // Ignore if dotenv is not available
+    }
+  }
+
   const projectId = process.env.FIREBASE_PROJECT_ID;
   const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
-  const privateKey = process.env.FIREBASE_PRIVATE_KEY
-    ? process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n")
-    : null;
+  let privateKey = process.env.FIREBASE_PRIVATE_KEY || null;
+  if (privateKey) {
+    privateKey = privateKey.replace(/\\n/g, "\n");
+  }
   const serviceAccountPath = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
 
   try {
@@ -36,21 +45,15 @@ const initFirebaseAdmin = () => {
       isInitialized = true;
       console.log("[Firebase Admin] Initialized via environment variables.");
       return true;
-    } else if (projectId) {
-      admin.initializeApp({
-        projectId,
-      });
-      isInitialized = true;
-      console.log("[Firebase Admin] Initialized via project ID.");
-      return true;
+    } else {
+      isInitialized = false;
+      return false;
     }
   } catch (err) {
     console.error("[Firebase Admin] Failed to initialize Admin SDK:", err.message);
     isInitialized = false;
     return false;
   }
-
-  return false;
 };
 
 // Attempt initial setup on load

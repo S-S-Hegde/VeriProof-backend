@@ -1,5 +1,7 @@
 const express = require("express");
 const dotenv = require("dotenv");
+dotenv.config();
+
 const cors = require("cors");
 const connectDB = require("./config/db");
 const { generalLimiter } = require("./middleware/rateLimiter");
@@ -11,9 +13,6 @@ const verifyRoutes  = require("./routes/verifyRoutes");
 const examRoutes    = require("./routes/examRoutes");
 const skillTreeRoutes = require("./routes/skillTreeRoutes");
 const githubRoutes  = require("./routes/githubRoutes");
-
-// Load env vars
-dotenv.config();
 
 // Connect to database
 connectDB();
