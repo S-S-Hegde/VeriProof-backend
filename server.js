@@ -29,7 +29,7 @@ app.use(cors({
       "http://localhost:5173",
       "http://localhost:5174",
     ];
-    if (allowed.includes(origin)) return callback(null, true);
+    if (allowed.includes(origin) || origin.endsWith(".vercel.app")) return callback(null, true);
     return callback(new Error("CORS: origin not allowed: " + origin));
   },
   credentials: true,
