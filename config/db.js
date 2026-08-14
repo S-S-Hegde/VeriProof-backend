@@ -9,17 +9,23 @@ const connectDB = async () => {
 
   const attemptConnect = async () => {
     try {
-      if (!process.env.MONGO_URI) {
-        console.warn("[MongoDB] MONGO_URI is not set. Database operations will remain unavailable.");
+      const uri = process.env.MONGO_URI || process.env.MONGODB_URI || process.env.DATABASE_URL;
+
+      if (!uri) {
+        console.warn(
+          "[MongoDB] Neither MONGO_URI nor MONGODB_URI is set. Please set MONGO_URI in Render Environment Variables."
+        );
         return;
       }
 
-      const conn = await mongoose.connect(process.env.MONGO_URI);
+      const conn = await mongoose.connect(uri);
       console.log(`[MongoDB] Connected successfully: ${conn.connection.host}`);
     } catch (error) {
       const nextDelay = RETRY_INTERVALS_MS[Math.min(attempt, RETRY_INTERVALS_MS.length - 1)];
       attempt++;
-      console.error(`[MongoDB] Connection attempt ${attempt} failed: ${error.message}. Retrying in ${nextDelay / 1000}s...`);
+      console.error(
+        `[MongoDB] Connection attempt ${attempt} failed: ${error.message}. Retrying in ${nextDelay / 1000}s...`
+      );
 
       setTimeout(attemptConnect, nextDelay);
     }

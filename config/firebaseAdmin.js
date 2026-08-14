@@ -26,21 +26,44 @@ const initFirebaseAdmin = () => {
   if (privateKey) {
     privateKey = privateKey.replace(/\\n/g, "\n");
   }
-  const serviceAccountPath = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
+  const serviceAccountRaw = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
 
   try {
-    if (serviceAccountPath) {
-      const resolvedPath = path.isAbsolute(serviceAccountPath)
-        ? serviceAccountPath
-        : path.resolve(process.cwd(), serviceAccountPath);
-      const serviceAccount = require(resolvedPath);
-      admin.initializeApp({
-        credential: cert(serviceAccount),
-      });
-      isInitialized = true;
-      console.log("[Firebase Admin] Initialized via service account JSON file.");
-      return true;
-    } else if (projectId && clientEmail && privateKey) {
+    // Strategy 1: FIREBASE_SERVICE_ACCOUNT_KEY contains JSON string (Render env var)
+    if (serviceAccountRaw && typeof serviceAccountRaw === "string" && serviceAccountRaw.trim().startsWith("{")) {
+      try {
+        const serviceAccount = JSON.parse(serviceAccountRaw.trim());
+        admin.initializeApp({
+          credential: cert(serviceAccount),
+        });
+        isInitialized = true;
+        console.log("[Firebase Admin] Initialized via service account JSON string.");
+        return true;
+      } catch (jsonErr) {
+        console.error("[Firebase Admin] Failed to parse FIREBASE_SERVICE_ACCOUNT_KEY JSON string.");
+      }
+    }
+
+    // Strategy 2: FIREBASE_SERVICE_ACCOUNT_KEY is a local file path
+    if (serviceAccountRaw && typeof serviceAccountRaw === "string") {
+      const fs = require("fs");
+      const resolvedPath = path.isAbsolute(serviceAccountRaw)
+        ? serviceAccountRaw
+        : path.resolve(process.cwd(), serviceAccountRaw);
+
+      if (fs.existsSync(resolvedPath)) {
+        const serviceAccount = require(resolvedPath);
+        admin.initializeApp({
+          credential: cert(serviceAccount),
+        });
+        isInitialized = true;
+        console.log("[Firebase Admin] Initialized via service account JSON file.");
+        return true;
+      }
+    }
+
+    // Strategy 3: Individual Environment Variables (FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY)
+    if (projectId && clientEmail && privateKey) {
       admin.initializeApp({
         credential: cert({
           projectId,
@@ -49,12 +72,12 @@ const initFirebaseAdmin = () => {
         }),
       });
       isInitialized = true;
-      console.log("[Firebase Admin] Initialized via environment variables.");
+      console.log("[Firebase Admin] Initialized via individual environment variables.");
       return true;
-    } else {
-      isInitialized = false;
-      return false;
     }
+
+    isInitialized = false;
+    return false;
   } catch (err) {
     console.error("[Firebase Admin] Failed to initialize Admin SDK:", err.message);
     isInitialized = false;
