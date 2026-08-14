@@ -3,4 +3,7 @@ node_modules/
 uploads/
 npm-debug.log
 .DS_Store
-.env
+serviceAccountKey.json
+config/serviceAccountKey.json
+*.json.secret
+

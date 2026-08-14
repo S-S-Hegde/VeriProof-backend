@@ -1,4 +1,7 @@
 const admin = require("firebase-admin");
+const { cert } = require("firebase-admin/app");
+const { getAuth } = require("firebase-admin/auth");
+const path = require("path");
 
 let isInitialized = false;
 
@@ -27,16 +30,19 @@ const initFirebaseAdmin = () => {
 
   try {
     if (serviceAccountPath) {
-      const serviceAccount = require(serviceAccountPath);
+      const resolvedPath = path.isAbsolute(serviceAccountPath)
+        ? serviceAccountPath
+        : path.resolve(process.cwd(), serviceAccountPath);
+      const serviceAccount = require(resolvedPath);
       admin.initializeApp({
-        credential: admin.credential.cert(serviceAccount),
+        credential: cert(serviceAccount),
       });
       isInitialized = true;
       console.log("[Firebase Admin] Initialized via service account JSON file.");
       return true;
     } else if (projectId && clientEmail && privateKey) {
       admin.initializeApp({
-        credential: admin.credential.cert({
+        credential: cert({
           projectId,
           clientEmail,
           privateKey,
@@ -94,7 +100,8 @@ const verifyFirebaseIdToken = async (idToken) => {
 
   try {
     // Check revocation (checkRevoked = true)
-    const decodedToken = await admin.auth().verifyIdToken(idToken, true);
+    const auth = typeof admin.auth === "function" ? admin.auth() : getAuth();
+    const decodedToken = await auth.verifyIdToken(idToken, true);
     return decodedToken;
   } catch (err) {
     console.error("[Firebase Admin] Token verification failed:", err.message);
