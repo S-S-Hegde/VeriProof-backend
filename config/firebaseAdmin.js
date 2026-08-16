@@ -29,18 +29,45 @@ const initFirebaseAdmin = () => {
   const serviceAccountRaw = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
 
   try {
-    // Strategy 1: FIREBASE_SERVICE_ACCOUNT_KEY contains JSON string (Render env var)
-    if (serviceAccountRaw && typeof serviceAccountRaw === "string" && serviceAccountRaw.trim().startsWith("{")) {
-      try {
-        const serviceAccount = JSON.parse(serviceAccountRaw.trim());
-        admin.initializeApp({
-          credential: cert(serviceAccount),
-        });
-        isInitialized = true;
-        console.log("[Firebase Admin] Initialized via service account JSON string.");
-        return true;
-      } catch (jsonErr) {
-        console.error("[Firebase Admin] Failed to parse FIREBASE_SERVICE_ACCOUNT_KEY JSON string.");
+    // Strategy 1: FIREBASE_SERVICE_ACCOUNT_KEY contains JSON string or Base64 (Render env var)
+    if (serviceAccountRaw && typeof serviceAccountRaw === "string") {
+      let rawString = serviceAccountRaw.trim();
+
+      // Strip outer quotes if pasted with quotes on Render
+      if (
+        (rawString.startsWith('"') && rawString.endsWith('"')) ||
+        (rawString.startsWith("'") && rawString.endsWith("'"))
+      ) {
+        rawString = rawString.slice(1, -1).trim();
+      }
+
+      // Check if it's base64 encoded JSON
+      if (!rawString.startsWith("{")) {
+        try {
+          const decoded = Buffer.from(rawString, "base64").toString("utf8");
+          if (decoded.trim().startsWith("{")) {
+            rawString = decoded.trim();
+          }
+        } catch (e) {
+          // not base64
+        }
+      }
+
+      if (rawString.startsWith("{")) {
+        try {
+          const serviceAccount = JSON.parse(rawString);
+          if (serviceAccount.private_key) {
+            serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, "\n");
+          }
+          admin.initializeApp({
+            credential: cert(serviceAccount),
+          });
+          isInitialized = true;
+          console.log("[Firebase Admin] Initialized via service account JSON string.");
+          return true;
+        } catch (jsonErr) {
+          console.error("[Firebase Admin] Failed to parse FIREBASE_SERVICE_ACCOUNT_KEY JSON string:", jsonErr.message);
+        }
       }
     }
 
@@ -74,6 +101,23 @@ const initFirebaseAdmin = () => {
       isInitialized = true;
       console.log("[Firebase Admin] Initialized via individual environment variables.");
       return true;
+    }
+
+    // Strategy 4: Try loading default serviceAccountKey.json if present in config directory
+    try {
+      const defaultPath = path.resolve(__dirname, "serviceAccountKey.json");
+      const fs = require("fs");
+      if (fs.existsSync(defaultPath)) {
+        const serviceAccount = require(defaultPath);
+        admin.initializeApp({
+          credential: cert(serviceAccount),
+        });
+        isInitialized = true;
+        console.log("[Firebase Admin] Initialized via default config/serviceAccountKey.json.");
+        return true;
+      }
+    } catch (e) {
+      // ignore
     }
 
     isInitialized = false;
