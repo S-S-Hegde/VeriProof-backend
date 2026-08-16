@@ -27,24 +27,32 @@ app.use(
       // Allow non-browser clients (curl, Postman, server-to-server)
       if (!origin) return callback(null, true);
 
+      const normalizedOrigin = origin.replace(/\/$/, "");
+      const frontendUrl = (process.env.FRONTEND_URL || "").replace(/\/$/, "");
+
       const allowedOrigins = [
-        process.env.FRONTEND_URL,
+        frontendUrl,
         "http://localhost:5173",
         "http://localhost:5174",
+        "http://localhost:3000",
+        "http://127.0.0.1:5173",
       ].filter(Boolean);
 
-      if (allowedOrigins.includes(origin)) {
+      // Match explicit allowed origins
+      if (allowedOrigins.includes(normalizedOrigin)) {
         return callback(null, true);
       }
 
-      // Explicit optional Vercel preview origin support
+      // Automatically support all Vercel deployments (*.vercel.app)
       if (
-        process.env.ALLOW_VERCEL_PREVIEWS === "true" &&
-        /^https:\/\/veriproof-[a-z0-9-]+\.vercel\.app$/i.test(origin)
+        /^https:\/\/([a-z0-9-]+\.)*vercel\.app$/i.test(normalizedOrigin) ||
+        (process.env.ADDITIONAL_ALLOWED_ORIGINS &&
+          process.env.ADDITIONAL_ALLOWED_ORIGINS.split(",").map((o) => o.trim().replace(/\/$/, "")).includes(normalizedOrigin))
       ) {
         return callback(null, true);
       }
 
+      console.warn(`[CORS Blocked] Origin not allowed: ${origin}`);
       return callback(new Error("CORS: origin not allowed: " + origin));
     },
     credentials: true,
