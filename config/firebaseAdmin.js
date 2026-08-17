@@ -4,6 +4,23 @@ const { getAuth } = require("firebase-admin/auth");
 const path = require("path");
 
 let isInitialized = false;
+let lastInitError = null;
+
+const cleanPrivateKey = (raw) => {
+  if (!raw) return null;
+  let key = String(raw).trim();
+  // Strip quotes if user pasted into Render with surrounding quotes
+  if (
+    (key.startsWith('"') && key.endsWith('"')) ||
+    (key.startsWith("'") && key.endsWith("'"))
+  ) {
+    key = key.slice(1, -1).trim();
+  }
+  // Convert literal escaped newlines to real newlines
+  key = key.replace(/\\n/g, "\n");
+  key = key.replace(/\r\n/g, "\n");
+  return key;
+};
 
 const initFirebaseAdmin = () => {
   if (isInitialized) return true;
@@ -20,12 +37,9 @@ const initFirebaseAdmin = () => {
     }
   }
 
-  const projectId = process.env.FIREBASE_PROJECT_ID;
-  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
-  let privateKey = process.env.FIREBASE_PRIVATE_KEY || null;
-  if (privateKey) {
-    privateKey = privateKey.replace(/\\n/g, "\n");
-  }
+  const projectId = process.env.FIREBASE_PROJECT_ID ? process.env.FIREBASE_PROJECT_ID.trim() : null;
+  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL ? process.env.FIREBASE_CLIENT_EMAIL.trim() : null;
+  const privateKey = cleanPrivateKey(process.env.FIREBASE_PRIVATE_KEY);
   const serviceAccountRaw = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
 
   try {
@@ -33,7 +47,6 @@ const initFirebaseAdmin = () => {
     if (serviceAccountRaw && typeof serviceAccountRaw === "string") {
       let rawString = serviceAccountRaw.trim();
 
-      // Strip outer quotes if pasted with quotes on Render
       if (
         (rawString.startsWith('"') && rawString.endsWith('"')) ||
         (rawString.startsWith("'") && rawString.endsWith("'"))
@@ -41,7 +54,6 @@ const initFirebaseAdmin = () => {
         rawString = rawString.slice(1, -1).trim();
       }
 
-      // Check if it's base64 encoded JSON
       if (!rawString.startsWith("{")) {
         try {
           const decoded = Buffer.from(rawString, "base64").toString("utf8");
@@ -57,15 +69,17 @@ const initFirebaseAdmin = () => {
         try {
           const serviceAccount = JSON.parse(rawString);
           if (serviceAccount.private_key) {
-            serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, "\n");
+            serviceAccount.private_key = cleanPrivateKey(serviceAccount.private_key);
           }
           admin.initializeApp({
             credential: cert(serviceAccount),
           });
           isInitialized = true;
+          lastInitError = null;
           console.log("[Firebase Admin] Initialized via service account JSON string.");
           return true;
         } catch (jsonErr) {
+          lastInitError = `JSON parse error: ${jsonErr.message}`;
           console.error("[Firebase Admin] Failed to parse FIREBASE_SERVICE_ACCOUNT_KEY JSON string:", jsonErr.message);
         }
       }
@@ -80,10 +94,14 @@ const initFirebaseAdmin = () => {
 
       if (fs.existsSync(resolvedPath)) {
         const serviceAccount = require(resolvedPath);
+        if (serviceAccount.private_key) {
+          serviceAccount.private_key = cleanPrivateKey(serviceAccount.private_key);
+        }
         admin.initializeApp({
           credential: cert(serviceAccount),
         });
         isInitialized = true;
+        lastInitError = null;
         console.log("[Firebase Admin] Initialized via service account JSON file.");
         return true;
       }
@@ -91,16 +109,29 @@ const initFirebaseAdmin = () => {
 
     // Strategy 3: Individual Environment Variables (FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY)
     if (projectId && clientEmail && privateKey) {
-      admin.initializeApp({
-        credential: cert({
-          projectId,
-          clientEmail,
-          privateKey,
-        }),
-      });
-      isInitialized = true;
-      console.log("[Firebase Admin] Initialized via individual environment variables.");
-      return true;
+      try {
+        admin.initializeApp({
+          credential: cert({
+            projectId,
+            clientEmail,
+            privateKey,
+          }),
+        });
+        isInitialized = true;
+        lastInitError = null;
+        console.log("[Firebase Admin] Initialized via individual environment variables.");
+        return true;
+      } catch (certErr) {
+        lastInitError = `Individual vars cert error: ${certErr.message}`;
+        console.error("[Firebase Admin] Error initializing with individual vars:", certErr.message);
+      }
+    } else {
+      const missing = [];
+      if (!projectId) missing.push("FIREBASE_PROJECT_ID");
+      if (!clientEmail) missing.push("FIREBASE_CLIENT_EMAIL");
+      if (!privateKey) missing.push("FIREBASE_PRIVATE_KEY");
+      if (!serviceAccountRaw) missing.push("FIREBASE_SERVICE_ACCOUNT_KEY");
+      lastInitError = `Missing server credentials: ${missing.join(", ")}`;
     }
 
     // Strategy 4: Try loading default serviceAccountKey.json if present in config directory
@@ -113,6 +144,7 @@ const initFirebaseAdmin = () => {
           credential: cert(serviceAccount),
         });
         isInitialized = true;
+        lastInitError = null;
         console.log("[Firebase Admin] Initialized via default config/serviceAccountKey.json.");
         return true;
       }
@@ -123,6 +155,7 @@ const initFirebaseAdmin = () => {
     isInitialized = false;
     return false;
   } catch (err) {
+    lastInitError = err.message;
     console.error("[Firebase Admin] Failed to initialize Admin SDK:", err.message);
     isInitialized = false;
     return false;
@@ -161,7 +194,7 @@ const verifyFirebaseIdToken = async (idToken) => {
   const ready = initFirebaseAdmin();
   if (!ready) {
     throw new FirebaseConfigError(
-      "Firebase Admin SDK is not configured on the server. Please configure FIREBASE_PROJECT_ID and credentials."
+      `Firebase Admin SDK is not configured on the server (${lastInitError || "Missing credentials"}). Please configure FIREBASE_PROJECT_ID and credentials in Render.`
     );
   }
 
