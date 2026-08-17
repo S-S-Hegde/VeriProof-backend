@@ -232,8 +232,20 @@ const authUser = async (req, res) => {
       });
     }
 
+    if (!user.password && user.authProvider === "google") {
+      return res.status(401).json({
+        message:
+          "This account is linked with Google OAuth. Please click 'Continue with Google OAuth' or reset your password to establish a password.",
+        userExists: true,
+        authProvider: "google",
+      });
+    }
+
     if (!(await user.matchPassword(password))) {
-      return res.status(401).json({ message: "Incorrect password. Please verify your credentials or reset your password.", userExists: true });
+      return res.status(401).json({
+        message: "Incorrect password. Please verify your credentials or reset your password.",
+        userExists: true,
+      });
     }
 
     // Role-mismatch guard: user exists but registered under a different role
