@@ -1036,55 +1036,44 @@ const firebaseGoogleAuth = async (req, res) => {
   }
 };
 
-// @desc    Recruiter Step 2: Update Company Details & Send Domain Email Verification OTP
+// @desc    Recruiter Step 2: Update Recruiter LinkedIn & Send Email Verification OTP
 // @route   POST /api/users/recruiter/company-info
 // @access  Private (Recruiter only)
 const updateCompanyInfo = async (req, res) => {
-  const { companyName, companyWebsite, companyEmail } = req.body;
-
-  if (!companyName || !companyWebsite || !companyEmail) {
-    return res.status(400).json({ message: "Company name, company website, and professional email address are required." });
-  }
-
-  const normName = companyName.trim();
-  const normWebsite = companyWebsite.trim().toLowerCase();
-  const normEmail = companyEmail.trim().toLowerCase();
-
-  const emailDomain = normEmail.split("@")[1] || "";
-  const websiteDomain = extractDomain(normWebsite);
-
-  if (!emailDomain || !websiteDomain) {
-    return res.status(400).json({ message: "Invalid company website URL or email address format." });
-  }
-
-  // 1. Check for public free email providers
-  if (PUBLIC_EMAIL_PROVIDERS.has(emailDomain)) {
-    return res.status(400).json({
-      message: `Company verification requires a professional domain email. Public email providers (@${emailDomain}) are not accepted.`
-    });
-  }
-
-  // 2. Validate domain match between website and email
-  const isDomainMatch = emailDomain === websiteDomain ||
-    emailDomain.endsWith("." + websiteDomain) ||
-    websiteDomain.endsWith("." + emailDomain);
-
-  if (!isDomainMatch) {
-    return res.status(400).json({
-      message: `Domain mismatch: Company email domain (@${emailDomain}) does not match company website domain (${websiteDomain}). Please provide an email address belonging to ${websiteDomain}.`
-    });
-  }
+  const { linkedinUsername, linkedinUrl, companyEmail, companyName } = req.body;
 
   const user = await User.findById(req.user._id);
   if (!user) return res.status(404).json({ message: "Recruiter account not found." });
+
+  const rawLinkedin = (linkedinUsername || linkedinUrl || "").trim();
+  if (!rawLinkedin) {
+    return res.status(400).json({ message: "LinkedIn profile URL or username is required." });
+  }
+
+  // Normalize LinkedIn username and URL
+  let cleanUsername = rawLinkedin
+    .replace(/^https?:\/\/(www\.)?linkedin\.com\/in\//i, "")
+    .replace(/\/.*$/, "")
+    .replace(/^@/, "")
+    .trim();
+
+  let cleanUrl = rawLinkedin.startsWith("http")
+    ? rawLinkedin
+    : `https://www.linkedin.com/in/${cleanUsername}`;
+
+  const targetEmail = (companyEmail || user.email || "").trim().toLowerCase();
+  if (!targetEmail || !targetEmail.includes("@")) {
+    return res.status(400).json({ message: "A valid email address is required to receive the verification code." });
+  }
 
   // Generate cryptographically secure 6-digit OTP
   const rawOtp = crypto.randomInt(100000, 1000000).toString();
   const otpHash = crypto.createHash("sha256").update(rawOtp).digest("hex");
 
-  user.companyName = normName;
-  user.companyWebsite = normWebsite;
-  user.companyEmail = normEmail;
+  user.linkedinUsername = cleanUsername;
+  user.linkedinUrl = cleanUrl;
+  user.companyEmail = targetEmail;
+  user.companyName = companyName?.trim() || user.companyName || `${cleanUsername} (LinkedIn)`;
   user.companyEmailVerified = false;
   user.companyEmailOtpHash = otpHash;
   user.companyEmailOtpExpire = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
@@ -1093,21 +1082,21 @@ const updateCompanyInfo = async (req, res) => {
 
   await user.save();
 
-  // Send plaintext OTP via email ONLY
+  // Send plaintext OTP via email
   const otpHtml = `
 <!DOCTYPE html><html><head><meta charset="UTF-8"></head>
 <body style="font-family:sans-serif;background:#0a0e1a;color:#e8ecf4;padding:40px;">
   <div style="max-width:520px;margin:0 auto;">
     <h1 style="font-size:28px;font-weight:900;font-style:italic;letter-spacing:-1px;margin-bottom:4px;">
-      VERI<span style="color:#6b8aff">PROOF</span><span style="color:#6b8aff">.</span>
+      VERI<span style="color:#0a66c2">PROOF</span><span style="color:#0a66c2">.</span>
     </h1>
-    <p style="font-family:monospace;font-size:10px;letter-spacing:3px;text-transform:uppercase;color:#5a6478;margin-top:0;">Company Domain Verification</p>
+    <p style="font-family:monospace;font-size:10px;letter-spacing:3px;text-transform:uppercase;color:#5a6478;margin-top:0;">LinkedIn Recruiter Verification</p>
     <hr style="border-color:#1a2040;margin:24px 0;">
     <p>Hi <strong>${user.name}</strong>,</p>
-    <p>Please enter the 6-digit verification code below to verify domain control for <strong>${normName}</strong> (${normEmail}).</p>
-    <div style="background:#0d1226;border:1px solid #6b8aff;border-radius:12px;padding:32px;margin:24px 0;text-align:center;">
-      <div style="font-size:42px;font-weight:900;letter-spacing:12px;color:#6b8aff;font-family:monospace;">${rawOtp}</div>
-      <div style="font-size:11px;color:#5a6478;margin-top:8px;font-family:monospace;">Company Verification Code (Expires in 10 mins)</div>
+    <p>Please enter the 6-digit verification code below to verify your recruiter profile for LinkedIn account <strong>${cleanUsername}</strong>.</p>
+    <div style="background:#0d1226;border:1px solid #0a66c2;border-radius:12px;padding:32px;margin:24px 0;text-align:center;">
+      <div style="font-size:42px;font-weight:900;letter-spacing:12px;color:#0a66c2;font-family:monospace;">${rawOtp}</div>
+      <div style="font-size:11px;color:#5a6478;margin-top:8px;font-family:monospace;">Recruiter Verification Code (Expires in 10 mins)</div>
     </div>
     <p style="color:#5a6478;font-size:12px;">If you did not request this, please ignore this message.</p>
     <hr style="border-color:#1a2040;margin:24px 0;">
@@ -1116,28 +1105,28 @@ const updateCompanyInfo = async (req, res) => {
 </body></html>`;
 
   console.log("\n========================================");
-  console.log("[RECRUITER DOMAIN VERIFICATION OTP]");
-  console.log(`Company: ${normName} (${normWebsite})`);
-  console.log(`Email:   ${normEmail}`);
-  console.log(`OTP:     ${rawOtp}`);
+  console.log("[RECRUITER LINKEDIN VERIFICATION OTP]");
+  console.log(`LinkedIn: ${cleanUsername} (${cleanUrl})`);
+  console.log(`Email:    ${targetEmail}`);
+  console.log(`OTP:      ${rawOtp}`);
   console.log("========================================\n");
 
   try {
     await sendEmail({
-      email: normEmail,
-      subject: `[VeriProof] Verify ${normName} Company Domain`,
+      email: targetEmail,
+      subject: `[VeriProof] Verify LinkedIn Recruiter Identity (${cleanUsername})`,
       html: otpHtml,
     });
   } catch (err) {
-    console.warn("[Company Onboarding] Email delivery warning:", err.message);
+    console.warn("[Recruiter Onboarding] Email delivery warning:", err.message);
   }
 
   res.json({
     success: true,
-    message: `Company details saved. A 6-digit verification code was sent to ${normEmail}.`,
+    message: `Verification code sent to ${targetEmail}.`,
     recruiterVerificationStatus: "COMPANY_EMAIL_VERIFICATION_PENDING",
-    companyName: user.companyName,
-    companyWebsite: user.companyWebsite,
+    linkedinUsername: user.linkedinUsername,
+    linkedinUrl: user.linkedinUrl,
     companyEmail: user.companyEmail,
   });
 };
@@ -1189,15 +1178,19 @@ const verifyCompanyEmail = async (req, res) => {
   user.companyEmailOtpExpire = undefined;
   user.companyEmailOtpAttempts = 0;
   user.companyEmailVerified = true;
+  user.linkedinVerified = true;
   user.recruiterVerificationStatus = "COMPANY_EMAIL_VERIFIED";
 
   await user.save();
 
   res.json({
     success: true,
-    message: "Company email domain verified successfully.",
+    message: "LinkedIn recruiter profile verified successfully.",
     recruiterVerificationStatus: "COMPANY_EMAIL_VERIFIED",
     companyEmailVerified: true,
+    linkedinVerified: true,
+    linkedinUsername: user.linkedinUsername,
+    linkedinUrl: user.linkedinUrl,
   });
 };
 

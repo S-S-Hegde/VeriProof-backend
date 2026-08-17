@@ -86,6 +86,9 @@ const userSchema = new mongoose.Schema(
     companyEmailOtpHash:         String,
     companyEmailOtpExpire:       Date,
     companyEmailOtpAttempts:     { type: Number, default: 0 },
+    linkedinUsername:            { type: String, default: "" },
+    linkedinUrl:                 { type: String, default: "" },
+    linkedinVerified:            { type: Boolean, default: false },
 
     // Single source of truth for candidate workflow architecture
     origin: {
