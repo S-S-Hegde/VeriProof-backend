@@ -1109,15 +1109,14 @@ const updateCompanyInfo = async (req, res) => {
   console.log(`OTP:      ${rawOtp}`);
   console.log("========================================\n");
 
-  try {
-    await sendEmail({
-      email: targetEmail,
-      subject: `[VeriProof] Verify LinkedIn Recruiter Identity (${cleanUsername})`,
-      html: otpHtml,
-    });
-  } catch (err) {
+  // Non-blocking async email delivery
+  sendEmail({
+    email: targetEmail,
+    subject: `[VeriProof] Verify LinkedIn Recruiter Identity (${cleanUsername})`,
+    html: otpHtml,
+  }).catch((err) => {
     console.warn("[Recruiter Onboarding] Email delivery warning:", err.message);
-  }
+  });
 
   res.json({
     success: true,

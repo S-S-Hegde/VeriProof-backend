@@ -199,9 +199,9 @@ const verifyFirebaseIdToken = async (idToken) => {
   }
 
   try {
-    // Check revocation (checkRevoked = true)
+    // Fast in-memory cryptographic verification using cached public certificates
     const auth = typeof admin.auth === "function" ? admin.auth() : getAuth();
-    const decodedToken = await auth.verifyIdToken(idToken, true);
+    const decodedToken = await auth.verifyIdToken(idToken, false);
     return decodedToken;
   } catch (err) {
     console.error("[Firebase Admin] Token verification failed:", err.message);
