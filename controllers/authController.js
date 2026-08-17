@@ -799,11 +799,9 @@ const extractDomain = (str) => {
 const firebaseGoogleAuth = async (req, res) => {
   const { verifyFirebaseIdToken, FirebaseConfigError, FirebaseTokenError } = require("../config/firebaseAdmin");
 
-  let idToken;
-  if (req.headers.authorization && req.headers.authorization.startsWith("Bearer")) {
+  let idToken = (req.body && req.body.idToken) ? req.body.idToken : null;
+  if (!idToken && req.headers.authorization && req.headers.authorization.startsWith("Bearer")) {
     idToken = req.headers.authorization.split(" ")[1];
-  } else if (req.body.idToken) {
-    idToken = req.body.idToken;
   }
 
   if (!idToken) {
