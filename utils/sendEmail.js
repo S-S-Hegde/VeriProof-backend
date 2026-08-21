@@ -20,8 +20,13 @@ const hasRealSMTP = () =>
 
 const sendViaResend = async (options) => {
   const apiKey = process.env.RESEND_API_KEY.trim();
-  const fromEmail = process.env.FROM_EMAIL?.trim() || "onboarding@resend.dev";
-  const fromName = process.env.FROM_NAME?.trim() || "VeriProof";
+  let fromEmail = (process.env.FROM_EMAIL || "").trim();
+  
+  // Resend forbids public mailbox domains like @gmail.com — default to onboarding@resend.dev
+  if (!fromEmail || fromEmail.endsWith("@gmail.com") || fromEmail.endsWith("@googlemail.com") || fromEmail.endsWith("@yahoo.com") || fromEmail.endsWith("@outlook.com")) {
+    fromEmail = "onboarding@resend.dev";
+  }
+  const fromName = (process.env.FROM_NAME || "VeriProof").trim();
 
   const payload = {
     from: `${fromName} <${fromEmail}>`,
