@@ -57,6 +57,7 @@ const createSMTPTransport = (port = 587) => {
       host: "smtp-relay.brevo.com",
       port: 587,
       secure: false,
+      family: 4,
       auth: { user, pass },
       tls: { rejectUnauthorized: false },
     });
@@ -64,19 +65,11 @@ const createSMTPTransport = (port = 587) => {
 
   // Gmail SMTP
   if (host === "smtp.gmail.com" || user.endsWith("@gmail.com")) {
-    if (port === 465) {
-      return nodemailer.createTransport({
-        host: "smtp.gmail.com",
-        port: 465,
-        secure: true,
-        auth: { user, pass },
-        tls: { rejectUnauthorized: false },
-        pool: false,
-      });
-    }
-
     return nodemailer.createTransport({
-      service: "gmail",
+      host: "smtp.gmail.com",
+      port: 587,
+      secure: false,
+      family: 4,
       auth: { user, pass },
       tls: { rejectUnauthorized: false },
     });
@@ -87,6 +80,7 @@ const createSMTPTransport = (port = 587) => {
     host,
     port: Number(process.env.SMTP_PORT) || 587,
     secure: Number(process.env.SMTP_PORT) === 465,
+    family: 4,
     auth: { user, pass },
     tls: { rejectUnauthorized: false },
   });

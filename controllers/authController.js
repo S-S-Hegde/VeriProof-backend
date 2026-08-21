@@ -827,6 +827,14 @@ const firebaseGoogleAuth = async (req, res) => {
     let user = await User.findOne({ firebaseUid });
 
     if (user) {
+      // Strict role-mismatch guard
+      if (req.body.role && user.role !== targetRole) {
+        return res.status(403).json({
+          message: `Role mismatch: This Google account is registered as a ${user.role === "recruiter" ? "Recruiter" : "Candidate"}. You cannot sign in under the ${targetRole === "recruiter" ? "Recruiter" : "Candidate"} role.`,
+          existingRole: user.role,
+        });
+      }
+
       // Update Google profile information
       user.googleEmail = verifiedEmail;
       if (displayName) user.googleDisplayName = displayName;
@@ -862,6 +870,14 @@ const firebaseGoogleAuth = async (req, res) => {
     user = await User.findOne({ email: verifiedEmail });
 
     if (user) {
+      // Strict role-mismatch guard
+      if (req.body.role && user.role !== targetRole) {
+        return res.status(403).json({
+          message: `Role mismatch: This Google account is registered as a ${user.role === "recruiter" ? "Recruiter" : "Candidate"}. You cannot sign in under the ${targetRole === "recruiter" ? "Recruiter" : "Candidate"} role.`,
+          existingRole: user.role,
+        });
+      }
+
       // Safely link Firebase UID to existing account, preserving user._id and all existing data
       user.firebaseUid = firebaseUid;
       user.authProvider = "google";
