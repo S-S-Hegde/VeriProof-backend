@@ -944,7 +944,7 @@ const firebaseGoogleAuth = async (req, res) => {
       }
     }
 
-    // 5. Create New Application User with Verified Firebase Identity
+    // 5. Create New Application User with Verified Firebase Identity & Smart Defaults
     const newUser = await User.create({
       name: displayName || (targetRole === "recruiter" ? "Recruiter" : "Candidate"),
       email: verifiedEmail,
@@ -956,6 +956,10 @@ const firebaseGoogleAuth = async (req, res) => {
       googleDisplayName: displayName,
       googlePhotoURL: photoURL,
       profileImage: photoURL,
+      location: targetRole === "recruiter" ? "Bengaluru, Karnataka, India" : "",
+      branch: targetRole === "recruiter" ? "Technical Recruiter" : "",
+      bio: targetRole === "recruiter" ? "Lead Technical Recruiter specializing in Software Engineering & AI talent." : "",
+      companyName: targetRole === "recruiter" ? "VeriProof Talent Network" : "",
       origin: targetRole === "recruiter" ? "self_registered" : assignedOrigin,
       pipeline: targetRole === "recruiter" ? "recruiter_pipeline" : assignedPipeline,
       pipelineStage: targetRole === "recruiter" ? "registration" : assignedStage,
