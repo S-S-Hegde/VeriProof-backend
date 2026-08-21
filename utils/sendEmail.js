@@ -41,19 +41,34 @@ const sendViaResend = async (options) => {
   return data;
 };
 
-const createGmailTransport = () =>
-  nodemailer.createTransport({
+const createGmailTransport = () => {
+  const user = (process.env.SMTP_USER || "").trim();
+  const pass = (process.env.SMTP_PASS || "").trim().replace(/\s+/g, "");
+
+  // Use nodemailer built-in 'gmail' service definition for rock-solid TLS & authentication
+  if (user.endsWith("@gmail.com") || process.env.SMTP_HOST === "smtp.gmail.com") {
+    return nodemailer.createTransport({
+      service: "gmail",
+      auth: {
+        user,
+        pass,
+      },
+    });
+  }
+
+  return nodemailer.createTransport({
     host: process.env.SMTP_HOST || "smtp.gmail.com",
     port: Number(process.env.SMTP_PORT) || 587,
-    secure: false,
+    secure: Number(process.env.SMTP_PORT) === 465,
     auth: {
-      user: process.env.SMTP_USER.trim(),
-      pass: process.env.SMTP_PASS.trim(),
+      user,
+      pass,
     },
     tls: {
       rejectUnauthorized: false,
     },
   });
+};
 
 const createEtherealTransport = async () => {
   const testAccount = await nodemailer.createTestAccount();
@@ -93,14 +108,18 @@ const sendEmail = async (options) => {
     transporter = await createEtherealTransport();
   }
 
+  // When sending via Gmail SMTP, from email MUST match authenticated SMTP_USER to avoid Google rejection
+  const senderEmail = usingReal
+    ? (process.env.SMTP_USER || "veriproof.platform@gmail.com").trim()
+    : (process.env.FROM_EMAIL || "noreply@veriproof.dev").trim();
+  const senderName = (process.env.FROM_NAME || "VeriProof Platform").trim();
+
   const message = {
-    from: `"${process.env.FROM_NAME || "VeriProof"}" <${
-      (process.env.FROM_EMAIL || process.env.SMTP_USER || "noreply@veriproof.dev").trim()
-    }>`,
+    from: `"${senderName}" <${senderEmail}>`,
     to: options.email,
     subject: options.subject,
     html: options.html || `<p>${options.message || ""}</p>`,
-    text: options.message || "",
+    text: options.message || options.text || "",
   };
 
   try {
