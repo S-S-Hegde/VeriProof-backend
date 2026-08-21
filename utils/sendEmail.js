@@ -46,23 +46,47 @@ const sendViaResend = async (options) => {
   return data;
 };
 
-const createGmailTransport = (port = 465) => {
+const createSMTPTransport = (port = 587) => {
+  const host = (process.env.SMTP_HOST || "smtp.gmail.com").trim();
   const user = (process.env.SMTP_USER || "").trim();
   const pass = (process.env.SMTP_PASS || "").trim().replace(/\s+/g, "");
 
-  if (port === 465) {
+  // Brevo / Sendinblue Relay (100% Free - NO Domain Purchase Required)
+  if (host.includes("brevo.com") || host.includes("sendinblue.com")) {
     return nodemailer.createTransport({
-      host: "smtp.gmail.com",
-      port: 465,
-      secure: true,
+      host: "smtp-relay.brevo.com",
+      port: 587,
+      secure: false,
       auth: { user, pass },
       tls: { rejectUnauthorized: false },
-      pool: false,
     });
   }
 
+  // Gmail SMTP
+  if (host === "smtp.gmail.com" || user.endsWith("@gmail.com")) {
+    if (port === 465) {
+      return nodemailer.createTransport({
+        host: "smtp.gmail.com",
+        port: 465,
+        secure: true,
+        auth: { user, pass },
+        tls: { rejectUnauthorized: false },
+        pool: false,
+      });
+    }
+
+    return nodemailer.createTransport({
+      service: "gmail",
+      auth: { user, pass },
+      tls: { rejectUnauthorized: false },
+    });
+  }
+
+  // Generic SMTP
   return nodemailer.createTransport({
-    service: "gmail",
+    host,
+    port: Number(process.env.SMTP_PORT) || 587,
+    secure: Number(process.env.SMTP_PORT) === 465,
     auth: { user, pass },
     tls: { rejectUnauthorized: false },
   });
@@ -96,7 +120,7 @@ const sendEmail = async (options) => {
   let transporter;
 
   if (usingReal) {
-    transporter = createGmailTransport();
+    transporter = createSMTPTransport();
   } else {
     console.warn(
       "\n⚠️  [Email] No RESEND_API_KEY or SMTP credentials set in .env\n" +
@@ -137,7 +161,7 @@ const sendEmail = async (options) => {
     if (usingReal) {
       console.warn(`[Email/SMTP] Primary port failed (${err.message}), retrying via fallback transport...`);
       try {
-        const fallbackTransporter = createGmailTransport(587);
+        const fallbackTransporter = createSMTPTransport(587);
         const fallbackInfo = await fallbackTransporter.sendMail(message);
         console.log(`✅ [Email/SMTP Fallback] Delivered → ${options.email} (messageId: ${fallbackInfo.messageId})`);
         return fallbackInfo;
