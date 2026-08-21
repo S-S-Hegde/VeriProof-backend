@@ -130,10 +130,16 @@ const sendEmail = async (options) => {
     transporter = await createEtherealTransport();
   }
 
-  // When sending via Gmail SMTP, from email MUST match authenticated SMTP_USER to avoid Google rejection
-  const senderEmail = usingReal
-    ? (process.env.SMTP_USER || "veriproof.platform@gmail.com").trim()
-    : (process.env.FROM_EMAIL || "noreply@veriproof.dev").trim();
+  // Determine correct sender email
+  const host = (process.env.SMTP_HOST || "").trim();
+  let senderEmail = (process.env.FROM_EMAIL || "").trim();
+
+  if (!senderEmail || senderEmail.endsWith("@smtp-brevo.com")) {
+    senderEmail = "veriproof.platform@gmail.com";
+  } else if (!senderEmail && usingReal) {
+    senderEmail = (process.env.SMTP_USER || "veriproof.platform@gmail.com").trim();
+  }
+
   const senderName = (process.env.FROM_NAME || "VeriProof Platform").trim();
 
   const message = {
