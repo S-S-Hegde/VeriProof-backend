@@ -41,32 +41,25 @@ const sendViaResend = async (options) => {
   return data;
 };
 
-const createGmailTransport = () => {
+const createGmailTransport = (port = 465) => {
   const user = (process.env.SMTP_USER || "").trim();
   const pass = (process.env.SMTP_PASS || "").trim().replace(/\s+/g, "");
 
-  // Use nodemailer built-in 'gmail' service definition for rock-solid TLS & authentication
-  if (user.endsWith("@gmail.com") || process.env.SMTP_HOST === "smtp.gmail.com") {
+  if (port === 465) {
     return nodemailer.createTransport({
-      service: "gmail",
-      auth: {
-        user,
-        pass,
-      },
+      host: "smtp.gmail.com",
+      port: 465,
+      secure: true,
+      auth: { user, pass },
+      tls: { rejectUnauthorized: false },
+      pool: false,
     });
   }
 
   return nodemailer.createTransport({
-    host: process.env.SMTP_HOST || "smtp.gmail.com",
-    port: Number(process.env.SMTP_PORT) || 587,
-    secure: Number(process.env.SMTP_PORT) === 465,
-    auth: {
-      user,
-      pass,
-    },
-    tls: {
-      rejectUnauthorized: false,
-    },
+    service: "gmail",
+    auth: { user, pass },
+    tls: { rejectUnauthorized: false },
   });
 };
 
@@ -136,6 +129,18 @@ const sendEmail = async (options) => {
     }
     return info;
   } catch (err) {
+    if (usingReal) {
+      console.warn(`[Email/SMTP] Primary port failed (${err.message}), retrying via fallback transport...`);
+      try {
+        const fallbackTransporter = createGmailTransport(587);
+        const fallbackInfo = await fallbackTransporter.sendMail(message);
+        console.log(`✅ [Email/SMTP Fallback] Delivered → ${options.email} (messageId: ${fallbackInfo.messageId})`);
+        return fallbackInfo;
+      } catch (fallbackErr) {
+        console.error(`❌ [Email Error] Both SMTP attempts failed to ${options.email}:`, fallbackErr.message);
+        throw fallbackErr;
+      }
+    }
     console.error(`❌ [Email Error] Delivery failed to ${options.email}:`, err.message);
     throw err;
   }
