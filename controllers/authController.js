@@ -1052,16 +1052,19 @@ const updateCompanyInfo = async (req, res) => {
     return res.status(400).json({ message: "LinkedIn profile URL or username is required." });
   }
 
-  // Normalize LinkedIn username and URL
   let cleanUsername = rawLinkedin
-    .replace(/^https?:\/\/(www\.)?linkedin\.com\/in\//i, "")
-    .replace(/\/.*$/, "")
-    .replace(/^@/, "")
+    .replace(/^https?:\/\//i, "")
+    .replace(/^www\./i, "")
+    .replace(/^linkedin\.com\/(in\/)?/i, "")
+    .replace(/\/+$/, "")
     .trim();
 
-  let cleanUrl = rawLinkedin.startsWith("http")
-    ? rawLinkedin
-    : `https://www.linkedin.com/in/${cleanUsername}`;
+  // If user entered only domain name without actual username
+  if (cleanUsername === "linkedin.com" || cleanUsername === "www.linkedin.com" || !cleanUsername) {
+    cleanUsername = "";
+  }
+
+  let cleanUrl = cleanUsername ? `https://www.linkedin.com/in/${cleanUsername}` : "";
 
   const targetEmail = (companyEmail || user.email || "").trim().toLowerCase();
   if (!targetEmail || !targetEmail.includes("@")) {
@@ -1074,8 +1077,9 @@ const updateCompanyInfo = async (req, res) => {
 
   user.linkedinUsername = cleanUsername;
   user.linkedinUrl = cleanUrl;
+  user.linkedin = cleanUrl;
   user.companyEmail = targetEmail;
-  user.companyName = companyName?.trim() || user.companyName || `${cleanUsername} (LinkedIn)`;
+  user.companyName = companyName?.trim() || user.companyName || "";
   user.companyEmailVerified = false;
   user.companyEmailOtpHash = otpHash;
   user.companyEmailOtpExpire = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
