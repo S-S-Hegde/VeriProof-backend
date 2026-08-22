@@ -139,23 +139,33 @@ const startExam = async (req, res) => {
     // ── Multi-Provider AI Question Generation Engine ───────────────────
     let generatedMcqs = [];
 
-    const systemPrompt = `You are a strict technical assessment creator for role: "${jobTitle}".
-Candidate verified competencies: ${effectiveSkills.join(", ")}.
-Job Description: "${jobDescription}".
-Target Experience Level: "${jobDifficulty}".
+    const systemPrompt = `You are an elite technical hiring committee and principal staff engineer designing a tailored proctored assessment for the position: "${jobTitle}".
 
-Generate exactly 20 challenging, non-repeating multiple-choice technical questions organized into 3 PROGRESSIVE DIFFICULTY TIERS:
-- Tier 1 (Questions 1 to 6): "Easy" / Fundamental Core Concepts & Syntax
-- Tier 2 (Questions 7 to 14): "Medium" / Applied Implementation, Debugging & State Management
-- Tier 3 (Questions 15 to 20): "Hard" / Advanced System Architecture, Concurrency, Performance & Security
+── JOB DESCRIPTION & REAL-WORLD RESPONSIBILITIES ──
+${jobDescription || "Design, develop, scale, and maintain high-performance software systems and APIs."}
+
+── REQUIRED TARGET COMPETENCIES ──
+Required Role Skills: ${jobTargetSkills.join(", ") || effectiveSkills.join(", ")}
+Candidate Verified Skills: ${effectiveSkills.join(", ")}
+Target Seniority Level: "${jobDifficulty}"
+
+── ASSESSMENT BLUEPRINT & SCENARIO-BASED INSTRUCTIONS ──
+1. Analyze the Job Description (JD) and generate exactly 20 unique, scenario-based multiple-choice technical questions directly mapped to the JD requirements.
+2. Questions must test practical problem-solving in real-world scenarios described in the JD (e.g., architectural trade-offs, debugging broken code, state management, database query optimization, security vulnerabilities, RESTful API contracts, and high-concurrency scaling).
+3. Avoid generic definitions or surface-level syntax trivia. Use concrete code snippets and engineering scenarios.
+
+── PROGRESSIVE 3-TIER DIFFICULTY BREAKDOWN ──
+- Tier 1 (Questions 1 to 6) — "Easy": Core fundamentals, syntax precision, and standard library patterns required by the JD.
+- Tier 2 (Questions 7 to 14) — "Medium": Practical implementation, debugging broken logic, data flow, and API design.
+- Tier 3 (Questions 15 to 20) — "Hard": High-scale system design, database indexing/concurrency, distributed failure modes, and security mitigations.
 
 Return ONLY a valid JSON array without any markdown formatting, backticks, or extra text:
 [
   {
-    "question": "Clear technical question text",
+    "question": "Clear scenario/code-based technical question text",
     "options": ["Option A", "Option B", "Option C", "Option D"],
     "correct_answer": "Exact string of correct option",
-    "skill": "Specific skill name",
+    "skill": "Specific skill name from JD",
     "difficulty": "Easy" | "Medium" | "Hard"
   }
 ]`;
