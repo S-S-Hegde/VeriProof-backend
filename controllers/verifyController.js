@@ -1102,8 +1102,28 @@ const getApplicantResumes = asyncHandler(async (req, res) => {
         obj.examScore = null;
       }
 
-      // 3. Calculate finalScore (weighted alignment 50% + exam 50%)
-      const align = obj.alignmentScore || 0;
+      // 3. Dynamic Candidate-Specific Forensic Alignment Scoring
+      const resumeLen = (obj.resumeText || "").length;
+      const matchedCount = (obj.matchedSkills || []).length;
+      const totalClaimedCount = (obj.claimedSkills || obj.claims?.skills || []).length;
+      const hasGithub = Boolean(obj.githubUsername || candidateUser?.githubUsername);
+      const hasExperience = /experience|developed|architect|engineer|senior|lead|project|building/i.test(obj.resumeText || "");
+
+      // Core skill match (40%) + project depth (25%) + GitHub verified signal (15%) + skill breadth (20%)
+      const skillScore = Math.min(40, matchedCount * 8);
+      const depthScore = Math.min(25, (resumeLen > 1200 ? 15 : 8) + (hasExperience ? 10 : 0));
+      const githubScore = hasGithub ? 15 : 0;
+      const breadthScore = Math.min(20, totalClaimedCount * 2.5);
+
+      const calculatedDynamicAlign = Math.min(98, Math.max(25, Math.round(skillScore + depthScore + githubScore + breadthScore)));
+
+      // If stored score was an old generic fallback (56 or 73), use candidate's dynamic granular score
+      const align = (obj.alignmentScore && obj.alignmentScore !== 56 && obj.alignmentScore !== 73)
+        ? obj.alignmentScore
+        : calculatedDynamicAlign;
+
+      obj.alignmentScore = align;
+
       const exam = (obj.examScore !== null && obj.examScore !== undefined) ? obj.examScore : null;
       obj.finalScore = exam !== null ? Math.round((align * 0.5) + (exam * 0.5)) : null;
 
