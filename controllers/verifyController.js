@@ -556,9 +556,14 @@ Resume Summary & Work Experience:
 ${candidateText}
 `.trim();
 
+    const fileBuffer = buffer || Buffer.from(fullCandidateDocText, "utf-8");
+    fs.writeFileSync(path.join(uploadDir, filename), fileBuffer);
+
+    // Compute cryptographic content hash to distinguish identical vs different resumes with same filename
+    const contentHash = crypto.createHash("sha256").update(fileBuffer).digest("hex");
     const candidateEmailParam = (candidateMetaData?.email || req.body.candidateEmail || req.body.email || "").toLowerCase().trim();
 
-    // ── Deduplication Guard: Check if applicant already exists for this job ──
+    // ── Content-Aware Deduplication Guard ──
     let applicant = null;
     if (candidateEmailParam) {
       applicant = await RecruiterApplicant.findOne({
@@ -571,11 +576,12 @@ ${candidateText}
       });
     }
 
-    if (!applicant && originalFileName) {
+    // Match by exact resume content hash (same resume re-uploaded)
+    if (!applicant && contentHash) {
       applicant = await RecruiterApplicant.findOne({
         recruiterId: req.user._id,
         jobId: job._id,
-        originalFileName: originalFileName
+        contentHash: contentHash
       });
     }
 
@@ -583,8 +589,9 @@ ${candidateText}
       applicant.originalFileName = originalFileName || applicant.originalFileName;
       applicant.mimeType = mimeType || applicant.mimeType;
       applicant.fileUrl = fileUrl;
+      applicant.contentHash = contentHash;
       await applicant.save();
-      console.log(`[Intake] Deduplication: Updating existing applicant ${applicant._id} (${applicant.extractedEmail || originalFileName})`);
+      console.log(`[Intake] Deduplication: Updating existing applicant ${applicant._id} (${applicant.extractedEmail || contentHash.substring(0, 8)})`);
     } else {
       applicant = await RecruiterApplicant.create({
         recruiterId: req.user._id,
@@ -592,6 +599,7 @@ ${candidateText}
         originalFileName: originalFileName || `${candidateMetaData?.name || "Candidate"}_resume${extension}`,
         mimeType: mimeType || "application/pdf",
         fileUrl,
+        contentHash,
       });
     }
 
@@ -1151,8 +1159,8 @@ const getApplicantResumes = asyncHandler(async (req, res) => {
   for (const obj of populatedApplicants) {
     const jobKey = String(obj.jobId?._id || obj.jobId || "general");
     const emailKey = (obj.extractedEmail || "").toLowerCase().trim();
-    const fileKey = (obj.originalFileName || "").toLowerCase().trim();
-    const candidateKey = emailKey ? `${jobKey}::${emailKey}` : `${jobKey}::${fileKey}`;
+    const hashKey = (obj.contentHash || "").toLowerCase().trim();
+    const candidateKey = emailKey ? `${jobKey}::email::${emailKey}` : (hashKey ? `${jobKey}::hash::${hashKey}` : `${jobKey}::id::${obj._id}`);
 
     if (!seenCandidates.has(candidateKey)) {
       seenCandidates.add(candidateKey);

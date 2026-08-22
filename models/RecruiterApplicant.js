@@ -24,6 +24,7 @@ const recruiterApplicantSchema = new mongoose.Schema({
   emailStatus:       { type: String, enum: ["sent", "failed", "not_found"], default: "not_found" },
   reasoning:         { type: String, default: "" },
   v2Report:          { type: mongoose.Schema.Types.Mixed, default: null },
+  contentHash:       { type: String, default: "", index: true },
 
   // Post-exam daily digest fields
   examCompletedAt:   Date,
