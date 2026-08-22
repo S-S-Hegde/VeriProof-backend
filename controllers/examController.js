@@ -142,15 +142,21 @@ const startExam = async (req, res) => {
     const systemPrompt = `You are a strict technical assessment creator for role: "${jobTitle}".
 Candidate verified competencies: ${effectiveSkills.join(", ")}.
 Job Description: "${jobDescription}".
-Generate exactly 20 challenging, realistic multiple-choice technical questions tailored to this candidate.
-Every question must test deep conceptual, architectural, or code-level understanding. Do NOT create trivial questions.
+Target Experience Level: "${jobDifficulty}".
+
+Generate exactly 20 challenging, non-repeating multiple-choice technical questions organized into 3 PROGRESSIVE DIFFICULTY TIERS:
+- Tier 1 (Questions 1 to 6): "Easy" / Fundamental Core Concepts & Syntax
+- Tier 2 (Questions 7 to 14): "Medium" / Applied Implementation, Debugging & State Management
+- Tier 3 (Questions 15 to 20): "Hard" / Advanced System Architecture, Concurrency, Performance & Security
+
 Return ONLY a valid JSON array without any markdown formatting, backticks, or extra text:
 [
   {
     "question": "Clear technical question text",
     "options": ["Option A", "Option B", "Option C", "Option D"],
     "correct_answer": "Exact string of correct option",
-    "skill": "Specific skill name"
+    "skill": "Specific skill name",
+    "difficulty": "Easy" | "Medium" | "Hard"
   }
 ]`;
 
@@ -392,10 +398,10 @@ Return ONLY a valid JSON array without any markdown formatting, backticks, or ex
     };
 
     // ── Format for frontend UI ─────────────────────────────────────────
-    const frontendQuestions = exam.questions.map((q) => ({
+    const frontendQuestions = exam.questions.map((q, idx) => ({
       _id: q._id,
       category: q.skill || effectiveSkills[0] || "General",
-      difficulty: jobDifficulty,
+      difficulty: q.difficulty || (idx < 6 ? "Easy" : idx < 14 ? "Medium" : "Hard"),
       text: q.questionText,
       options: q.options,
     }));
