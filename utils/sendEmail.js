@@ -2,20 +2,85 @@
  * sendEmail.js
  *
  * Universal Automated Email Dispatcher.
- * Uses Direct Gmail SMTP with App Passwords & Automatic IPv4 Routing.
+ * Operates over HTTPS REST APIs (Port 443) to bypass cloud container SMTP port blocks.
+ * Supports:
+ *   1. Brevo REST API (100% Free, No Domain Needed, Unblockable on Render)
+ *   2. Resend REST API (HTTPS Port 443)
+ *   3. Nodemailer SMTP (Localhost fallback)
  */
 
+const axios = require("axios");
 const nodemailer = require("nodemailer");
+
+// Check available dispatch providers
+const getBrevoKey = () =>
+  (process.env.BREVO_API_KEY || (process.env.SMTP_PASS?.startsWith("xkeysib-") ? process.env.SMTP_PASS : "") || "").trim();
+
+const getResendKey = () => (process.env.RESEND_API_KEY || "").trim();
 
 const hasRealSMTP = () =>
   !!(process.env.SMTP_USER?.trim() && process.env.SMTP_PASS?.trim());
 
+// ── Provider 1: Brevo HTTPS REST API (Port 443 — 100% Open on Render) ───
+const sendViaBrevoHTTP = async (options) => {
+  const apiKey = getBrevoKey();
+  const senderEmail = (process.env.FROM_EMAIL || "veriproof.platform@gmail.com").trim();
+  const senderName = (process.env.FROM_NAME || "VeriProof Platform").trim();
+
+  const payload = {
+    sender: { name: senderName, email: senderEmail },
+    to: [{ email: options.email }],
+    subject: options.subject,
+    htmlContent: options.html || `<p>${options.message || ""}</p>`,
+    textContent: options.message || options.text || "",
+  };
+
+  const { data } = await axios.post("https://api.brevo.com/v3/smtp/email", payload, {
+    headers: {
+      "api-key": apiKey,
+      "Content-Type": "application/json",
+    },
+    timeout: 8000,
+  });
+
+  console.log(`✅ [Email/Brevo HTTP] Delivered → ${options.email} (messageId: ${data.messageId})`);
+  return data;
+};
+
+// ── Provider 2: Resend HTTPS REST API (Port 443) ────────────────────────
+const sendViaResendHTTP = async (options) => {
+  const apiKey = getResendKey();
+  let fromEmail = (process.env.FROM_EMAIL || "").trim();
+  if (!fromEmail || fromEmail.endsWith("@gmail.com")) {
+    fromEmail = "onboarding@resend.dev";
+  }
+  const fromName = (process.env.FROM_NAME || "VeriProof").trim();
+
+  const payload = {
+    from: `${fromName} <${fromEmail}>`,
+    to: [options.email],
+    subject: options.subject,
+    html: options.html || `<p>${options.message || ""}</p>`,
+  };
+
+  const { data } = await axios.post("https://api.resend.com/emails", payload, {
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    timeout: 8000,
+  });
+
+  console.log(`✅ [Email/Resend HTTP] Delivered → ${options.email} (id: ${data.id})`);
+  return data;
+};
+
+// ── Provider 3: Nodemailer SMTP Transport (Localhost fallback) ──────────
 const createSMTPTransport = () => {
   const host = (process.env.SMTP_HOST || "smtp.gmail.com").trim();
   const user = (process.env.SMTP_USER || "veriproof.platform@gmail.com").trim();
   const pass = (process.env.SMTP_PASS || "").trim().replace(/\s+/g, "");
 
-  // Native Gmail Driver (100% Reliable with App Passwords)
   if (host === "smtp.gmail.com" || user.endsWith("@gmail.com")) {
     return nodemailer.createTransport({
       service: "gmail",
@@ -27,26 +92,10 @@ const createSMTPTransport = () => {
     });
   }
 
-  // Brevo Relay
-  if (host.includes("brevo.com") || host.includes("sendinblue.com")) {
-    return nodemailer.createTransport({
-      host: "smtp-relay.brevo.com",
-      port: 587,
-      secure: false,
-      family: 4,
-      auth: { user, pass },
-      tls: { rejectUnauthorized: false },
-      connectionTimeout: 8000,
-      greetingTimeout: 8000,
-      socketTimeout: 8000,
-    });
-  }
-
-  // Generic SMTP
   return nodemailer.createTransport({
-    host,
-    port: Number(process.env.SMTP_PORT) || 587,
-    secure: Number(process.env.SMTP_PORT) === 465,
+    host: "smtp-relay.brevo.com",
+    port: 587,
+    secure: false,
     family: 4,
     auth: { user, pass },
     tls: { rejectUnauthorized: false },
@@ -56,61 +105,50 @@ const createSMTPTransport = () => {
   });
 };
 
-const createEtherealTransport = async () => {
-  const testAccount = await nodemailer.createTestAccount();
-  return nodemailer.createTransport({
-    host: "smtp.ethereal.email",
-    port: 587,
-    secure: false,
-    auth: {
-      user: testAccount.user,
-      pass: testAccount.pass,
-    },
-  });
-};
-
 const sendEmail = async (options) => {
-  const usingReal = hasRealSMTP();
-  let transporter;
-
-  if (usingReal) {
-    transporter = createSMTPTransport();
-  } else {
-    console.warn(
-      "\n⚠️  [Email] No SMTP credentials set in .env\n" +
-      "   → Using Ethereal preview inbox. Emails will NOT reach real inboxes.\n",
-    );
-    transporter = await createEtherealTransport();
-  }
-
-  const senderEmail = (process.env.SMTP_USER || "veriproof.platform@gmail.com").trim();
-  const senderName = (process.env.FROM_NAME || "VeriProof Platform").trim();
-
-  const message = {
-    from: `"${senderName}" <${senderEmail}>`,
-    to: options.email,
-    subject: options.subject,
-    html: options.html || `<p>${options.message || ""}</p>`,
-    text: options.message || options.text || "",
-  };
-
-  try {
-    const info = await transporter.sendMail(message);
-
-    if (usingReal) {
-      console.log(`✅ [Email/SMTP] Delivered → ${options.email} (messageId: ${info.messageId})`);
-    } else {
-      console.log("---------------------------------------");
-      console.log("DEV MAIL DELIVERED (Ethereal Preview):");
-      console.log("To:          ", options.email);
-      console.log("Preview URL: ", nodemailer.getTestMessageUrl(info));
-      console.log("---------------------------------------");
+  // Try 1: Brevo HTTP API (Port 443 - Bypasses all cloud firewall port restrictions)
+  if (getBrevoKey()) {
+    try {
+      return await sendViaBrevoHTTP(options);
+    } catch (brevoErr) {
+      console.warn(`[Email/Brevo HTTP] API error (${brevoErr.response?.data?.message || brevoErr.message}) — trying fallback`);
     }
-    return info;
-  } catch (err) {
-    console.error(`❌ [Email Error] Delivery failed to ${options.email}:`, err.message);
-    throw err;
   }
+
+  // Try 2: Resend HTTP API (Port 443)
+  if (getResendKey()) {
+    try {
+      return await sendViaResendHTTP(options);
+    } catch (resendErr) {
+      console.warn(`[Email/Resend HTTP] API error (${resendErr.response?.data?.message || resendErr.message}) — trying fallback`);
+    }
+  }
+
+  // Try 3: Direct SMTP (Localhost / open port environments)
+  if (hasRealSMTP()) {
+    const transporter = createSMTPTransport();
+    const senderEmail = (process.env.SMTP_USER || "veriproof.platform@gmail.com").trim();
+    const senderName = (process.env.FROM_NAME || "VeriProof Platform").trim();
+
+    const message = {
+      from: `"${senderName}" <${senderEmail}>`,
+      to: options.email,
+      subject: options.subject,
+      html: options.html || `<p>${options.message || ""}</p>`,
+      text: options.message || options.text || "",
+    };
+
+    try {
+      const info = await transporter.sendMail(message);
+      console.log(`✅ [Email/SMTP] Delivered → ${options.email} (messageId: ${info.messageId})`);
+      return info;
+    } catch (smtpErr) {
+      console.error(`❌ [Email/SMTP Error] Failed → ${options.email}:`, smtpErr.message);
+      throw smtpErr;
+    }
+  }
+
+  console.warn(`⚠️ [Email Warning] No working email credentials configured.`);
 };
 
 module.exports = sendEmail;
