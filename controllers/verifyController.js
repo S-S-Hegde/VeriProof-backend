@@ -556,18 +556,45 @@ Resume Summary & Work Experience:
 ${candidateText}
 `.trim();
 
-    const fileBuffer = buffer || Buffer.from(fullCandidateDocText, "utf-8");
-    fs.writeFileSync(path.join(uploadDir, filename), fileBuffer);
-
-    const applicant = await RecruiterApplicant.create({
-      recruiterId: req.user._id,
-      jobId: job._id,
-      originalFileName: originalFileName || `${candidateMetaData?.name || "Candidate"}_resume${extension}`,
-      mimeType: mimeType || "application/pdf",
-      fileUrl,
-    });
-
     const candidateEmailParam = (candidateMetaData?.email || req.body.candidateEmail || req.body.email || "").toLowerCase().trim();
+
+    // ── Deduplication Guard: Check if applicant already exists for this job ──
+    let applicant = null;
+    if (candidateEmailParam) {
+      applicant = await RecruiterApplicant.findOne({
+        recruiterId: req.user._id,
+        jobId: job._id,
+        $or: [
+          { extractedEmail: candidateEmailParam },
+          { extractedEmail: new RegExp(`^${candidateEmailParam.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") }
+        ]
+      });
+    }
+
+    if (!applicant && originalFileName) {
+      applicant = await RecruiterApplicant.findOne({
+        recruiterId: req.user._id,
+        jobId: job._id,
+        originalFileName: originalFileName
+      });
+    }
+
+    if (applicant) {
+      applicant.originalFileName = originalFileName || applicant.originalFileName;
+      applicant.mimeType = mimeType || applicant.mimeType;
+      applicant.fileUrl = fileUrl;
+      await applicant.save();
+      console.log(`[Intake] Deduplication: Updating existing applicant ${applicant._id} (${applicant.extractedEmail || originalFileName})`);
+    } else {
+      applicant = await RecruiterApplicant.create({
+        recruiterId: req.user._id,
+        jobId: job._id,
+        originalFileName: originalFileName || `${candidateMetaData?.name || "Candidate"}_resume${extension}`,
+        mimeType: mimeType || "application/pdf",
+        fileUrl,
+      });
+    }
+
     if (candidateEmailParam) {
       await InvitationRegistry.findOneAndUpdate(
         { email: candidateEmailParam },
@@ -582,6 +609,25 @@ ${candidateText}
         fileBuffer,
         { mimeType: mimeType || "text/plain", fileName: originalFileName || "resume.txt", strictMode }
       );
+
+      // Secondary Deduplication Check: If parsed extractedEmail matches another applicant for same job
+      if (parsed?.extractedEmail) {
+        const normalizedParsedEmail = parsed.extractedEmail.toLowerCase().trim();
+        const duplicateMatch = await RecruiterApplicant.findOne({
+          _id: { $ne: applicant._id },
+          recruiterId: req.user._id,
+          jobId: job._id,
+          $or: [
+            { extractedEmail: normalizedParsedEmail },
+            { extractedEmail: new RegExp(`^${normalizedParsedEmail.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") }
+          ]
+        });
+
+        if (duplicateMatch) {
+          console.log(`[Intake] Merging and purging duplicate applicant entry ${duplicateMatch._id}`);
+          await RecruiterApplicant.findByIdAndDelete(duplicateMatch._id);
+        }
+      }
 
       // Merge explicit ATS skills into claims if present
       if (candidateMetaData?.skills?.length > 0) {
@@ -1074,11 +1120,28 @@ const getApplicantResumes = asyncHandler(async (req, res) => {
     if (b.finalScore !== null) return 1;
     return (b.alignmentScore || 0) - (a.alignmentScore || 0);
   });
-  populatedApplicants.forEach((obj, idx) => {
+
+  // ── Deduplicate Redundant Candidate Records for the same Job Role ──
+  const seenCandidates = new Set();
+  const uniqueApplicants = [];
+
+  for (const obj of populatedApplicants) {
+    const jobKey = String(obj.jobId?._id || obj.jobId || "general");
+    const emailKey = (obj.extractedEmail || "").toLowerCase().trim();
+    const fileKey = (obj.originalFileName || "").toLowerCase().trim();
+    const candidateKey = emailKey ? `${jobKey}::${emailKey}` : `${jobKey}::${fileKey}`;
+
+    if (!seenCandidates.has(candidateKey)) {
+      seenCandidates.add(candidateKey);
+      uniqueApplicants.push(obj);
+    }
+  }
+
+  uniqueApplicants.forEach((obj, idx) => {
     obj.rank = idx + 1;
   });
 
-  res.json(populatedApplicants);
+  res.json(uniqueApplicants);
 });
 
 // @desc    Delete a job role (Blueprint)
