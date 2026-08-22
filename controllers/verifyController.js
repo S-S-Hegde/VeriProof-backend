@@ -1042,7 +1042,7 @@ const getApplicantResumes = asyncHandler(async (req, res) => {
   const filter = { recruiterId: req.user._id };
   if (req.query.jobId) filter.jobId = req.query.jobId;
   const applicants = await RecruiterApplicant.find(filter)
-    .populate("jobId", "title")
+    .populate("jobId", "title targetSkills")
     .sort({ createdAt: -1 });
 
   // Map each applicant to check if candidate has registered and attended exam
@@ -1067,61 +1067,68 @@ const getApplicantResumes = asyncHandler(async (req, res) => {
       if (!candidateUser) {
         obj.examStatus = obj.emailStatus === "sent" ? "Not Attended" : "Unregistered";
         obj.examScore = null;
-        return obj;
-      }
-
-      // Ensure applicant record links candidateUser ID
-      if (!obj.candidateUser) {
-        await RecruiterApplicant.updateOne({ _id: obj._id }, { candidateUser: candidateUser._id });
-        obj.candidateUser = candidateUser._id;
-      }
-
-      // 2. Query VerificationResult and Exam history
-      const vResult = await VerificationResult.findOne({
-        candidateId: candidateUser._id,
-        ...(obj.jobId?._id || obj.jobId ? { jobId: obj.jobId._id || obj.jobId } : {})
-      }).sort({ createdAt: -1 }) || await VerificationResult.findOne({ candidateId: candidateUser._id }).sort({ createdAt: -1 });
-
-      const lastExam = await Exam.findOne({ candidateId: candidateUser._id }).sort({ createdAt: -1 });
-
-      // Determine real dynamic examStatus and examScore from live database state
-      const hasAttendedInDb = obj.examStatus === "Attended" ||
-        (vResult && vResult.examScore !== undefined && vResult.examScore !== null) ||
-        (lastExam && (lastExam.score !== undefined && lastExam.score !== null && lastExam.status === "Completed"));
-
-      const hasInProgressInDb = (obj.examStatus === "In Progress" || (lastExam && ["In Progress", "in_progress", "Started"].includes(lastExam.status))) && !hasAttendedInDb;
-
-      if (hasAttendedInDb) {
-        obj.examStatus = "Attended";
-        obj.examScore = obj.examScore ?? vResult?.examScore ?? lastExam?.score ?? null;
-      } else if (hasInProgressInDb) {
-        obj.examStatus = "In Progress";
-        obj.examScore = null;
       } else {
-        obj.examStatus = "Not Attended";
-        obj.examScore = null;
+        // Ensure applicant record links candidateUser ID
+        if (!obj.candidateUser) {
+          await RecruiterApplicant.updateOne({ _id: obj._id }, { candidateUser: candidateUser._id });
+          obj.candidateUser = candidateUser._id;
+        }
+
+        // 2. Query VerificationResult and Exam history
+        const vResult = await VerificationResult.findOne({
+          candidateId: candidateUser._id,
+          ...(obj.jobId?._id || obj.jobId ? { jobId: obj.jobId._id || obj.jobId } : {})
+        }).sort({ createdAt: -1 }) || await VerificationResult.findOne({ candidateId: candidateUser._id }).sort({ createdAt: -1 });
+
+        const lastExam = await Exam.findOne({ candidateId: candidateUser._id }).sort({ createdAt: -1 });
+
+        // Determine real dynamic examStatus and examScore from live database state
+        const hasAttendedInDb = obj.examStatus === "Attended" ||
+          (vResult && vResult.examScore !== undefined && vResult.examScore !== null) ||
+          (lastExam && (lastExam.score !== undefined && lastExam.score !== null && lastExam.status === "Completed"));
+
+        const hasInProgressInDb = (obj.examStatus === "In Progress" || (lastExam && ["In Progress", "in_progress", "Started"].includes(lastExam.status))) && !hasAttendedInDb;
+
+        if (hasAttendedInDb) {
+          obj.examStatus = "Attended";
+          obj.examScore = obj.examScore ?? vResult?.examScore ?? lastExam?.score ?? null;
+        } else if (hasInProgressInDb) {
+          obj.examStatus = "In Progress";
+          obj.examScore = null;
+        } else {
+          obj.examStatus = "Not Attended";
+          obj.examScore = null;
+        }
       }
 
-      // 3. Dynamic Candidate-Specific Forensic Alignment Scoring
-      const resumeLen = (obj.resumeText || "").length;
+      // 3. Proportional Discriminative ATS Alignment Scoring Model
+      const jobTargetSkills = (obj.jobId?.targetSkills || []).map(s => typeof s === "string" ? s : s.skill || s.name || "").filter(Boolean);
+      const totalJobSkills = jobTargetSkills.length || 8;
       const matchedCount = (obj.matchedSkills || []).length;
+      const missingCount = Math.max(0, totalJobSkills - matchedCount);
       const totalClaimedCount = (obj.claimedSkills || obj.claims?.skills || []).length;
       const hasGithub = Boolean(obj.githubUsername || candidateUser?.githubUsername);
-      const hasExperience = /experience|developed|architect|engineer|senior|lead|project|building/i.test(obj.resumeText || "");
+      const resumeLen = (obj.resumeText || "").length;
+      const hasExperience = /experience|developed|architect|engineer|senior|lead|project|building|implemented/i.test(obj.resumeText || "");
 
-      // Core skill match (40%) + project depth (25%) + GitHub verified signal (15%) + skill breadth (20%)
-      const skillScore = Math.min(40, matchedCount * 8);
-      const depthScore = Math.min(25, (resumeLen > 1200 ? 15 : 8) + (hasExperience ? 10 : 0));
+      // 1. Direct Target Skill Ratio (50% max)
+      const skillScore = Math.round((matchedCount / totalJobSkills) * 50);
+
+      // 2. Project Depth & Experience Content (20% max)
+      const depthScore = (resumeLen > 1500 ? 12 : (resumeLen > 700 ? 7 : 3)) + (hasExperience ? 8 : 2);
+
+      // 3. Verified GitHub Evidence Signal (15% max)
       const githubScore = hasGithub ? 15 : 0;
-      const breadthScore = Math.min(20, totalClaimedCount * 2.5);
 
-      const calculatedDynamicAlign = Math.min(98, Math.max(25, Math.round(skillScore + depthScore + githubScore + breadthScore)));
+      // 4. Overall Technical Breadth (15% max)
+      const breadthScore = Math.min(15, Math.round((totalClaimedCount / 10) * 15));
 
-      // If stored score was an old generic fallback (56 or 73), use candidate's dynamic granular score
-      const align = (obj.alignmentScore && obj.alignmentScore !== 56 && obj.alignmentScore !== 73)
-        ? obj.alignmentScore
-        : calculatedDynamicAlign;
+      // 5. Missing Skills Penalty (proportional deduction)
+      const missingPenalty = Math.min(10, Math.round((missingCount / totalJobSkills) * 10));
 
+      const calculatedDynamicAlign = Math.min(96, Math.max(15, skillScore + depthScore + githubScore + breadthScore - missingPenalty));
+
+      const align = calculatedDynamicAlign;
       obj.alignmentScore = align;
 
       const exam = (obj.examScore !== null && obj.examScore !== undefined) ? obj.examScore : null;
