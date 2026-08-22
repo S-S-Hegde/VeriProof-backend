@@ -23,11 +23,7 @@ const startExam = async (req, res) => {
 
     const isInvitedCandidate = req.user.origin === "recruiter_invited";
 
-    // ── STRICT SINGLE-ATTEMPT GUARD FOR CANDIDATES ─────────────────────
-    const existingExam = await Exam.findOne({
-      candidateId: req.user._id,
-      status: { $in: ["Completed", "Terminated", "Attended"] }
-    // Check for previous proctoring violations
+    // ── STRICT SECURITY GUARD: Check for previous proctoring violations ──
     const violatedExam = await Exam.findOne({
       candidateId: req.user._id,
       status: { $in: ["Terminated", "Violated", "Disqualified"] }
@@ -837,14 +833,23 @@ const submitExam = async (req, res) => {
     <div style="background:#0d1226;border:1px solid #6b8aff;border-radius:12px;padding:24px;margin:20px 0;text-align:center;">
       <div style="font-size:44px;font-weight:900;color:${scoreColor};">${score}%</div>
       <div style="font-size:14px;font-weight:700;color:${scoreColor};margin-top:4px;">${verdict}</div>
-            email: recruiterUser.email,
-            subject: `[VeriProof Alert] Candidate ${user.name || req.user.email} completed assessment (${score}%)`,
-            html: recruiterHtml,
-          }).catch(err => console.warn("[PostExam] Recruiter notification email error:", err.message));
+      <div style="font-size:12px;color:#5a6478;margin-top:8px;">Score has been automatically synced to your Recruiter Verdicts &amp; Rankings Dashboard.</div>
+    </div>
+    <hr style="border-color:#1a2040;margin:24px 0;">
+    <p style="color:#5a6478;font-size:11px;font-family:monospace;">VeriProof &mdash; Forensic Credential Intelligence</p>
+  </div>
+</body></html>`;
+
+            sendEmail({
+              email: recruiterUser.email,
+              subject: `[VeriProof Alert] Candidate ${user.name || req.user.email} completed assessment (${score}%)`,
+              html: recruiterHtml,
+            }).catch(err => console.warn("[PostExam] Recruiter notification email error:", err.message));
+          }
         }
+      } catch (postEmailErr) {
+        console.warn("[PostExam] Email delivery note:", postEmailErr.message);
       }
-    } catch (emailErr) {
-      console.warn("[PostExam] Email/digest error (non-fatal):", emailErr.message);
     }
 
 
