@@ -27,33 +27,28 @@ const startExam = async (req, res) => {
     const existingExam = await Exam.findOne({
       candidateId: req.user._id,
       status: { $in: ["Completed", "Terminated", "Attended"] }
-    });
-
-    const existingResult = await VerificationResult.findOne({
+    // Check for previous proctoring violations
+    const violatedExam = await Exam.findOne({
       candidateId: req.user._id,
-      status: { $in: ["Verified", "Failed", "Completed"] }
+      status: { $in: ["Terminated", "Violated", "Disqualified"] }
     });
 
-    const existingApplicant = await RecruiterApplicant.findOne({
+    const violatedApplicant = await RecruiterApplicant.findOne({
       $or: [
         { candidateUser: req.user._id },
         { extractedEmail: req.user.email },
         { extractedEmail: new RegExp(`^${req.user.email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") }
       ],
-      $or: [
-        { examStatus: { $in: ["Attended", "Completed", "Terminated", "Terminated - Proctoring Violation"] } },
-        { examScore: { $exists: true, $ne: null } }
-      ]
+      examStatus: { $in: ["Violated", "Terminated", "Disqualified", "Terminated - Proctoring Violation"] }
     });
 
-    if (existingExam || existingResult || (isInvitedCandidate && existingApplicant && existingApplicant.examStatus !== "Pending")) {
-      const finalScore = existingExam?.score ?? existingApplicant?.examScore ?? existingResult?.examScore ?? 0;
+    // If violated/disqualified, strictly forbid any future attempts
+    if (violatedExam || violatedApplicant) {
       return res.status(403).json({
         completed: true,
-        message: "SINGLE_ATTEMPT_LIMIT_REACHED",
-        error: "You have already completed your technical assessment. Retakes are strictly prohibited.",
-        score: finalScore,
-        status: existingResult?.status || existingApplicant?.status || "Completed"
+        disqualified: true,
+        message: "DISQUALIFIED_DUE_TO_VIOLATIONS",
+        error: "You have been disqualified from this assessment due to security and proctoring violations. Retakes are strictly prohibited.",
       });
     }
 
@@ -505,7 +500,42 @@ const submitExam = async (req, res) => {
       }
     }
 
-    const { answers = [], code_snippet, behavioral_response } = req.body;
+    const { answers = [], code_snippet, behavioral_response, isTerminated = false } = req.body;
+
+    // Handle security termination / violation disqualification
+    if (isTerminated) {
+      const RecruiterApplicant = require("../models/RecruiterApplicant");
+      await RecruiterApplicant.updateMany(
+        {
+          $or: [
+            { candidateUser: req.user._id },
+            { extractedEmail: req.user.email },
+            { extractedEmail: new RegExp(`^${req.user.email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") },
+            ...(req.user.githubUsername ? [{ githubUsername: req.user.githubUsername }] : [])
+          ]
+        },
+        {
+          status: "Disqualified",
+          examStatus: "Violated",
+          examScore: 0,
+          reasoning: "Disqualified due to proctoring and security violations during assessment."
+        }
+      );
+
+      const exam = await Exam.findOne({ candidateId: req.user._id }).sort({ createdAt: -1 });
+      if (exam) {
+        exam.status = "Terminated";
+        exam.score = 0;
+        await exam.save();
+      }
+
+      return res.status(200).json({
+        success: false,
+        disqualified: true,
+        score: 0,
+        message: "Assessment terminated due to security violations. Result disqualified.",
+      });
+    }
 
     if (!Array.isArray(answers) || answers.length === 0) {
       return res.status(400).json({ message: "Answers are required." });
@@ -617,9 +647,21 @@ const submitExam = async (req, res) => {
       await exam.save();
     }
 
+    // Check if candidate already has an official completed attempt
+    const RecruiterApplicant = require("../models/RecruiterApplicant");
+    const existingOfficialApplicant = await RecruiterApplicant.findOne({
+      $or: [
+        { candidateUser: req.user._id },
+        { extractedEmail: req.user.email },
+        { extractedEmail: new RegExp(`^${req.user.email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") }
+      ],
+      examStatus: "Attended"
+    });
+
+    const isFirstOfficialAttempt = !existingOfficialApplicant;
+
     // Upsert VerificationResult & ResumeAnalysis for EVERY candidate type (Self-Registered, Invited, Recruiter)
     const InvitationRegistry = require("../models/InvitationRegistry");
-    const RecruiterApplicant = require("../models/RecruiterApplicant");
     const matchedInvitation = await InvitationRegistry.findOne({
       $or: [
         { email: req.user.email },
@@ -638,9 +680,11 @@ const submitExam = async (req, res) => {
     const compositeTrustScore = Math.min(100, Math.max(0, Math.round((alignScore * 0.4) + (score * 0.4) + 20)));
 
     if (vResult) {
-      vResult.examScore = score;
-      vResult.trustScore = compositeTrustScore;
-      vResult.status = isPassed ? "Verified" : "Failed";
+      if (isFirstOfficialAttempt) {
+        vResult.examScore = score;
+        vResult.trustScore = compositeTrustScore;
+        vResult.status = isPassed ? "Verified" : "Failed";
+      }
       if (!vResult.alignmentScore) vResult.alignmentScore = alignScore;
       if (jobId && !vResult.jobId) vResult.jobId = jobId;
       await vResult.save();
@@ -667,78 +711,83 @@ const submitExam = async (req, res) => {
     // Update User model trustScore & verificationScore
     if (user) {
       if (!user.skillProgress) user.skillProgress = {};
-      user.skillProgress.trustScore = compositeTrustScore;
-      user.skillProgress.verificationScore = score;
+      if (isFirstOfficialAttempt) {
+        user.skillProgress.trustScore = compositeTrustScore;
+        user.skillProgress.verificationScore = score;
+      }
       user.skillProgress.completedAssessments = (user.skillProgress.completedAssessments || 0) + 1;
       user.pipelineStage = "verification_complete";
       await user.save();
     }
 
-    // Sync RecruiterApplicant status, exam score, and trust score for recruiter workspace
-    await RecruiterApplicant.updateMany(
-      {
-        $or: [
-          { candidateUser: req.user._id },
-          { extractedEmail: req.user.email },
-          { extractedEmail: new RegExp(`^${req.user.email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") },
-          ...(req.user.githubUsername ? [{ githubUsername: req.user.githubUsername }] : [])
-        ]
-      },
-      {
-        status: "Completed",
-        candidateUser: req.user._id,
-        examScore: score,
-        examStatus: "Attended",
-        reasoning: `Assessment completed. Score: ${score}%. Verification Verdict: ${isPassed ? 'VERIFIED' : 'NEEDS IMPROVEMENT'}. Composite Trust Score: ${compositeTrustScore}%.`
-      }
-    );
+    // Only update recruiter pipeline on FIRST official attempt
+    if (isFirstOfficialAttempt) {
+      await RecruiterApplicant.updateMany(
+        {
+          $or: [
+            { candidateUser: req.user._id },
+            { extractedEmail: req.user.email },
+            { extractedEmail: new RegExp(`^${req.user.email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") },
+            ...(req.user.githubUsername ? [{ githubUsername: req.user.githubUsername }] : [])
+          ]
+        },
+        {
+          status: "Completed",
+          candidateUser: req.user._id,
+          examScore: score,
+          examStatus: "Attended",
+          reasoning: `Assessment completed. Score: ${score}%. Verification Verdict: ${isPassed ? 'VERIFIED' : 'NEEDS IMPROVEMENT'}. Composite Trust Score: ${compositeTrustScore}%.`
+        }
+      );
+    }
 
-    // ── Post-Exam Emails ───────────────────────────────────────────────
-    try {
-      // Build failed question analysis list
-      const failedQuestions = [];
-      if (exam) {
-        const questionMap = new Map(
-          exam.questions.map((q) => [q._id.toString(), q])
-        );
-        answers.forEach(({ questionId, answerIndex }) => {
-          const q = questionMap.get(String(questionId));
-          if (q && q.correctOption !== answerIndex) {
-            failedQuestions.push({
-              question: q.questionText,
-              yourAnswer: q.options[answerIndex] || "Not answered",
-              correctAnswer: q.options[q.correctOption],
-              skill: q.skill || "Technical",
-            });
-          }
-        });
-      }
+    // ── Build failed questions analysis ─────────────────────────────────
+    const failedQuestions = [];
+    if (exam) {
+      const questionMap = new Map(
+        exam.questions.map((q) => [q._id.toString(), q])
+      );
+      answers.forEach(({ questionId, answerIndex }) => {
+        const q = questionMap.get(String(questionId));
+        if (q && q.correctOption !== answerIndex) {
+          failedQuestions.push({
+            question: q.questionText,
+            yourAnswer: q.options[answerIndex] || "Not answered",
+            correctAnswer: q.options[q.correctOption],
+            skill: q.skill || "Technical",
+          });
+        }
+      });
+    }
 
-      const failedHtml = failedQuestions.length > 0
-        ? `<table style="width:100%;border-collapse:collapse;margin-top:12px;font-size:12px;">
-            <thead><tr style="background:#1a2040;">
-              <th style="padding:8px 10px;text-align:left;color:#94a0b8;">Skill</th>
-              <th style="padding:8px 10px;text-align:left;color:#94a0b8;">Question</th>
-              <th style="padding:8px 10px;text-align:left;color:#f87171;">Your Answer</th>
-              <th style="padding:8px 10px;text-align:left;color:#34d399;">Correct Answer</th>
-            </tr></thead>
-            <tbody>${failedQuestions.map((fq, i) => `
-              <tr style="background:${i % 2 === 0 ? '#0d1226' : '#0a0e1a'};">
-                <td style="padding:8px 10px;color:#6b8aff;font-weight:600;">${fq.skill}</td>
-                <td style="padding:8px 10px;color:#c8d0e4;">${fq.question}</td>
-                <td style="padding:8px 10px;color:#f87171;">${fq.yourAnswer}</td>
-                <td style="padding:8px 10px;color:#34d399;">${fq.correctAnswer}</td>
-              </tr>`).join('')}
-            </tbody>
-          </table>`
-        : `<p style="color:#34d399;font-weight:600;">Perfect score — no incorrect answers!</p>`;
+    // Send emails if this was their first official attempt
+    if (isFirstOfficialAttempt) {
+      try {
+        const scoreColor = isPassed ? "#34d399" : "#f87171";
+        const verdict = isPassed ? "PASSED \u2705" : "NEEDS IMPROVEMENT \u274c";
 
-      const scoreColor = isPassed ? "#34d399" : "#f87171";
-      const verdict = isPassed ? "PASSED \u2705" : "NEEDS IMPROVEMENT \u274c";
+        const failedHtml = failedQuestions.length > 0
+          ? `<table style="width:100%;border-collapse:collapse;margin-top:12px;font-size:12px;">
+              <thead><tr style="background:#1a2040;">
+                <th style="padding:8px 10px;text-align:left;color:#94a0b8;">Skill</th>
+                <th style="padding:8px 10px;text-align:left;color:#94a0b8;">Question</th>
+                <th style="padding:8px 10px;text-align:left;color:#f87171;">Your Answer</th>
+                <th style="padding:8px 10px;text-align:left;color:#34d399;">Correct Answer</th>
+              </tr></thead>
+              <tbody>${failedQuestions.map((fq, i) => `
+                <tr style="background:${i % 2 === 0 ? '#0d1226' : '#0a0e1a'};">
+                  <td style="padding:8px 10px;color:#6b8aff;font-weight:600;">${fq.skill}</td>
+                  <td style="padding:8px 10px;color:#c8d0e4;">${fq.question}</td>
+                  <td style="padding:8px 10px;color:#f87171;">${fq.yourAnswer}</td>
+                  <td style="padding:8px 10px;color:#34d399;">${fq.correctAnswer}</td>
+                </tr>`).join('')}
+              </tbody>
+            </table>`
+          : `<p style="color:#34d399;font-weight:600;">Perfect score — no incorrect answers!</p>`;
 
-      // ─ Email to candidate ───────────────────────────────────────────
-      if (user?.email) {
-        const candidateHtml = `
+        // Email to Candidate
+        if (user?.email) {
+          const candidateHtml = `
 <!DOCTYPE html><html><head><meta charset="UTF-8"></head>
 <body style="font-family:sans-serif;background:#0a0e1a;color:#e8ecf4;padding:40px;">
   <div style="max-width:620px;margin:0 auto;">
@@ -748,61 +797,33 @@ const submitExam = async (req, res) => {
     <p style="font-family:monospace;font-size:10px;letter-spacing:3px;text-transform:uppercase;color:#5a6478;margin-top:0;">Forensic Credential Intelligence</p>
     <hr style="border-color:#1a2040;margin:24px 0;">
     <p>Hi <strong>${user.name || "Candidate"}</strong>,</p>
-    <p>You have completed your technical assessment. Here are your results:</p>
+    <p>You have completed your technical assessment. Here are your official results:</p>
     <div style="background:#0d1226;border:1px solid #1a2040;border-radius:12px;padding:24px;margin:20px 0;text-align:center;">
       <div style="font-size:48px;font-weight:900;color:${scoreColor};">${score}%</div>
       <div style="font-size:14px;font-weight:700;color:${scoreColor};margin-top:4px;">${verdict}</div>
       <div style="font-size:12px;color:#5a6478;margin-top:8px;">Passing threshold: 70% &bull; Questions: ${totalQuestions} &bull; Correct: ${correctCount}</div>
     </div>
     ${failedQuestions.length > 0 ? `
-    <h3 style="color:#e8ecf4;font-size:14px;font-weight:700;margin-bottom:8px;">Areas for Improvement (${failedQuestions.length} question${failedQuestions.length !== 1 ? 's' : ''}):</h3>
+    <h3 style="color:#e8ecf4;font-size:14px;font-weight:700;margin-bottom:8px;">Question Analysis (${failedQuestions.length} incorrect):</h3>
     ${failedHtml}` : ""}
     <hr style="border-color:#1a2040;margin:24px 0;">
-    <p style="color:#5a6478;font-size:11px;font-family:monospace;">VeriProof &mdash; Screen Everyone &middot; Catch the Fraud &middot; Prove the Honest</p>
+    <p style="color:#5a6478;font-size:11px;font-family:monospace;">VeriProof &mdash; Forensic Credential Intelligence</p>
   </div>
 </body></html>`;
 
-        await sendEmail({
-          email: user.email,
-          subject: `[VeriProof] Your Assessment Results: ${score}% — ${verdict}`,
-          html: candidateHtml,
-        }).catch((err) => console.warn("[PostExam] Candidate email failed:", err.message));
-      }
+          sendEmail({
+            email: user.email,
+            subject: `[VeriProof] Your Assessment Results: ${score}% — ${verdict}`,
+            html: candidateHtml,
+          }).catch((err) => console.warn("[PostExam] Candidate email error:", err.message));
+        }
 
-      // ─ Notify recruiter immediately upon candidate exam completion ──
-      const InvitationRegistry = require("../models/InvitationRegistry");
-      const RecruiterApplicant = require("../models/RecruiterApplicant");
-      const matchedInv = await InvitationRegistry.findOne({
-        $or: [
-          { email: req.user.email },
-          { email: new RegExp(`^${req.user.email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") }
-        ]
-      });
-
-      const recruiterId = matchedInv?.recruiterId;
-      if (recruiterId) {
-        await RecruiterApplicant.updateMany(
-          {
-            recruiterId,
-            $or: [
-              { candidateUser: req.user._id },
-              { extractedEmail: req.user.email }
-            ]
-          },
-          {
-            status: "Completed",
-            examScore: score,
-            examStatus: "Attended",
-            examCompletedAt: new Date(),
-            examDigestPending: true,
-            examFailedReasons: failedQuestions.map(fq => `[${fq.skill}] ${fq.question} → Correct: ${fq.correctAnswer}`),
-          }
-        );
-
-        // Fetch recruiter email and notify
-        const recruiterUser = await User.findById(recruiterId);
-        if (recruiterUser?.email) {
-          const recruiterHtml = `
+        // Email to Recruiter
+        const recruiterId = matchedInvitation?.recruiterId;
+        if (recruiterId) {
+          const recruiterUser = await User.findById(recruiterId);
+          if (recruiterUser?.email) {
+            const recruiterHtml = `
 <!DOCTYPE html><html><head><meta charset="UTF-8"></head>
 <body style="font-family:sans-serif;background:#0a0e1a;color:#e8ecf4;padding:40px;">
   <div style="max-width:620px;margin:0 auto;">
@@ -812,18 +833,10 @@ const submitExam = async (req, res) => {
     <p style="font-family:monospace;font-size:10px;letter-spacing:3px;text-transform:uppercase;color:#5a6478;margin-top:0;">Candidate Assessment Notification</p>
     <hr style="border-color:#1a2040;margin:24px 0;">
     <p>Hi <strong>${recruiterUser.name || "Recruiter"}</strong>,</p>
-    <p>Invited candidate <strong>${user.name || req.user.email}</strong> (${req.user.email}) has just completed their technical assessment on VeriProof.</p>
+    <p>Candidate <strong>${user.name || req.user.email}</strong> (${req.user.email}) has just completed their technical assessment for your job role.</p>
     <div style="background:#0d1226;border:1px solid #6b8aff;border-radius:12px;padding:24px;margin:20px 0;text-align:center;">
       <div style="font-size:44px;font-weight:900;color:${scoreColor};">${score}%</div>
       <div style="font-size:14px;font-weight:700;color:${scoreColor};margin-top:4px;">${verdict}</div>
-      <div style="font-size:12px;color:#5a6478;margin-top:8px;">Candidate score updated live in your Recruiter Pipeline.</div>
-    </div>
-    <hr style="border-color:#1a2040;margin:24px 0;">
-    <p style="color:#5a6478;font-size:11px;font-family:monospace;">VeriProof &mdash; Forensic Credential Intelligence</p>
-  </div>
-</body></html>`;
-
-          await sendEmail({
             email: recruiterUser.email,
             subject: `[VeriProof Alert] Candidate ${user.name || req.user.email} completed assessment (${score}%)`,
             html: recruiterHtml,
