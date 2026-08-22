@@ -27,12 +27,19 @@ const sendViaBrevoHTTP = async (options) => {
   const senderEmail = (process.env.FROM_EMAIL || "veriproof.platform@gmail.com").trim();
   const senderName = (process.env.FROM_NAME || "VeriProof Platform").trim();
 
+  const textContent = (
+    options.message ||
+    options.text ||
+    (options.html ? options.html.replace(/<[^>]*>?/gm, " ").replace(/\s+/g, " ").trim() : "") ||
+    "VeriProof Verification Code"
+  );
+
   const payload = {
     sender: { name: senderName, email: senderEmail },
     to: [{ email: options.email }],
     subject: options.subject,
-    htmlContent: options.html || `<p>${options.message || ""}</p>`,
-    textContent: options.message || options.text || "",
+    htmlContent: options.html || `<p>${options.message || options.text || ""}</p>`,
+    textContent: textContent,
   };
 
   const { data } = await axios.post("https://api.brevo.com/v3/smtp/email", payload, {
