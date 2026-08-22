@@ -683,34 +683,57 @@ ${candidateText}
       );
 
       const totalJobSkillsCount = jobSkills.length || 1;
-      let calculatedScore = Math.round(Math.min(100, (matchedSkills.length / totalJobSkillsCount) * 100));
+      const skillCoverageRatio = matchedSkills.length / totalJobSkillsCount;
 
+      // ── Multi-Factor Forensic ATS Scoring Model ──
+      // 1. Core Target Skill Coverage (50% max)
+      const coreSkillScore = skillCoverageRatio * 50;
+
+      // 2. Resume Depth & Project Context (20% max)
+      const resumeLen = parsed.normalizedText.length;
+      const hasProjects = /project|experience|work|developed|architected|built|implemented/i.test(parsed.normalizedText);
+      const depthScore = Math.min(20, (resumeLen > 1500 ? 12 : 6) + (hasProjects ? 8 : 0));
+
+      // 3. Technical Evidence & Portfolio Signal (15% max)
+      const extractedGithub = candidateMetaData?.github || extractGithubFromText(parsed.normalizedText);
+      const hasGithub = Boolean(extractedGithub);
+      const hasLiveLinks = /https?:\/\/(www\.)?(github|gitlab|bitbucket|linkedin|vercel|netlify)\.com/i.test(parsed.normalizedText);
+      const evidenceScore = (hasGithub ? 10 : 0) + (hasLiveLinks ? 5 : 0);
+
+      // 4. Broad Competency & Technology Density (15% max)
+      const totalClaimedSkills = resumeSkillStrings.length;
+      const breadthScore = Math.min(15, Math.round((totalClaimedSkills / 8) * 15));
+
+      // Composite Deterministic Score
+      let calculatedScore = Math.round(coreSkillScore + depthScore + evidenceScore + breadthScore);
+
+      // Boost or refine via Deep AI Claim Verification
       try {
         const pythonRes = await axios.post(`${PYTHON_API_BASE}/verify-claims`, {
           claims: resumeSkills.map(s => (typeof s === "string" ? { skill: s, context: "Resume claim", source_quote: s } : s)),
           job_requirements: jobSkills,
-        }, { timeout: 3000 });
-        if (pythonRes.data?.result?.score !== undefined && pythonRes.data?.result?.score >= 0) {
-          calculatedScore = Math.round(pythonRes.data.result.score);
+        }, { timeout: 10000 });
+        if (pythonRes.data?.result?.score !== undefined && pythonRes.data?.result?.score > 0) {
+          const aiScore = Number(pythonRes.data.result.score);
+          // Blend 60% AI deep analysis + 40% structural ATS evidence
+          calculatedScore = Math.round((aiScore * 0.6) + (calculatedScore * 0.4));
         }
       } catch (pythonErr) {
         console.warn("[Intake] Python claim verifier fallback used:", pythonErr.message);
       }
 
-      const alignmentScore = Math.min(100, Math.max(0, calculatedScore));
+      const alignmentScore = Math.min(100, Math.max(15, calculatedScore));
 
       let reasoning = "";
       if (jobSkills.length === 0) {
-        reasoning = "No target skills were specified on the job blueprint.";
+        reasoning = "General alignment evaluation based on technical depth and project evidence.";
       } else if (matchedSkills.length === jobSkills.length) {
-        reasoning = `Excellent match (${alignmentScore}% score). Candidate covers all required target skills.`;
+        reasoning = `High-tier alignment (${alignmentScore}%). Matches all ${jobSkills.length} required target skills with verified project evidence.`;
       } else if (matchedSkills.length === 0) {
-        reasoning = `No matching target skills found (${alignmentScore}% score). Gaps: ${jobSkills.join(", ")}.`;
+        reasoning = `Low target alignment (${alignmentScore}%). Missing key required skills: ${jobSkills.join(", ")}.`;
       } else {
-        reasoning = `Matched ${matchedSkills.length} of ${jobSkills.length} target skills (${alignmentScore}% score). Strengths: ${matchedSkills.join(", ")}. Gaps: ${missingSkills.join(", ")}.`;
+        reasoning = `Matched ${matchedSkills.length} of ${jobSkills.length} target competencies (${alignmentScore}%). Strong in: ${matchedSkills.join(", ")}. Missing: ${missingSkills.join(", ")}.`;
       }
-
-      const extractedGithub = candidateMetaData?.github || extractGithubFromText(parsed.normalizedText);
 
       Object.assign(applicant, {
         status:        "Completed",
