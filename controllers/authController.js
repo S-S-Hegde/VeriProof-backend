@@ -1104,27 +1104,54 @@ const updateCompanyInfo = async (req, res) => {
 
   await user.save();
 
-  // Send plaintext OTP via email
+  // Send polished branded OTP via email
   const otpHtml = `
-<!DOCTYPE html><html><head><meta charset="UTF-8"></head>
-<body style="font-family:sans-serif;background:#0a0e1a;color:#e8ecf4;padding:40px;">
-  <div style="max-width:520px;margin:0 auto;">
-    <h1 style="font-size:28px;font-weight:900;font-style:italic;letter-spacing:-1px;margin-bottom:4px;">
-      VERI<span style="color:#0a66c2">PROOF</span><span style="color:#0a66c2">.</span>
-    </h1>
-    <p style="font-family:monospace;font-size:10px;letter-spacing:3px;text-transform:uppercase;color:#5a6478;margin-top:0;">LinkedIn Recruiter Verification</p>
-    <hr style="border-color:#1a2040;margin:24px 0;">
-    <p>Hi <strong>${user.name}</strong>,</p>
-    <p>Please enter the 6-digit verification code below to verify your recruiter profile for LinkedIn account <strong>${cleanUsername}</strong>.</p>
-    <div style="background:#0d1226;border:1px solid #0a66c2;border-radius:12px;padding:32px;margin:24px 0;text-align:center;">
-      <div style="font-size:42px;font-weight:900;letter-spacing:12px;color:#0a66c2;font-family:monospace;">${rawOtp}</div>
-      <div style="font-size:11px;color:#5a6478;margin-top:8px;font-family:monospace;">Recruiter Verification Code (Expires in 10 mins)</div>
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="margin:0;padding:32px 16px;background-color:#060913;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#f1f5f9;">
+  <div style="max-width:540px;margin:0 auto;background-color:#0c1222;border:1px solid #1e293b;border-radius:18px;padding:36px 28px;box-sizing:border-box;box-shadow:0 12px 30px rgba(0,0,0,0.5);">
+    <div style="display:flex;align-items:center;margin-bottom:6px;">
+      <h1 style="font-size:26px;font-weight:900;font-style:italic;letter-spacing:-1px;margin:0;color:#ffffff;">
+        VERI<span style="color:#0a66c2">PROOF</span><span style="color:#38bdf8">.</span>
+      </h1>
     </div>
-    <p style="color:#5a6478;font-size:12px;">If you did not request this, please ignore this message.</p>
-    <hr style="border-color:#1a2040;margin:24px 0;">
-    <p style="color:#5a6478;font-size:11px;font-family:monospace;">VeriProof Platform &mdash; Recruiter Verification Engine</p>
+    <p style="font-family:monospace;font-size:10px;letter-spacing:3px;text-transform:uppercase;color:#64748b;margin:0 0 24px 0;">
+      Recruiter Identity &amp; LinkedIn Verification
+    </p>
+
+    <hr style="border:none;border-top:1px solid #1e293b;margin:20px 0;">
+
+    <p style="font-size:15px;line-height:1.6;margin:0 0 16px 0;color:#e2e8f0;">
+      Hello <strong style="color:#ffffff;">${user.name || "Recruiter"}</strong>,
+    </p>
+    <p style="font-size:14px;line-height:1.6;color:#94a0b8;margin:0 0 20px 0;">
+      Please use the 6-digit security verification code below to authenticate and link your LinkedIn identity (<strong style="color:#38bdf8;">@${cleanUsername}</strong>) to your VeriProof Recruiter Workspace.
+    </p>
+
+    <div style="background-color:#040711;border:1px solid #0a66c2;border-radius:14px;padding:28px 16px;margin:24px 0;text-align:center;box-shadow:0 0 25px rgba(10,102,194,0.15);">
+      <div style="font-size:42px;font-weight:900;letter-spacing:14px;color:#38bdf8;font-family:monospace;margin-left:14px;">
+        ${rawOtp}
+      </div>
+      <div style="font-size:11px;color:#64748b;margin-top:10px;font-family:monospace;letter-spacing:1px;text-transform:uppercase;">
+        Expires in 10 minutes &bull; Single-use only
+      </div>
+    </div>
+
+    <p style="color:#64748b;font-size:12px;line-height:1.5;margin:20px 0 0 0;">
+      If you did not initiate this request, you can safely disregard this email. Your account remains secure.
+    </p>
+
+    <hr style="border:none;border-top:1px solid #1e293b;margin:24px 0 16px 0;">
+    <p style="color:#475569;font-size:11px;font-family:monospace;margin:0;text-align:center;">
+      VeriProof &mdash; Forensic Credential Intelligence Platform
+    </p>
   </div>
-</body></html>`;
+</body>
+</html>`;
 
   console.log("\n========================================");
   console.log("[RECRUITER LINKEDIN VERIFICATION OTP]");
@@ -1136,7 +1163,7 @@ const updateCompanyInfo = async (req, res) => {
   // Non-blocking asynchronous email delivery so UI advances instantly
   sendEmail({
     email: targetEmail,
-    subject: `[VeriProof] Verify LinkedIn Recruiter Identity (${cleanUsername})`,
+    subject: `[VeriProof] ${rawOtp} is your Recruiter Verification Code`,
     html: otpHtml,
   }).catch((err) => {
     console.error("[Recruiter Onboarding] Background email delivery note:", err.message);
