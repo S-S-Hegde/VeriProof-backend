@@ -57,9 +57,9 @@ const extractNameFromText = (text) => {
   return null;
 };
 
-/** Branded invitation email HTML */
-const buildInviteEmail = ({ candidateName, recruiterName, jobTitle, loginUrl, registerUrl, username, tempPassword }) => ({
-  subject: `[VeriProof] You've been invited — ${jobTitle} (your login credentials inside)`,
+/** Branded invitation email HTML with 1-Click Google OAuth Access */
+const buildInviteEmail = ({ candidateName, recruiterName, jobTitle, loginUrl, email, githubUsername }) => ({
+  subject: `[VeriProof] You're Invited: Technical Assessment for ${jobTitle}`,
   html: `
 <!DOCTYPE html>
 <html>
@@ -81,43 +81,39 @@ const buildInviteEmail = ({ candidateName, recruiterName, jobTitle, loginUrl, re
       <strong style="color:#ffffff;">${recruiterName}</strong> reviewed your resume for the role of
       <strong style="color:#6b8aff;">${jobTitle}</strong> and has invited you to complete a verified technical assessment on VeriProof.
     </p>
-    ${username && tempPassword ? `
-    <p style="color:#94a0b8;font-size:13px;margin:0 0 12px 0;">Your account has been pre-created. Use the credentials below to sign in directly — no registration required:</p>
-    <div style="background:#060913;border:1px solid #6b8aff;border-radius:12px;padding:18px 16px;margin:16px 0;box-sizing:border-box;">
+    
+    <div style="background:#060913;border:1px solid #1a2a50;border-radius:12px;padding:18px 16px;margin:20px 0;box-sizing:border-box;">
       <table style="width:100%;border-collapse:collapse;table-layout:fixed;">
         <tr>
-          <td style="width:28%;color:#5a6478;padding:8px 0;font-family:monospace;font-size:11px;vertical-align:top;font-weight:bold;">SIGN-IN URL</td>
-          <td style="width:72%;padding:8px 0;font-family:monospace;font-size:12px;word-break:break-all;word-wrap:break-word;overflow-wrap:anywhere;">
-            <a href="${loginUrl}" style="color:#6b8aff;text-decoration:underline;word-break:break-all;">${loginUrl}</a>
-          </td>
+          <td style="width:30%;color:#5a6478;padding:8px 0;font-family:monospace;font-size:11px;vertical-align:top;font-weight:bold;">INVITED ROLE</td>
+          <td style="width:70%;color:#6b8aff;padding:8px 0;font-family:monospace;font-size:12px;font-weight:bold;">${jobTitle}</td>
         </tr>
         <tr><td colspan="2" style="border-top:1px dashed #1a2040;height:1px;padding:0;"></td></tr>
         <tr>
-          <td style="width:28%;color:#5a6478;padding:8px 0;font-family:monospace;font-size:11px;vertical-align:top;font-weight:bold;">USERNAME</td>
-          <td style="width:72%;color:#e8ecf4;padding:8px 0;font-family:monospace;font-size:12px;word-break:break-all;word-wrap:break-word;overflow-wrap:anywhere;">${username}</td>
+          <td style="width:30%;color:#5a6478;padding:8px 0;font-family:monospace;font-size:11px;vertical-align:top;font-weight:bold;">INVITED EMAIL</td>
+          <td style="width:70%;color:#e8ecf4;padding:8px 0;font-family:monospace;font-size:12px;">${email || "Your Registered Email"}</td>
         </tr>
+        ${githubUsername ? `
         <tr><td colspan="2" style="border-top:1px dashed #1a2040;height:1px;padding:0;"></td></tr>
         <tr>
-          <td style="width:28%;color:#5a6478;padding:8px 0;font-family:monospace;font-size:11px;vertical-align:top;font-weight:bold;">PASSWORD</td>
-          <td style="width:72%;color:#6b8aff;padding:8px 0;font-family:monospace;font-size:13px;font-weight:700;word-break:break-all;word-wrap:break-word;overflow-wrap:anywhere;">${tempPassword}</td>
-        </tr>
+          <td style="width:30%;color:#5a6478;padding:8px 0;font-family:monospace;font-size:11px;vertical-align:top;font-weight:bold;">LINKED GITHUB</td>
+          <td style="width:70%;color:#00ffaa;padding:8px 0;font-family:monospace;font-size:12px;">@${githubUsername}</td>
+        </tr>` : ""}
       </table>
     </div>
-    <p style="color:#f87171;font-size:12px;margin:12px 0 20px 0;">⚠️ You will be prompted to change your password after your first sign-in.</p>` : `
-    <p style="color:#94a0b8;font-size:13px;margin:0 0 20px 0;">VeriProof is a forensic credential platform. Click below to create your profile and link your evidence (GitHub, projects, certifications).</p>
-    <div style="text-align:center;margin:24px 0;">
-      <a href="${registerUrl}" style="background:#6b8aff;color:#fff;font-weight:700;font-size:12px;letter-spacing:2px;text-transform:uppercase;text-decoration:none;padding:14px 28px;border-radius:8px;display:inline-block;">
-        Create Your Profile
-      </a>
-    </div>`}
-    <div style="text-align:center;margin:28px 0 20px 0;">
-      <a href="${loginUrl}" style="background:#6b8aff;color:#ffffff;font-weight:700;font-size:13px;letter-spacing:1.5px;text-transform:uppercase;text-decoration:none;padding:14px 28px;border-radius:8px;display:inline-block;box-shadow:0 4px 14px rgba(107,138,255,0.35);">
-        Sign In &amp; Take Assessment &rarr;
+
+    <div style="text-align:center;margin:32px 0 24px 0;">
+      <a href="${loginUrl}" style="background:linear-gradient(135deg, #4285F4, #6b8aff);color:#ffffff;font-weight:800;font-size:13px;letter-spacing:1px;text-transform:uppercase;text-decoration:none;padding:16px 32px;border-radius:10px;display:inline-block;box-shadow:0 4px 18px rgba(66,133,244,0.4);">
+        ⚡ Continue with Google &amp; Start Assessment &rarr;
       </a>
     </div>
-    <p style="color:#5a6478;font-size:12px;margin:20px 0 0 0;">If you were not expecting this, you can safely ignore this email.</p>
+
+    <p style="color:#64748b;font-size:12px;line-height:1.6;margin:16px 0 0 0;text-align:center;">
+      No password needed &mdash; simply click above and sign in with your Google account to access your personalized candidate dashboard.
+    </p>
+
     <hr style="border:none;border-top:1px solid #1a2040;margin:24px 0 16px 0;">
-    <p style="color:#5a6478;font-size:11px;font-family:monospace;margin:0;text-align:center;">VeriProof &mdash; Screen Everyone &middot; Catch the Fraud &middot; Prove the Honest</p>
+    <p style="color:#5a6478;font-size:11px;font-family:monospace;margin:0;text-align:center;">VeriProof &mdash; Forensic Credential Intelligence Platform</p>
   </div>
 </body>
 </html>`,
@@ -829,10 +825,9 @@ ${candidateText}
             candidateName: extractedName,
             recruiterName: req.user.name,
             jobTitle: job.title,
-            loginUrl: LOGIN_URL,
-            registerUrl: REGISTER_URL,
-            username: tempPassword ? extractedEmail : null,
-            tempPassword: tempPassword || null,
+            loginUrl: `${LOGIN_URL}?email=${encodeURIComponent(extractedEmail)}&role=student`,
+            email: extractedEmail,
+            githubUsername: extractedGithub || null,
           });
           await sendEmail({ email: extractedEmail, subject, html });
           applicant.emailSentTo  = extractedEmail;
