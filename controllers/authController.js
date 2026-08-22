@@ -1133,19 +1133,14 @@ const updateCompanyInfo = async (req, res) => {
   console.log(`OTP:      ${rawOtp}`);
   console.log("========================================\n");
 
-  // Guaranteed email delivery to the recipient email provided
-  try {
-    await sendEmail({
-      email: targetEmail,
-      subject: `[VeriProof] Verify LinkedIn Recruiter Identity (${cleanUsername})`,
-      html: otpHtml,
-    });
-  } catch (err) {
-    console.error("[Recruiter Onboarding] Email dispatch failed:", err.message);
-    return res.status(500).json({
-      message: `Failed to deliver verification email to ${targetEmail} (${err.message}). Please verify the address.`
-    });
-  }
+  // Non-blocking asynchronous email delivery so UI advances instantly
+  sendEmail({
+    email: targetEmail,
+    subject: `[VeriProof] Verify LinkedIn Recruiter Identity (${cleanUsername})`,
+    html: otpHtml,
+  }).catch((err) => {
+    console.error("[Recruiter Onboarding] Background email delivery note:", err.message);
+  });
 
   res.json({
     success: true,

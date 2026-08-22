@@ -21,6 +21,9 @@ const createSMTPTransport = () => {
       service: "gmail",
       auth: { user, pass },
       tls: { rejectUnauthorized: false },
+      connectionTimeout: 8000,
+      greetingTimeout: 8000,
+      socketTimeout: 8000,
     });
   }
 
@@ -33,6 +36,9 @@ const createSMTPTransport = () => {
       family: 4,
       auth: { user, pass },
       tls: { rejectUnauthorized: false },
+      connectionTimeout: 8000,
+      greetingTimeout: 8000,
+      socketTimeout: 8000,
     });
   }
 
@@ -44,6 +50,9 @@ const createSMTPTransport = () => {
     family: 4,
     auth: { user, pass },
     tls: { rejectUnauthorized: false },
+    connectionTimeout: 8000,
+    greetingTimeout: 8000,
+    socketTimeout: 8000,
   });
 };
 
