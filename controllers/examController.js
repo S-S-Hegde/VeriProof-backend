@@ -136,44 +136,15 @@ const startExam = async (req, res) => {
       context: (invitation || applicant) ? `Job Alignment Assessment (${jobTitle})` : "Practice Assessment",
     }));
 
-    // ── Generate Unique Assessment via AI Engine & Gemini ──────────────
+    // ── Multi-Provider AI Question Generation Engine ───────────────────
     let generatedMcqs = [];
 
-    // Strategy 1: Call Python Engine (12s timeout)
-    try {
-      const pythonRes = await axios.post(
-        `${PYTHON_API_BASE}/generate-assessment`,
-        {
-          claims: formattedClaims,
-          difficulty: jobDifficulty,
-          resume_description: resumeText,
-          job_description: jobDescription,
-          job_title: jobTitle,
-          entropy: Date.now() + Math.random(),
-        },
-        { timeout: 12000 }
-      );
-      if (pythonRes.data.result?.mcq_questions?.length >= 5) {
-        generatedMcqs = pythonRes.data.result.mcq_questions;
-      }
-    } catch (err) {
-      console.warn("[Python Engine] Assessment generation notice:", err.message);
-    }
-
-    // Strategy 2: Direct Gemini Generation from Node.js
-    if (!generatedMcqs || generatedMcqs.length === 0) {
-      try {
-        if (process.env.GEMINI_API_KEY) {
-          const { GoogleGenerativeAI } = require("@google/generative-ai");
-          const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-          const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-
-          const prompt = `You are a strict technical assessment creator for role: "${jobTitle}".
+    const systemPrompt = `You are a strict technical assessment creator for role: "${jobTitle}".
 Candidate verified competencies: ${effectiveSkills.join(", ")}.
 Job Description: "${jobDescription}".
 Generate exactly 20 challenging, realistic multiple-choice technical questions tailored to this candidate.
 Every question must test deep conceptual, architectural, or code-level understanding. Do NOT create trivial questions.
-Return ONLY valid JSON array without markdown formatting:
+Return ONLY a valid JSON array without any markdown formatting, backticks, or extra text:
 [
   {
     "question": "Clear technical question text",
@@ -183,20 +154,129 @@ Return ONLY valid JSON array without markdown formatting:
   }
 ]`;
 
-          const result = await model.generateContent(prompt);
-          const text = result.response.text().replace(/```json|```/g, "").trim();
-          const parsed = JSON.parse(text);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            generatedMcqs = parsed;
-            console.log(`[ExamGen] Gemini generated ${parsed.length} dynamic unique MCQs.`);
+    // 1. Primary Provider: Groq Cloud (Ultra-Fast Llama-3.3 70B Versatile)
+    if (!generatedMcqs || generatedMcqs.length === 0) {
+      const groqKey = process.env.GROQ_API_KEY;
+      if (groqKey) {
+        try {
+          const groqRes = await axios.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            {
+              model: "llama-3.3-70b-versatile",
+              messages: [
+                { role: "system", content: "You are an expert technical interviewer that outputs raw JSON only." },
+                { role: "user", content: systemPrompt }
+              ],
+              temperature: 0.7,
+            },
+            {
+              headers: { Authorization: `Bearer ${groqKey}`, "Content-Type": "application/json" },
+              timeout: 10000
+            }
+          );
+          const rawContent = (groqRes.data?.choices?.[0]?.message?.content || "").replace(/```json|```/g, "").trim();
+          const parsed = JSON.parse(rawContent);
+          const questionsList = Array.isArray(parsed) ? parsed : (parsed.questions || parsed.mcqs || parsed.mcq_questions || []);
+          if (questionsList.length >= 5) {
+            generatedMcqs = questionsList;
+            console.log(`[ExamGen] Groq AI generated ${generatedMcqs.length} dynamic unique MCQs.`);
           }
+        } catch (groqErr) {
+          console.warn("[ExamGen] Groq AI generation note:", groqErr.message);
         }
-      } catch (geminiErr) {
-        console.warn("[ExamGen] Gemini direct generation note:", geminiErr.message);
       }
     }
 
-    // Strategy 3: Dynamic Randomized Algorithmic Question Bank with Entropy Shuffling
+    // 2. Secondary Provider: Mistral AI (mistral-small-latest)
+    if (!generatedMcqs || generatedMcqs.length === 0) {
+      const mistralKey = process.env.MISTRAL_API_KEY;
+      if (mistralKey) {
+        try {
+          const mistralRes = await axios.post(
+            "https://api.mistral.ai/v1/chat/completions",
+            {
+              model: "mistral-small-latest",
+              messages: [
+                { role: "system", content: "You are an expert technical interviewer that outputs raw JSON only." },
+                { role: "user", content: systemPrompt }
+              ],
+              temperature: 0.7,
+            },
+            {
+              headers: { Authorization: `Bearer ${mistralKey}`, "Content-Type": "application/json" },
+              timeout: 10000
+            }
+          );
+          const rawContent = (mistralRes.data?.choices?.[0]?.message?.content || "").replace(/```json|```/g, "").trim();
+          const parsed = JSON.parse(rawContent);
+          const questionsList = Array.isArray(parsed) ? parsed : (parsed.questions || parsed.mcqs || parsed.mcq_questions || []);
+          if (questionsList.length >= 5) {
+            generatedMcqs = questionsList;
+            console.log(`[ExamGen] Mistral AI generated ${generatedMcqs.length} dynamic unique MCQs.`);
+          }
+        } catch (mistralErr) {
+          console.warn("[ExamGen] Mistral AI generation note:", mistralErr.message);
+        }
+      }
+    }
+
+    // 3. Tertiary Provider: OpenRouter (DeepSeek / Meta LLaMA / Claude)
+    if (!generatedMcqs || generatedMcqs.length === 0) {
+      const openRouterKey = process.env.OPENROUTER_API_KEY;
+      if (openRouterKey) {
+        try {
+          const orRes = await axios.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            {
+              model: "meta-llama/llama-3.1-8b-instruct:free",
+              messages: [
+                { role: "system", content: "You are an expert technical interviewer that outputs raw JSON only." },
+                { role: "user", content: systemPrompt }
+              ],
+              temperature: 0.7,
+            },
+            {
+              headers: { Authorization: `Bearer ${openRouterKey}`, "Content-Type": "application/json" },
+              timeout: 10000
+            }
+          );
+          const rawContent = (orRes.data?.choices?.[0]?.message?.content || "").replace(/```json|```/g, "").trim();
+          const parsed = JSON.parse(rawContent);
+          const questionsList = Array.isArray(parsed) ? parsed : (parsed.questions || parsed.mcqs || parsed.mcq_questions || []);
+          if (questionsList.length >= 5) {
+            generatedMcqs = questionsList;
+            console.log(`[ExamGen] OpenRouter generated ${generatedMcqs.length} dynamic unique MCQs.`);
+          }
+        } catch (orErr) {
+          console.warn("[ExamGen] OpenRouter generation note:", orErr.message);
+        }
+      }
+    }
+
+    // 4. Quaternary Provider: Python AI Engine
+    if (!generatedMcqs || generatedMcqs.length === 0) {
+      try {
+        const pythonRes = await axios.post(
+          `${PYTHON_API_BASE}/generate-assessment`,
+          {
+            claims: formattedClaims,
+            difficulty: jobDifficulty,
+            resume_description: resumeText,
+            job_description: jobDescription,
+            job_title: jobTitle,
+            entropy: Date.now() + Math.random(),
+          },
+          { timeout: 10000 }
+        );
+        if (pythonRes.data.result?.mcq_questions?.length >= 5) {
+          generatedMcqs = pythonRes.data.result.mcq_questions;
+        }
+      } catch (pyErr) {
+        console.warn("[ExamGen] Python Engine note:", pyErr.message);
+      }
+    }
+
+    // 5. Zero-Failure Fallback: Dynamic Randomized Algorithmic Engine
     if (!generatedMcqs || !Array.isArray(generatedMcqs) || generatedMcqs.length === 0) {
       generatedMcqs = generateDynamicAlgorithmicQuestions(effectiveSkills, jobDifficulty);
     }
