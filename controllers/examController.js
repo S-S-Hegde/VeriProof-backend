@@ -905,25 +905,66 @@ const submitExam = async (req, res) => {
       await exam.save();
     }
 
-    // Check if candidate already has an official completed attempt on recruiter pipeline
-    const RecruiterApplicant = require("../models/RecruiterApplicant");
-    const existingOfficialApplicant = await RecruiterApplicant.findOne({
-      $or: [
-        { candidateUser: req.user._id },
-        { extractedEmail: req.user.email },
-        { extractedEmail: new RegExp(`^${req.user.email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") }
-      ],
-      examStatus: { $in: ["Attended", "Completed"] }
+    // Bulletproof detection: Has candidate ever completed an official attempt before?
+    const priorCompletedExamsCount = await Exam.countDocuments({
+      candidateId: req.user._id,
+      status: "Completed",
+      _id: { $ne: exam?._id },
     });
 
-    const isFirstOfficialAttempt = !existingOfficialApplicant;
+    const normalizedEmail = (req.user.email || "").toLowerCase().trim();
+    const RecruiterApplicant = require("../models/RecruiterApplicant");
+    const existingOfficialApplicant = await RecruiterApplicant.findOne({
+      $and: [
+        {
+          $or: [
+            { candidateUser: req.user._id },
+            { extractedEmail: normalizedEmail },
+            { extractedEmail: new RegExp(`^${normalizedEmail.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") },
+            ...(req.user.githubUsername ? [{ githubUsername: req.user.githubUsername }] : [])
+          ]
+        },
+        {
+          $or: [
+            { examScore: { $exists: true, $ne: null } },
+            { examStatus: { $in: ["Attended", "Completed", "attended", "completed"] } },
+            { status: { $in: ["Completed", "completed"] } }
+          ]
+        }
+      ]
+    });
+
+    const InvitationRegistry = require("../models/InvitationRegistry");
+    const existingInvitation = await InvitationRegistry.findOne({
+      $and: [
+        {
+          $or: [
+            { email: normalizedEmail },
+            { email: new RegExp(`^${normalizedEmail.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") }
+          ]
+        },
+        {
+          $or: [
+            { status: "completed" },
+            { examCompleted: true }
+          ]
+        }
+      ]
+    });
+
+    const hasUserCompletedBefore = (user?.skillProgress?.completedAssessments || 0) > 0;
+
+    const isFirstOfficialAttempt = (priorCompletedExamsCount === 0) && !existingOfficialApplicant && !existingInvitation && !hasUserCompletedBefore;
+
+    if (!isFirstOfficialAttempt) {
+      console.log(`[PostExam] Re-attempt detected for candidate ${req.user.email}. Recruiter notifications and official scorecard are permanently locked.`);
+    }
 
     // Upsert VerificationResult & ResumeAnalysis for EVERY candidate type (Self-Registered, Invited, Recruiter)
-    const InvitationRegistry = require("../models/InvitationRegistry");
     const matchedInvitation = await InvitationRegistry.findOne({
       $or: [
-        { email: req.user.email },
-        { email: new RegExp(`^${req.user.email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") },
+        { email: normalizedEmail },
+        { email: new RegExp(`^${normalizedEmail.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") },
         ...(req.user.githubUsername ? [{ githubUsername: req.user.githubUsername }] : [])
       ]
     });
