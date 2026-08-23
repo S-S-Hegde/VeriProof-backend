@@ -224,31 +224,36 @@ const startExam = async (req, res) => {
     // ── Multi-Provider AI Question Generation Engine ───────────────────
     let generatedMcqs = [];
 
-    const systemPrompt = `You are an elite technical hiring committee and principal staff engineer designing a tailored proctored assessment for the position: "${jobTitle}".
+    const systemPrompt = `You are a Principal Staff Engineer, IIT/NPTEL Examination Chair, and Senior Technical Evaluator designing an elite, rigorous proctored technical assessment for the role: "${jobTitle}".
 
-── JOB DESCRIPTION & REAL-WORLD RESPONSIBILITIES ──
-${jobDescription || "Design, develop, scale, and maintain high-performance software systems and APIs."}
-
-── REQUIRED TARGET COMPETENCIES ──
-Required Role Skills: ${jobTargetSkills.join(", ") || effectiveSkills.join(", ")}
-Candidate Verified Skills: ${effectiveSkills.join(", ")}
+── JOB CONTEXT & TECHNICAL STACK ──
+Job Description: "${jobDescription || "Design, develop, scale, and maintain high-performance software systems and APIs."}"
+Required Core Competencies: ${jobTargetSkills.join(", ") || effectiveSkills.join(", ")}
+Candidate Verified Competencies: ${effectiveSkills.join(", ")}
 Target Seniority Level: "${jobDifficulty}"
 
-── ASSESSMENT BLUEPRINT & SCENARIO-BASED INSTRUCTIONS ──
-1. Analyze the Job Description (JD) and generate exactly 35 unique, scenario-based multiple-choice technical questions directly mapped to the JD requirements.
-2. Questions must test practical problem-solving in real-world scenarios described in the JD (e.g., architectural trade-offs, debugging broken code, state management, database query optimization, security vulnerabilities, RESTful API contracts, and high-concurrency scaling).
-3. Avoid generic definitions or surface-level syntax trivia. Use concrete code snippets and engineering scenarios.
+── STRICT OPTION SYMMETRY & ANTI-BIAS RULES (CRITICAL) ──
+1. EQUAL OPTION LENGTH: All 4 options (A, B, C, D) must have SIMILAR word counts and grammatical structures. DO NOT make the correct answer longer, more detailed, or more qualified than distractor options. Avoid the "longest option is correct" giveaway.
+2. PLAUSIBLE DISTRACTORS: Every incorrect option must be an authentic, intelligent developer trap (e.g., off-by-one errors, shallow vs deep copy pitfalls, event loop microtask vs macrotask execution order, NULL comparison anomalies in SQL, stale closure state).
+
+── QUESTION ARCHITECTURE & NPTEL/LEETCODE STYLES ──
+Adopt the analytical rigor of LeetCode / HackerRank / NPTEL examination problems:
+• STYLE A: "Code Output & Execution Trace" — Multi-line code snippets testing closures, async/await event loops, recursion, mutation, and edge cases.
+• STYLE B: "Multi-Statement Evaluation (NPTEL Style)" — Present a scenario followed by 3 statements (I, II, III) and ask which are True/False:
+  e.g., "(A) I and II only", "(B) II and III only", "(C) I and III only", "(D) I, II, and III".
+• STYLE C: "Time/Space Complexity & Algorithmic Trade-offs" — Deep asymptotic analysis of data structure operations and caching strategies.
+• STYLE D: "High-Concurrency & Distributed Architecture" — Diagnosing race conditions, deadlocks, partition tolerance, and database transaction isolation levels.
 
 ── PROGRESSIVE 3-TIER DIFFICULTY BREAKDOWN (35 QUESTIONS TOTAL) ──
-- Tier 1 (Questions 1 to 10) — "Easy": Core fundamentals, syntax precision, and standard library patterns required by the JD.
-- Tier 2 (Questions 11 to 25) — "Medium": Practical implementation, debugging broken logic, data flow, and API design.
-- Tier 3 (Questions 26 to 35) — "Hard": High-scale system design, database indexing/concurrency, distributed failure modes, and security mitigations.
+• Tier 1 (Questions 1 to 10) — "Easy": Focused 3-6 line code snippets, syntax precision, edge-case evaluations, and fundamental APIs.
+• Tier 2 (Questions 11 to 25) — "Medium": Multi-step code traces, async ordering, SQL CTE/window functions, and state mutation diagnostics requiring 1-2 minutes of analysis.
+• Tier 3 (Questions 26 to 35) — "Hard": Complex NPTEL-style multi-statement evaluations, distributed system failure modes, caching invalidation anomalies, and high-concurrency race condition scenarios.
 
 Return ONLY a valid JSON array without any markdown formatting, backticks, or extra text:
 [
   {
-    "question": "Clear scenario/code-based technical question text",
-    "options": ["Option A", "Option B", "Option C", "Option D"],
+    "question": "Rigorous scenario or code snippet question text",
+    "options": ["Option A (concise, uniform length)", "Option B (concise, uniform length)", "Option C (concise, uniform length)", "Option D (concise, uniform length)"],
     "correct_answer": "Exact string of correct option",
     "skill": "Specific skill name from JD",
     "difficulty": "Easy" | "Medium" | "Hard"
