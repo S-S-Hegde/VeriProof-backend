@@ -12,19 +12,35 @@
 const axios = require("axios");
 const nodemailer = require("nodemailer");
 
-// Check available dispatch providers
-const getBrevoKey = () =>
-  (process.env.BREVO_API_KEY || (process.env.SMTP_PASS?.startsWith("xkeysib-") ? process.env.SMTP_PASS : "") || "").trim();
+// Collect all configured Brevo Accounts (API Keys & corresponding Verified Senders)
+const getBrevoAccounts = () => {
+  const accounts = [];
+
+  // Account 1
+  const key1 = (process.env.BREVO_API_KEY || (process.env.SMTP_PASS?.startsWith("xkeysib-") ? process.env.SMTP_PASS : "") || "").trim();
+  const sender1 = (process.env.FROM_EMAIL || "veriproof.platform@gmail.com").trim();
+  if (key1) accounts.push({ key: key1, sender: sender1, id: "Brevo-Account-1" });
+
+  // Account 2
+  const key2 = (process.env.BREVO_API_KEY_2 || "").trim();
+  const sender2 = (process.env.FROM_EMAIL_2 || sender1).trim();
+  if (key2) accounts.push({ key: key2, sender: sender2, id: "Brevo-Account-2" });
+
+  // Account 3 (if provided)
+  const key3 = (process.env.BREVO_API_KEY_3 || "").trim();
+  const sender3 = (process.env.FROM_EMAIL_3 || sender1).trim();
+  if (key3) accounts.push({ key: key3, sender: sender3, id: "Brevo-Account-3" });
+
+  return accounts;
+};
 
 const getResendKey = () => (process.env.RESEND_API_KEY || "").trim();
 
 const hasRealSMTP = () =>
   !!(process.env.SMTP_USER?.trim() && process.env.SMTP_PASS?.trim());
 
-// ── Provider 1: Brevo HTTPS REST API (Port 443 — 100% Open on Render) ───
-const sendViaBrevoHTTP = async (options) => {
-  const apiKey = getBrevoKey();
-  const senderEmail = (process.env.FROM_EMAIL || "veriproof.platform@gmail.com").trim();
+// ── Provider 1: Multi-Account Brevo HTTPS REST API (Port 443 — 100% Free & Open) ───
+const sendViaBrevoHTTP = async (options, account) => {
   const senderName = (process.env.FROM_NAME || "VeriProof Platform").trim();
 
   const textContent = (
@@ -35,7 +51,7 @@ const sendViaBrevoHTTP = async (options) => {
   );
 
   const payload = {
-    sender: { name: senderName, email: senderEmail },
+    sender: { name: senderName, email: account.sender },
     to: [{ email: options.email }],
     subject: options.subject,
     htmlContent: options.html || `<p>${options.message || options.text || ""}</p>`,
@@ -44,13 +60,13 @@ const sendViaBrevoHTTP = async (options) => {
 
   const { data } = await axios.post("https://api.brevo.com/v3/smtp/email", payload, {
     headers: {
-      "api-key": apiKey,
+      "api-key": account.key,
       "Content-Type": "application/json",
     },
     timeout: 8000,
   });
 
-  console.log(`✅ [Email/Brevo HTTP] Delivered → ${options.email} (messageId: ${data.messageId})`);
+  console.log(`✅ [Email/${account.id} HTTP] Delivered → ${options.email} (messageId: ${data.messageId})`);
   return data;
 };
 
@@ -112,13 +128,24 @@ const createSMTPTransport = () => {
   });
 };
 
+let currentBrevoIndex = 0;
+
 const sendEmail = async (options) => {
-  // Try 1: Brevo HTTP API (Port 443 - Bypasses all cloud firewall port restrictions)
-  if (getBrevoKey()) {
-    try {
-      return await sendViaBrevoHTTP(options);
-    } catch (brevoErr) {
-      console.warn(`[Email/Brevo HTTP] API error (${brevoErr.response?.data?.message || brevoErr.message}) — trying fallback`);
+  // Try 1: Brevo Multi-Account Pool (Port 443 - Round-Robin Load Balanced + Auto-Failover)
+  const brevoAccounts = getBrevoAccounts();
+  if (brevoAccounts.length > 0) {
+    for (let i = 0; i < brevoAccounts.length; i++) {
+      const targetAccount = brevoAccounts[(currentBrevoIndex + i) % brevoAccounts.length];
+      try {
+        const result = await sendViaBrevoHTTP(options, targetAccount);
+        // Advance round-robin pointer for next dispatch
+        currentBrevoIndex = (currentBrevoIndex + 1) % brevoAccounts.length;
+        return result;
+      } catch (brevoErr) {
+        console.warn(
+          `[Email/${targetAccount.id}] API warning (${brevoErr.response?.data?.message || brevoErr.message}) — failing over to next Brevo account`
+        );
+      }
     }
   }
 
