@@ -126,6 +126,8 @@ app.get("/uploads/recruiter-resumes/:filename", async (req, res) => {
     const filename = req.params.filename;
     const localFilePath = path.join(__dirname, "uploads", "recruiter-resumes", filename);
     if (fs.existsSync(localFilePath)) {
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
       return res.sendFile(localFilePath);
     }
 
@@ -134,22 +136,62 @@ app.get("/uploads/recruiter-resumes/:filename", async (req, res) => {
       $or: [
         { fileUrl: new RegExp(filename.replace(/\.pdf$/i, ""), "i") },
         { fileUrl: `/uploads/recruiter-resumes/${filename}` },
+        { originalFileName: new RegExp(filename.replace(/\.pdf$/i, ""), "i") },
       ],
     });
 
-    if (applicant && applicant.resumeText) {
-      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    // 1. If original binary buffer is in database, serve original binary PDF directly
+    if (applicant && applicant.fileBufferBase64) {
+      const pdfBuffer = Buffer.from(applicant.fileBufferBase64, "base64");
+      res.setHeader("Content-Type", applicant.mimeType || "application/pdf");
       res.setHeader(
         "Content-Disposition",
-        `inline; filename="${applicant.name || "candidate"}-resume.txt"`
+        `inline; filename="${applicant.originalFileName || filename}"`
       );
-      return res.send(
-        `====================================================\nVERIPROOF VERIFIED RESUME RECORD\nCandidate: ${applicant.name || "Candidate"}\nEmail: ${applicant.extractedEmail || "N/A"}\n====================================================\n\n${applicant.resumeText}`
+      return res.send(pdfBuffer);
+    }
+
+    // 2. If only structured resumeText exists (legacy record), generate a clean professional PDF using PDFKit
+    if (applicant && applicant.resumeText) {
+      const PDFDocument = require("pdfkit");
+      const doc = new PDFDocument({ margin: 40, size: "A4" });
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader(
+        "Content-Disposition",
+        `inline; filename="${applicant.extractedName || "Candidate"}_Verified_Resume.pdf"`
       );
+      doc.pipe(res);
+
+      // Header Banner
+      doc.rect(0, 0, doc.page.width, 50).fill("#0d1226");
+      doc.fillColor("#6b8aff").fontSize(16).text("VERIPROOF VERIFIED RESUME", 40, 16);
+      doc.fillColor("#94a0b8").fontSize(8).text("Official Recruiter Candidate Dossier", 40, 34);
+
+      doc.moveDown(2.5);
+      doc.fillColor("#000000").fontSize(14).text(applicant.extractedName || "Verified Candidate", { bold: true });
+      if (applicant.extractedEmail) {
+        doc.fillColor("#555555").fontSize(9).text(`Email: ${applicant.extractedEmail}`);
+      }
+      if (applicant.githubUsername) {
+        doc.fillColor("#555555").fontSize(9).text(`GitHub: github.com/${applicant.githubUsername}`);
+      }
+      doc.moveDown(0.8);
+      doc.strokeColor("#cccccc").lineWidth(1).moveTo(40, doc.y).lineTo(doc.page.width - 40, doc.y).stroke();
+      doc.moveDown(0.8);
+
+      // Body text
+      doc.fillColor("#222222").fontSize(9.5).lineGap(3).text(applicant.resumeText, {
+        align: "left",
+        width: doc.page.width - 80,
+      });
+
+      doc.end();
+      return;
     }
 
     return res.status(404).send("Document not available on server.");
   } catch (e) {
+    console.error("[Resume Stream Error]", e);
     return res.status(500).send("Error reading document.");
   }
 });

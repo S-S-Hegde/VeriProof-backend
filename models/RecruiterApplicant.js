@@ -6,6 +6,8 @@ const recruiterApplicantSchema = new mongoose.Schema({
   originalFileName:  { type: String, required: true },
   mimeType:          { type: String, required: true },
   fileUrl:           { type: String, required: true },
+  fileBufferBase64:  { type: String, default: "" },
+  cloudinaryUrl:     { type: String, default: "" },
   status:            { type: String, enum: ["Processing", "Completed", "Failed"], default: "Processing" },
   resumeText:        { type: String, default: "" },
   claims:            { type: mongoose.Schema.Types.Mixed, default: {} },

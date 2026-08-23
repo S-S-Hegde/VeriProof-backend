@@ -585,11 +585,14 @@ ${candidateText}
       });
     }
 
+    const base64Content = fileBuffer ? fileBuffer.toString("base64") : "";
+
     if (applicant) {
       applicant.originalFileName = originalFileName || applicant.originalFileName;
       applicant.mimeType = mimeType || applicant.mimeType;
       applicant.fileUrl = fileUrl;
       applicant.contentHash = contentHash;
+      if (base64Content) applicant.fileBufferBase64 = base64Content;
       await applicant.save();
       console.log(`[Intake] Deduplication: Updating existing applicant ${applicant._id} (${applicant.extractedEmail || contentHash.substring(0, 8)})`);
     } else {
@@ -599,6 +602,7 @@ ${candidateText}
         originalFileName: originalFileName || `${candidateMetaData?.name || "Candidate"}_resume${extension}`,
         mimeType: mimeType || "application/pdf",
         fileUrl,
+        fileBufferBase64: base64Content,
         contentHash,
       });
     }
