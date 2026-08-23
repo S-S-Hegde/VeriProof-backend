@@ -1078,24 +1078,28 @@ const getApplicantResumes = asyncHandler(async (req, res) => {
           obj.candidateUser = candidateUser._id;
         }
 
-        // 2. Query VerificationResult and Exam history
+        // 2. Query VerificationResult and Exam history (Strictly locked to 1st official attempt)
         const vResult = await VerificationResult.findOne({
           candidateId: candidateUser._id,
           ...(obj.jobId?._id || obj.jobId ? { jobId: obj.jobId._id || obj.jobId } : {})
-        }).sort({ createdAt: -1 }) || await VerificationResult.findOne({ candidateId: candidateUser._id }).sort({ createdAt: -1 });
+        }).sort({ createdAt: 1 }) || await VerificationResult.findOne({ candidateId: candidateUser._id }).sort({ createdAt: 1 });
 
-        const lastExam = await Exam.findOne({ candidateId: candidateUser._id }).sort({ createdAt: -1 });
+        const firstOfficialExam = await Exam.findOne({
+          candidateId: candidateUser._id,
+          status: "Completed"
+        }).sort({ createdAt: 1 });
 
         // Determine real dynamic examStatus and examScore from live database state
         const hasAttendedInDb = obj.examStatus === "Attended" ||
+          (obj.examScore !== undefined && obj.examScore !== null) ||
           (vResult && vResult.examScore !== undefined && vResult.examScore !== null) ||
-          (lastExam && (lastExam.score !== undefined && lastExam.score !== null && lastExam.status === "Completed"));
+          (firstOfficialExam && firstOfficialExam.score !== undefined && firstOfficialExam.score !== null);
 
-        const hasInProgressInDb = (obj.examStatus === "In Progress" || (lastExam && ["In Progress", "in_progress", "Started"].includes(lastExam.status))) && !hasAttendedInDb;
+        const hasInProgressInDb = (obj.examStatus === "In Progress" || (firstOfficialExam && ["In Progress", "in_progress", "Started"].includes(firstOfficialExam.status))) && !hasAttendedInDb;
 
         if (hasAttendedInDb) {
           obj.examStatus = "Attended";
-          obj.examScore = obj.examScore ?? vResult?.examScore ?? lastExam?.score ?? null;
+          obj.examScore = obj.examScore ?? vResult?.examScore ?? firstOfficialExam?.score ?? null;
         } else if (hasInProgressInDb) {
           obj.examStatus = "In Progress";
           obj.examScore = null;
@@ -1406,18 +1410,21 @@ const runFullVerificationPipeline = asyncHandler(async (req, res) => {
       }));
     }
     
-    const exam = await Exam.findOne({ candidateId: candidateUser._id }).sort({ createdAt: -1 });
-    if (exam && exam.status === "Completed") {
+    // Read candidate's 1st official exam attempt for recruiter verification pipeline
+    const firstExam = await Exam.findOne({ candidateId: candidateUser._id, status: "Completed" }).sort({ createdAt: 1 });
+    const effectiveScore = applicant.examScore ?? firstExam?.score ?? null;
+
+    if (effectiveScore !== null || (firstExam && firstExam.status === "Completed")) {
       technical_assessment = {
-        score: exam.score || 0,
-        time_taken_minutes: exam.timeTaken || 30,
-        questions_attempted: exam.questions?.length || 10,
-        code_quality_score: exam.codeQuality || (exam.score || 0)
+        score: effectiveScore !== null ? effectiveScore : (firstExam.score || 0),
+        time_taken_minutes: firstExam?.timeTaken || 30,
+        questions_attempted: firstExam?.questions?.length || 35,
+        code_quality_score: effectiveScore !== null ? effectiveScore : (firstExam?.codeQuality || 0)
       };
       
       behavioral_assessment = {
-        answers: exam.answers || [],
-        integrity_score: exam.integrityScore || 100,
+        answers: firstExam?.answers || [],
+        integrity_score: firstExam?.integrityScore || 100,
       };
     }
   }

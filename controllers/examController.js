@@ -978,34 +978,34 @@ const submitExam = async (req, res) => {
     const alignScore = vResult?.alignmentScore || 85;
     const compositeTrustScore = Math.min(100, Math.max(0, Math.round((alignScore * 0.4) + (score * 0.4) + 20)));
 
-    if (vResult) {
-      if (isFirstOfficialAttempt) {
+    if (isFirstOfficialAttempt) {
+      if (vResult) {
         vResult.examScore = score;
         vResult.trustScore = compositeTrustScore;
         vResult.status = isPassed ? "Verified" : "Failed";
+        if (!vResult.alignmentScore) vResult.alignmentScore = alignScore;
+        if (jobId && !vResult.jobId) vResult.jobId = jobId;
+        await vResult.save();
+      } else {
+        vResult = await VerificationResult.create({
+          candidateId: req.user._id,
+          jobId,
+          examScore: score,
+          alignmentScore: alignScore,
+          trustScore: compositeTrustScore,
+          status: isPassed ? "Verified" : "Failed",
+          matchedSkills: exam?.skills || ["Software Engineering"],
+          missingSkills: [],
+        });
       }
-      if (!vResult.alignmentScore) vResult.alignmentScore = alignScore;
-      if (jobId && !vResult.jobId) vResult.jobId = jobId;
-      await vResult.save();
-    } else {
-      vResult = await VerificationResult.create({
-        candidateId: req.user._id,
-        jobId,
-        examScore: score,
-        alignmentScore: alignScore,
-        trustScore: compositeTrustScore,
-        status: isPassed ? "Verified" : "Failed",
-        matchedSkills: exam?.skills || ["Software Engineering"],
-        missingSkills: [],
-      });
-    }
 
-    // Update ResumeAnalysis with verification & trust score
-    await ResumeAnalysis.findOneAndUpdate(
-      { candidateId: req.user._id },
-      { status: "Analysis Complete", verificationScore: score, trustScore: compositeTrustScore },
-      { upsert: true, new: true }
-    );
+      // Update ResumeAnalysis with verification & trust score
+      await ResumeAnalysis.findOneAndUpdate(
+        { candidateId: req.user._id },
+        { status: "Analysis Complete", verificationScore: score, trustScore: compositeTrustScore },
+        { upsert: true, new: true }
+      );
+    }
 
     // Update User model trustScore & verificationScore
     if (user) {
