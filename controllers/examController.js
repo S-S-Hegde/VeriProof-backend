@@ -22,58 +22,58 @@ const shuffle = (arr) => {
   return copy;
 };
 
-// ── Dynamic Algorithmic Question Generator ─────────────────────
+// ── Dynamic Algorithmic Question Generator (Strictly Equal Option Lengths) ──
 const generateDynamicAlgorithmicQuestions = (skills = [], difficulty = "intermediate") => {
   const fullBank = [
     // Python
-    { question: "What is the primary difference between a List and a Tuple in Python?", options: ["Lists are mutable, Tuples are immutable", "Lists are immutable, Tuples are mutable", "Tuples cannot store integers", "Lists require string keys"], correctAnswer: "Lists are mutable, Tuples are immutable", skill: "Python", difficulty: "Easy" },
-    { question: "Which keyword is used for exception handling cleanup in Python?", options: ["finally", "catch", "defer", "finish"], correctAnswer: "finally", skill: "Python", difficulty: "Easy" },
-    { question: "What does the `__init__` method represent in Python classes?", options: ["Constructor", "Destructor", "Module Loader", "Static Initializer"], correctAnswer: "Constructor", skill: "Python", difficulty: "Easy" },
-    { question: "Which built-in module is used to handle JSON serialization in Python?", options: ["json", "pyjson", "serialize", "jackson"], correctAnswer: "json", skill: "Python", difficulty: "Easy" },
-    { question: "What is the computational complexity of average lookup in a Python dictionary?", options: ["O(1)", "O(n)", "O(log n)", "O(n^2)"], correctAnswer: "O(1)", skill: "Python", difficulty: "Medium" },
-    { question: "What does the `@staticmethod` decorator do in Python?", options: ["Defines a method that does not access instance or class state", "Makes the method private", "Forces synchronous execution", "Overrides parent implementation"], correctAnswer: "Defines a method that does not access instance or class state", skill: "Python", difficulty: "Medium" },
-    { question: "How does Python manage automatic memory allocation and deallocation?", options: ["Reference counting combined with a generational garbage collector", "Manual malloc and free", "Immediate stack deallocation only", "Compile-time static layout"], correctAnswer: "Reference counting combined with a generational garbage collector", skill: "Python", difficulty: "Hard" },
+    { question: "What is the primary difference between a List and a Tuple in Python?", options: ["Lists are mutable while Tuples are strictly immutable", "Lists are immutable while Tuples are strictly mutable", "Lists only accept strings while Tuples hold any data", "Lists are statically typed while Tuples are untyped"], correctAnswer: "Lists are mutable while Tuples are strictly immutable", skill: "Python", difficulty: "Easy" },
+    { question: "Which keyword is used for exception handling cleanup in Python?", options: ["The finally block", "The catch block", "The defer keyword", "The finish clause"], correctAnswer: "The finally block", skill: "Python", difficulty: "Easy" },
+    { question: "What does the `__init__` method represent in Python classes?", options: ["Instance object constructor", "Static memory allocator", "Class module loader", "Runtime garbage collector"], correctAnswer: "Instance object constructor", skill: "Python", difficulty: "Easy" },
+    { question: "Which built-in module is used to handle JSON serialization in Python?", options: ["The built-in json module", "The internal pyjson module", "The system serialize package", "The default jackson library"], correctAnswer: "The built-in json module", skill: "Python", difficulty: "Easy" },
+    { question: "What is the average lookup time complexity in a Python dictionary?", options: ["Constant average time O(1)", "Linear scan time O(n)", "Logarithmic search time O(log n)", "Quadratic search time O(n^2)"], correctAnswer: "Constant average time O(1)", skill: "Python", difficulty: "Medium" },
+    { question: "What does the `@staticmethod` decorator do in Python?", options: ["Disables implicit instance self parameter", "Enforces thread-safe locked execution", "Restricts method to private subclasses", "Compiles function to native C bytecode"], correctAnswer: "Disables implicit instance self parameter", skill: "Python", difficulty: "Medium" },
+    { question: "How does Python handle primary memory deallocation?", options: ["Reference counts with cycle collector", "Explicit programmer malloc free calls", "Compile-time static stack allocation", "Continuous mark-sweep stopping pauses"], correctAnswer: "Reference counts with cycle collector", skill: "Python", difficulty: "Hard" },
 
     // JavaScript & TypeScript
-    { question: "What is the event loop in JavaScript primarily responsible for?", options: ["Handling asynchronous callbacks by monitoring the call stack and task queue", "Compiling JS to bytecode", "Managing CPU thread scheduling", "Parsing HTML tags"], correctAnswer: "Handling asynchronous callbacks by monitoring the call stack and task queue", skill: "JavaScript", difficulty: "Medium" },
-    { question: "What is the difference between `==` and `===` in JavaScript?", options: ["`===` compares both value and type without type coercion", "`==` is strict equality", "There is no difference", "`===` only works for numbers"], correctAnswer: "`===` compares both value and type without type coercion", skill: "JavaScript", difficulty: "Easy" },
-    { question: "Which method creates a new array populated with the results of calling a provided function on every element?", options: ["Array.prototype.map()", "Array.prototype.forEach()", "Array.prototype.filter()", "Array.prototype.reduce()"], correctAnswer: "Array.prototype.map()", skill: "JavaScript", difficulty: "Easy" },
-    { question: "What is a closure in JavaScript?", options: ["A function bundled with references to its lexical surrounding state", "A function that has no return statement", "A private class constructor", "A self-terminating loop"], correctAnswer: "A function bundled with references to its lexical surrounding state", skill: "JavaScript", difficulty: "Medium" },
-    { question: "In TypeScript, what does the `unknown` type represent compared to `any`?", options: ["A type-safe counterpart where operations require type narrowing or assertions", "An alias for undefined", "A type that allows arbitrary method calls without checks", "A void return value"], correctAnswer: "A type-safe counterpart where operations require type narrowing or assertions", skill: "TypeScript", difficulty: "Hard" },
-    { question: "What is the difference between `type` and `interface` in TypeScript?", options: ["Interfaces can be merged with declaration merging, types cannot", "Types can only represent primitives", "Interfaces cannot extend each other", "There are no functional differences"], correctAnswer: "Interfaces can be merged with declaration merging, types cannot", skill: "TypeScript", difficulty: "Medium" },
+    { question: "What is the primary responsibility of the JavaScript Event Loop?", options: ["Dispatches queued tasks to the empty stack", "Compiles JavaScript source into machine code", "Manages multiple physical OS CPU threads", "Parses and validates incoming HTML documents"], correctAnswer: "Dispatches queued tasks to the empty stack", skill: "JavaScript", difficulty: "Medium" },
+    { question: "What is the difference between `==` and `===` in JavaScript?", options: ["Strict equality prevents implicit coercion", "Loose equality validates identical memory", "Strict equality only operates on numbers", "Loose equality executes synchronous checks"], correctAnswer: "Strict equality prevents implicit coercion", skill: "JavaScript", difficulty: "Easy" },
+    { question: "Which method returns a new array with mapped callback transformations?", options: ["Array.prototype.map()", "Array.prototype.forEach()", "Array.prototype.filter()", "Array.prototype.reduce()"], correctAnswer: "Array.prototype.map()", skill: "JavaScript", difficulty: "Easy" },
+    { question: "What constitutes a JavaScript Closure?", options: ["A function paired with its lexical environment", "A function declaring zero return statements", "An object constructor with frozen properties", "A promise handler with synchronous execution"], correctAnswer: "A function paired with its lexical environment", skill: "JavaScript", difficulty: "Medium" },
+    { question: "In TypeScript, what differentiates `unknown` from `any`?", options: ["Requires type narrowing before operations", "Permits arbitrary property invocation", "Represents an alias for null undefined", "Disallows reassignment after creation"], correctAnswer: "Requires type narrowing before operations", skill: "TypeScript", difficulty: "Hard" },
+    { question: "What is a primary distinction between `type` and `interface` in TypeScript?", options: ["Interfaces support automatic declaration merging", "Type aliases support object property inheritance", "Interfaces only represent primitive values", "Type aliases compile directly to JS classes"], correctAnswer: "Interfaces support automatic declaration merging", skill: "TypeScript", difficulty: "Medium" },
 
     // React
-    { question: "Which React hook is used to perform side effects in functional components?", options: ["useEffect", "useState", "useMemo", "useCallback"], correctAnswer: "useEffect", skill: "React", difficulty: "Easy" },
-    { question: "What is the primary benefit of `useMemo` in React?", options: ["Memoizing the calculated result of expensive operations between re-renders", "Persisting state to local storage", "Creating DOM references", "Subscribing to WebSocket events"], correctAnswer: "Memoizing the calculated result of expensive operations between re-renders", skill: "React", difficulty: "Medium" },
-    { question: "What is the role of the `key` prop when rendering lists in React?", options: ["Helps React identify which items have changed, been added, or been removed", "Provides CSS styling IDs", "Encrypts child components", "Registers browser focus"], correctAnswer: "Helps React identify which items have changed, been added, or been removed", skill: "React", difficulty: "Easy" },
-    { question: "What is React Fiber?", options: ["A reimplementation of React's core reconciliation algorithm for incremental rendering", "A CSS framework for React", "A state management library", "A server runtime"], correctAnswer: "A reimplementation of React's core reconciliation algorithm for incremental rendering", skill: "React", difficulty: "Hard" },
-    { question: "When should you use `useCallback` instead of `useMemo` in React?", options: ["To memoize a callback function instance between renders", "To memoize JSX DOM nodes", "To trigger re-renders", "To fetch data from REST APIs"], correctAnswer: "To memoize a callback function instance between renders", skill: "React", difficulty: "Medium" },
+    { question: "Which React hook executes side-effects after component rendering?", options: ["The useEffect hook", "The useState hook", "The useMemo hook", "The useCallback hook"], correctAnswer: "The useEffect hook", skill: "React", difficulty: "Easy" },
+    { question: "What is the primary optimization benefit of `useMemo` in React?", options: ["Caches expensive calculated return values", "Saves state values into browser storage", "Attaches direct references to DOM nodes", "Initializes bi-directional socket events"], correctAnswer: "Caches expensive calculated return values", skill: "React", difficulty: "Medium" },
+    { question: "What is the purpose of the `key` prop when rendering lists in React?", options: ["Identifies changed items during reconciliation", "Applies scoped CSS styles to children", "Encrypts component state in DOM trees", "Registers hardware browser focus events"], correctAnswer: "Identifies changed items during reconciliation", skill: "React", difficulty: "Easy" },
+    { question: "What is the architectural purpose of React Fiber reconciliation?", options: ["Enables incremental cooperative work scheduling", "Replaces standard CSS styles with JSS", "Provides server-side persistent database state", "Bypasses browser virtual DOM comparison"], correctAnswer: "Enables incremental cooperative work scheduling", skill: "React", difficulty: "Hard" },
+    { question: "When is `useCallback` preferred over standard inline functions?", options: ["Memoizing function instances passed to memoized children", "Triggering asynchronous REST API requests automatically", "Calculating expensive numeric mathematical formulas", "Registering global CSS styles inside component trees"], correctAnswer: "Memoizing function instances passed to memoized children", skill: "React", difficulty: "Medium" },
 
     // Node.js & Express
-    { question: "How does Node.js achieve non-blocking I/O operations despite being single-threaded?", options: ["By delegating I/O operations to libuv's background worker thread pool and OS kernel", "By launching child processes for every request", "By using multi-threaded JavaScript execution", "By pausing the main thread"], correctAnswer: "By delegating I/O operations to libuv's background worker thread pool and OS kernel", skill: "Node.js", difficulty: "Medium" },
-    { question: "In Express.js middleware, what happens if you forget to call `next()`?", options: ["The request will hang indefinitely and time out", "An unhandled exception is thrown", "Express sends an automatic 200 OK", "The server crashes"], correctAnswer: "The request will hang indefinitely and time out", skill: "Node.js", difficulty: "Easy" },
-    { question: "What is the purpose of `process.nextTick()` in Node.js?", options: ["Schedules a callback to be invoked at the end of the current operation, before the next event loop tick", "Delays execution by 1 millisecond", "Schedules work on a separate CPU core", "Cancels scheduled promises"], correctAnswer: "Schedules a callback to be invoked at the end of the current operation, before the next event loop tick", skill: "Node.js", difficulty: "Hard" },
-    { question: "Which Node.js core module provides stream and buffer utilities for handling large binary files?", options: ["stream", "file", "disk", "binary"], correctAnswer: "stream", skill: "Node.js", difficulty: "Medium" },
+    { question: "How does Node.js achieve scalable non-blocking I/O operations?", options: ["Delegates system calls to libuv thread pool", "Spawns isolated child process per request", "Executes JavaScript in multi-threaded runtime", "Suspends main thread during disk queries"], correctAnswer: "Delegates system calls to libuv thread pool", skill: "Node.js", difficulty: "Medium" },
+    { question: "In Express.js middleware, what happens if `next()` is omitted?", options: ["The incoming HTTP request hangs indefinitely", "The Node.js process crashes immediately", "Express sends an automatic 200 OK header", "The router skips to next matching endpoint"], correctAnswer: "The incoming HTTP request hangs indefinitely", skill: "Node.js", difficulty: "Easy" },
+    { question: "What is the execution timing of `process.nextTick()` in Node.js?", options: ["Executes before the event loop phase advances", "Delays execution by one whole millisecond", "Spawns a callback on a secondary CPU core", "Runs immediately after macrotask timer events"], correctAnswer: "Executes before the event loop phase advances", skill: "Node.js", difficulty: "Hard" },
+    { question: "Which Node.js core module provides stream and buffer processing?", options: ["The stream core module", "The file disk package", "The binary data system", "The socket buffer tool"], correctAnswer: "The stream core module", skill: "Node.js", difficulty: "Medium" },
 
     // SQL & Databases
-    { question: "Which SQL clause is used to filter aggregate query results?", options: ["HAVING", "WHERE", "GROUP BY", "ORDER BY"], correctAnswer: "HAVING", skill: "SQL", difficulty: "Easy" },
-    { question: "Which JOIN returns all records from the left table and matched records from the right table?", options: ["LEFT JOIN", "INNER JOIN", "RIGHT JOIN", "FULL OUTER JOIN"], correctAnswer: "LEFT JOIN", skill: "SQL", difficulty: "Easy" },
-    { question: "What is the main benefit of a Database Index (B-Tree)?", options: ["Speeds up search and retrieval queries at the cost of slower writes and additional storage", "Compresses stored table rows", "Enforces foreign key relationships", "Automatically backups data"], correctAnswer: "Speeds up search and retrieval queries at the cost of slower writes and additional storage", skill: "SQL", difficulty: "Medium" },
-    { question: "What does ACID stand for in database transaction management?", options: ["Atomicity, Consistency, Isolation, Durability", "Accuracy, Control, Indexing, Delivery", "Authentication, Cryptography, Integrity, Decryption", "Allocation, Concurrency, Iteration, Deletion"], correctAnswer: "Atomicity, Consistency, Isolation, Durability", skill: "SQL", difficulty: "Easy" },
-    { question: "In MongoDB, what is the Aggregation Pipeline used for?", options: ["Multi-stage document transformation, grouping, filtering, and statistical computation", "Managing cluster user logins", "Replicating data across regions", "Generating schema migrations"], correctAnswer: "Multi-stage document transformation, grouping, filtering, and statistical computation", skill: "MongoDB", difficulty: "Medium" },
-    { question: "What is an Inverted Index primarily used for in databases like Elasticsearch?", options: ["Fast full-text search by mapping words to their document locations", "Storing relational foreign keys", "Encrypting passwords", "Balancing CPU loads"], correctAnswer: "Fast full-text search by mapping words to their document locations", skill: "Databases", difficulty: "Hard" },
+    { question: "Which SQL clause filters records after aggregate grouping operations?", options: ["The HAVING clause", "The WHERE clause", "The GROUP BY clause", "The ORDER BY clause"], correctAnswer: "The HAVING clause", skill: "SQL", difficulty: "Easy" },
+    { question: "Which SQL join preserves all left rows regardless of matching right rows?", options: ["The LEFT JOIN clause", "The INNER JOIN clause", "The CROSS JOIN clause", "The FULL OUTER clause"], correctAnswer: "The LEFT JOIN clause", skill: "SQL", difficulty: "Easy" },
+    { question: "What is the primary performance trade-off of a B-Tree Database Index?", options: ["Speeds reads while increasing write overhead", "Compresses storage while slowing read lookups", "Enforces foreign keys without disk usage", "Backs up tables with zero runtime locking"], correctAnswer: "Speeds reads while increasing write overhead", skill: "SQL", difficulty: "Medium" },
+    { question: "What does the ACID acronym define in relational database transactions?", options: ["Atomicity, Consistency, Isolation, Durability", "Accuracy, Control, Indexing, Distribution", "Authentication, Cryptography, Integrity, Delivery", "Allocation, Concurrency, Iteration, Deletion"], correctAnswer: "Atomicity, Consistency, Isolation, Durability", skill: "SQL", difficulty: "Easy" },
+    { question: "In MongoDB, what is the Aggregation Pipeline primarily used for?", options: ["Multi-stage document grouping and transformation", "Managing database cluster administrator logins", "Replicating collection shards across regions", "Generating database schema migration files"], correctAnswer: "Multi-stage document grouping and transformation", skill: "MongoDB", difficulty: "Medium" },
+    { question: "What is an Inverted Index primarily used for in search databases?", options: ["Maps terms to document occurrences efficiently", "Stores relational foreign key constraints", "Encrypts stored database passwords on disk", "Distributes CPU query workloads uniformly"], correctAnswer: "Maps terms to document occurrences efficiently", skill: "Databases", difficulty: "Hard" },
 
-    // Cloud, Caching & DevOps
-    { question: "What is Redis primarily utilized for in high-concurrency web systems?", options: ["In-memory caching, pub/sub messaging, and distributed session storage", "Relational ACID backups", "Parsing client-side CSS", "Compiling Go binaries"], correctAnswer: "In-memory caching, pub/sub messaging, and distributed session storage", skill: "Redis", difficulty: "Medium" },
-    { question: "What is the primary role of a Reverse Proxy (such as NGINX)?", options: ["Directing client requests to backend servers, handling SSL termination, and caching", "Rendering browser HTML", "Managing local Git branches", "Compiling client JavaScript"], correctAnswer: "Directing client requests to backend servers, handling SSL termination, and caching", skill: "Architecture", difficulty: "Easy" },
-    { question: "Which Git command is used to integrate commits from one branch by reapplying them on top of another base tip?", options: ["git rebase", "git merge", "git cherry-pick", "git branch"], correctAnswer: "git rebase", skill: "Git", difficulty: "Medium" },
-    { question: "What is the main purpose of Docker containerization?", options: ["Packaging an application and its dependencies into a lightweight, reproducible executable environment", "Virtualizing complete physical hardware", "Managing relational database transactions", "Formatting source code"], correctAnswer: "Packaging an application and its dependencies into a lightweight, reproducible executable environment", skill: "DevOps", difficulty: "Easy" },
-    { question: "In RESTful API design, which HTTP method is considered idempotent for replacing a complete resource representation?", options: ["PUT", "POST", "PATCH", "CONNECT"], correctAnswer: "PUT", skill: "API Design", difficulty: "Easy" },
-    { question: "What is the CAP Theorem trade-off in distributed data stores?", options: ["A distributed system can guarantee at most two out of Consistency, Availability, and Partition Tolerance", "Computers must balance CPU, Architecture, and Performance", "Code, Accuracy, and Precision must be equal", "Concurrency, Allocation, and Persistence"], correctAnswer: "A distributed system can guarantee at most two out of Consistency, Availability, and Partition Tolerance", skill: "Architecture", difficulty: "Hard" },
-    { question: "What is the primary advantage of WebSockets over standard HTTP polling?", options: ["Full-duplex, persistent bi-directional communication over a single TCP connection", "Automatic encryption", "Faster TLS handshakes", "Stateless response headers"], correctAnswer: "Full-duplex, persistent bi-directional communication over a single TCP connection", skill: "WebSockets", difficulty: "Medium" },
-    { question: "How does JWT (JSON Web Token) authentication provide statelessness?", options: ["The server cryptographically verifies the signed token payload without database lookups", "The server stores session IDs in RAM", "Tokens are stored in cookies only", "The client encrypts the database credentials"], correctAnswer: "The server cryptographically verifies the signed token payload without database lookups", skill: "Security", difficulty: "Medium" },
-    { question: "In Kubernetes, what is the smallest deployable computing unit?", options: ["Pod", "Node", "Cluster", "Service"], correctAnswer: "Pod", skill: "DevOps", difficulty: "Medium" },
-    { question: "What is the purpose of Database Connection Pooling?", options: ["Reusing an active pool of database connections to eliminate the overhead of repeated TCP/TLS handshakes", "Backing up table schemas", "Encrypting database disk storage", "Generating SQL migrations automatically"], correctAnswer: "Reusing an active pool of database connections to eliminate the overhead of repeated TCP/TLS handshakes", skill: "Architecture", difficulty: "Hard" },
+    // Cloud, Caching & Architecture
+    { question: "What is Redis primarily utilized for in high-concurrency systems?", options: ["In-memory caching and message pub-sub brokers", "Relational ACID table schema cold storage", "Compiling client-side web application assets", "Serving static HTML files across DNS roots"], correctAnswer: "In-memory caching and message pub-sub brokers", skill: "Redis", difficulty: "Medium" },
+    { question: "What is the primary architectural role of a Reverse Proxy (e.g. NGINX)?", options: ["Terminates SSL and routes requests to backends", "Executes client JavaScript in web browsers", "Manages local Git version control branches", "Parses and compiles SQL relational queries"], correctAnswer: "Terminates SSL and routes requests to backends", skill: "Architecture", difficulty: "Easy" },
+    { question: "Which Git command integrates branch commits by reapplying them onto a base tip?", options: ["The git rebase command", "The git merge command", "The git cherry-pick tool", "The git checkout branch"], correctAnswer: "The git rebase command", skill: "Git", difficulty: "Medium" },
+    { question: "What is the core purpose of Docker containerization in software deployment?", options: ["Packages apps and dependencies into isolated units", "Virtualizes physical host hardware and motherboards", "Provides relational database transaction locks", "Formats source code according to style guides"], correctAnswer: "Packages apps and dependencies into isolated units", skill: "DevOps", difficulty: "Easy" },
+    { question: "In RESTful API design, which HTTP method is strictly idempotent for resource replacement?", options: ["The PUT method", "The POST method", "The PATCH method", "The CONNECT call"], correctAnswer: "The PUT method", skill: "API Design", difficulty: "Easy" },
+    { question: "What does the CAP Theorem state regarding distributed data systems?", options: ["Guarantees at most two of Consistency, Availability, Partitioning", "Balances computer CPU, system Architecture, and Performance", "Demands equal parity of Code, Accuracy, and Precision", "Optimizes application Concurrency, Allocation, and Persistence"], correctAnswer: "Guarantees at most two of Consistency, Availability, Partitioning", skill: "Architecture", difficulty: "Hard" },
+    { question: "What is the primary operational advantage of WebSockets over HTTP polling?", options: ["Persistent bi-directional full-duplex TCP stream", "Automatic end-to-end payload data encryption", "Zero-latency TLS handshakes on every request", "Stateless header compression on each message"], correctAnswer: "Persistent bi-directional full-duplex TCP stream", skill: "WebSockets", difficulty: "Medium" },
+    { question: "How does JWT (JSON Web Token) authentication maintain statelessness?", options: ["Cryptographically verifies payload without database queries", "Stores active user session records in server RAM", "Transfers plaintext database passwords on requests", "Encodes session identifiers into local browser cookies"], correctAnswer: "Cryptographically verifies payload without database queries", skill: "Security", difficulty: "Medium" },
+    { question: "In Kubernetes architecture, what is the smallest deployable execution unit?", options: ["The Pod resource", "The Node instance", "The Cluster plane", "The Service route"], correctAnswer: "The Pod resource", skill: "DevOps", difficulty: "Medium" },
+    { question: "What is the operational purpose of Database Connection Pooling?", options: ["Reuses open connections to prevent handshake latency", "Backs up relational table schemas to disk automatically", "Encrypts database storage volumes at block levels", "Generates automatic SQL migration schema scripts"], correctAnswer: "Reuses open connections to prevent handshake latency", skill: "Architecture", difficulty: "Hard" },
   ];
 
   const normalizedCandidateSkills = (skills || []).map(s => s.toLowerCase());
@@ -223,8 +223,10 @@ const startExam = async (req, res) => {
 
     // ── Multi-Provider AI Question Generation Engine ───────────────────
     let generatedMcqs = [];
+    const sessionSalt = `${Date.now()}_${Math.floor(Math.random() * 1000000)}`;
 
     const systemPrompt = `You are a Principal Staff Engineer, IIT/NPTEL Examination Chair, and Senior Technical Evaluator designing an elite, rigorous proctored technical assessment for the role: "${jobTitle}".
+Session Randomization Seed: ${sessionSalt}
 
 ── JOB CONTEXT & TECHNICAL STACK ──
 Job Description: "${jobDescription || "Design, develop, scale, and maintain high-performance software systems and APIs."}"
@@ -232,9 +234,10 @@ Required Core Competencies: ${jobTargetSkills.join(", ") || effectiveSkills.join
 Candidate Verified Competencies: ${effectiveSkills.join(", ")}
 Target Seniority Level: "${jobDifficulty}"
 
-── STRICT OPTION SYMMETRY & ANTI-BIAS RULES (CRITICAL) ──
-1. EQUAL OPTION LENGTH: All 4 options (A, B, C, D) must have SIMILAR word counts and grammatical structures. DO NOT make the correct answer longer, more detailed, or more qualified than distractor options. Avoid the "longest option is correct" giveaway.
-2. PLAUSIBLE DISTRACTORS: Every incorrect option must be an authentic, intelligent developer trap (e.g., off-by-one errors, shallow vs deep copy pitfalls, event loop microtask vs macrotask execution order, NULL comparison anomalies in SQL, stale closure state).
+── ABSOLUTE REQUIREMENT: ZERO OPTION LENGTH BIAS (EQUAL OPTION LENGTHS) ──
+1. STRICT EQUAL LENGTH: All 4 options (A, B, C, D) for EVERY question MUST have virtually IDENTICAL word counts (within 1 to 2 words of each other).
+2. NEVER make the correct answer longer, more nuanced, or more detailed than distractor options.
+3. Every incorrect option must be an intelligent, realistic developer pitfall of equal length and depth.
 
 ── QUESTION ARCHITECTURE & NPTEL/LEETCODE STYLES ──
 Adopt the analytical rigor of LeetCode / HackerRank / NPTEL examination problems:
@@ -253,14 +256,43 @@ Return ONLY a valid JSON array without any markdown formatting, backticks, or ex
 [
   {
     "question": "Rigorous scenario or code snippet question text",
-    "options": ["Option A (concise, uniform length)", "Option B (concise, uniform length)", "Option C (concise, uniform length)", "Option D (concise, uniform length)"],
+    "options": ["Option A (equal length)", "Option B (equal length)", "Option C (equal length)", "Option D (equal length)"],
     "correct_answer": "Exact string of correct option",
     "skill": "Specific skill name from JD",
     "difficulty": "Easy" | "Medium" | "Hard"
   }
 ]`;
 
-    // 1. Primary Provider: Groq Cloud (Ultra-Fast Llama-3.3 70B Versatile)
+    // 1. Primary Provider: Google Gemini 1.5/2.0 Flash (Ultra-Fast 1.5s & High Token Limits)
+    if (!generatedMcqs || generatedMcqs.length === 0) {
+      const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+      if (geminiKey) {
+        try {
+          const { GoogleGenerativeAI } = require("@google/generative-ai");
+          const genAI = new GoogleGenerativeAI(geminiKey);
+          const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+          const result = await model.generateContent({
+            contents: [{ role: "user", parts: [{ text: systemPrompt }] }],
+            generationConfig: {
+              temperature: 0.75,
+              maxOutputTokens: 6000,
+              responseMimeType: "application/json",
+            },
+          });
+          const rawContent = (result.response.text() || "").replace(/```json|```/g, "").trim();
+          const parsed = JSON.parse(rawContent);
+          const questionsList = Array.isArray(parsed) ? parsed : (parsed.questions || parsed.mcqs || parsed.mcq_questions || []);
+          if (questionsList.length >= 20) {
+            generatedMcqs = questionsList;
+            console.log(`[ExamGen] Gemini AI generated ${generatedMcqs.length} dynamic unique MCQs.`);
+          }
+        } catch (geminiErr) {
+          console.warn("[ExamGen] Gemini AI generation note:", geminiErr.message);
+        }
+      }
+    }
+
+    // 2. Secondary Provider: Groq Cloud (Llama-3.3 70B Versatile with Extended Token Budget)
     if (!generatedMcqs || generatedMcqs.length === 0) {
       const groqKey = process.env.GROQ_API_KEY;
       if (groqKey) {
@@ -273,17 +305,18 @@ Return ONLY a valid JSON array without any markdown formatting, backticks, or ex
                 { role: "system", content: "You are an expert technical interviewer that outputs raw JSON only." },
                 { role: "user", content: systemPrompt }
               ],
-              temperature: 0.7,
+              temperature: 0.75,
+              max_tokens: 6000,
             },
             {
               headers: { Authorization: `Bearer ${groqKey}`, "Content-Type": "application/json" },
-              timeout: 10000
+              timeout: 30000
             }
           );
           const rawContent = (groqRes.data?.choices?.[0]?.message?.content || "").replace(/```json|```/g, "").trim();
           const parsed = JSON.parse(rawContent);
           const questionsList = Array.isArray(parsed) ? parsed : (parsed.questions || parsed.mcqs || parsed.mcq_questions || []);
-          if (questionsList.length >= 5) {
+          if (questionsList.length >= 20) {
             generatedMcqs = questionsList;
             console.log(`[ExamGen] Groq AI generated ${generatedMcqs.length} dynamic unique MCQs.`);
           }
@@ -293,7 +326,7 @@ Return ONLY a valid JSON array without any markdown formatting, backticks, or ex
       }
     }
 
-    // 2. Secondary Provider: Mistral AI (mistral-small-latest)
+    // 3. Tertiary Provider: Mistral AI (mistral-small-latest)
     if (!generatedMcqs || generatedMcqs.length === 0) {
       const mistralKey = process.env.MISTRAL_API_KEY;
       if (mistralKey) {
@@ -306,17 +339,18 @@ Return ONLY a valid JSON array without any markdown formatting, backticks, or ex
                 { role: "system", content: "You are an expert technical interviewer that outputs raw JSON only." },
                 { role: "user", content: systemPrompt }
               ],
-              temperature: 0.7,
+              temperature: 0.75,
+              max_tokens: 6000,
             },
             {
               headers: { Authorization: `Bearer ${mistralKey}`, "Content-Type": "application/json" },
-              timeout: 10000
+              timeout: 30000
             }
           );
           const rawContent = (mistralRes.data?.choices?.[0]?.message?.content || "").replace(/```json|```/g, "").trim();
           const parsed = JSON.parse(rawContent);
           const questionsList = Array.isArray(parsed) ? parsed : (parsed.questions || parsed.mcqs || parsed.mcq_questions || []);
-          if (questionsList.length >= 5) {
+          if (questionsList.length >= 20) {
             generatedMcqs = questionsList;
             console.log(`[ExamGen] Mistral AI generated ${generatedMcqs.length} dynamic unique MCQs.`);
           }
@@ -326,7 +360,7 @@ Return ONLY a valid JSON array without any markdown formatting, backticks, or ex
       }
     }
 
-    // 3. Tertiary Provider: OpenRouter (DeepSeek / Meta LLaMA / Claude)
+    // 4. Quaternary Provider: OpenRouter (Meta LLaMA / DeepSeek)
     if (!generatedMcqs || generatedMcqs.length === 0) {
       const openRouterKey = process.env.OPENROUTER_API_KEY;
       if (openRouterKey) {
@@ -339,17 +373,18 @@ Return ONLY a valid JSON array without any markdown formatting, backticks, or ex
                 { role: "system", content: "You are an expert technical interviewer that outputs raw JSON only." },
                 { role: "user", content: systemPrompt }
               ],
-              temperature: 0.7,
+              temperature: 0.75,
+              max_tokens: 6000,
             },
             {
               headers: { Authorization: `Bearer ${openRouterKey}`, "Content-Type": "application/json" },
-              timeout: 10000
+              timeout: 30000
             }
           );
           const rawContent = (orRes.data?.choices?.[0]?.message?.content || "").replace(/```json|```/g, "").trim();
           const parsed = JSON.parse(rawContent);
           const questionsList = Array.isArray(parsed) ? parsed : (parsed.questions || parsed.mcqs || parsed.mcq_questions || []);
-          if (questionsList.length >= 5) {
+          if (questionsList.length >= 20) {
             generatedMcqs = questionsList;
             console.log(`[ExamGen] OpenRouter generated ${generatedMcqs.length} dynamic unique MCQs.`);
           }
@@ -359,7 +394,7 @@ Return ONLY a valid JSON array without any markdown formatting, backticks, or ex
       }
     }
 
-    // 4. Quaternary Provider: Python AI Engine
+    // 5. Quaternary Provider: Python AI Engine
     if (!generatedMcqs || generatedMcqs.length === 0) {
       try {
         const pythonRes = await axios.post(
@@ -372,7 +407,7 @@ Return ONLY a valid JSON array without any markdown formatting, backticks, or ex
             job_title: jobTitle,
             entropy: Date.now() + Math.random(),
           },
-          { timeout: 10000 }
+          { timeout: 15000 }
         );
         if (pythonRes.data.result?.mcq_questions?.length >= 5) {
           generatedMcqs = pythonRes.data.result.mcq_questions;
