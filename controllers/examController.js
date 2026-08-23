@@ -1346,41 +1346,41 @@ Respond with ONLY raw JSON (no backticks, no markdown):
       }
     }
 
-    // 2. Secondary Vision Provider: Google Gemini 1.5 Flash Vision
-    const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-    if (!proctorResult && geminiKey) {
+    // 2. Secondary Vision Provider: Mistral AI Pixtral Vision (pixtral-12b-2409)
+    const mistralKey = process.env.MISTRAL_API_KEY;
+    if (!proctorResult && mistralKey) {
       try {
-        const { GoogleGenerativeAI } = require("@google/generative-ai");
-        const genAI = new GoogleGenerativeAI(geminiKey);
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-        const result = await model.generateContent({
-          contents: [
-            {
-              role: "user",
-              parts: [
-                { text: proctorPrompt },
-                {
-                  inlineData: {
-                    mimeType: "image/jpeg",
-                    data: cleanBase64,
-                  }
-                }
-              ]
-            }
-          ],
-          generationConfig: {
+        const mistralRes = await axios.post(
+          "https://api.mistral.ai/v1/chat/completions",
+          {
+            model: "pixtral-12b-2409",
+            messages: [
+              {
+                role: "user",
+                content: [
+                  { type: "text", text: proctorPrompt },
+                  { type: "image_url", image_url: { url: dataUri } }
+                ]
+              }
+            ],
             temperature: 0.1,
-            maxOutputTokens: 300,
-            responseMimeType: "application/json",
+            max_tokens: 300,
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${mistralKey}`,
+              "Content-Type": "application/json",
+            },
+            timeout: 8000,
           }
-        });
-        const raw = (result.response.text() || "").replace(/```json|```/g, "").trim();
+        );
+        const raw = (mistralRes.data?.choices?.[0]?.message?.content || "").replace(/```json|```/g, "").trim();
         const parsed = JSON.parse(raw);
         if (parsed && typeof parsed.violation === "boolean") {
-          proctorResult = { ...parsed, provider: "Gemini_Flash_Vision" };
+          proctorResult = { ...parsed, provider: "Mistral_Pixtral_Vision" };
         }
-      } catch (geminiErr) {
-        console.warn("[ProctorAI] Gemini Vision note:", geminiErr.message);
+      } catch (misErr) {
+        console.warn("[ProctorAI] Mistral Pixtral note:", misErr.message);
       }
     }
 
@@ -1419,6 +1419,128 @@ Respond with ONLY raw JSON (no backticks, no markdown):
         }
       } catch (groqErr) {
         console.warn("[ProctorAI] Groq Vision note:", groqErr.message);
+      }
+    }
+
+    // 4. Quaternary Vision Provider: OpenRouter Vision (meta-llama/llama-3.2-11b-vision-instruct:free)
+    const openRouterKey = process.env.OPENROUTER_API_KEY;
+    if (!proctorResult && openRouterKey) {
+      try {
+        const orRes = await axios.post(
+          "https://openrouter.ai/api/v1/chat/completions",
+          {
+            model: "meta-llama/llama-3.2-11b-vision-instruct:free",
+            messages: [
+              {
+                role: "user",
+                content: [
+                  { type: "text", text: proctorPrompt },
+                  { type: "image_url", image_url: { url: dataUri } }
+                ]
+              }
+            ],
+            temperature: 0.1,
+            max_tokens: 300,
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${openRouterKey}`,
+              "Content-Type": "application/json",
+            },
+            timeout: 8000,
+          }
+        );
+        const raw = (orRes.data?.choices?.[0]?.message?.content || "").replace(/```json|```/g, "").trim();
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed.violation === "boolean") {
+          proctorResult = { ...parsed, provider: "OpenRouter_Vision" };
+        }
+      } catch (orErr) {
+        console.warn("[ProctorAI] OpenRouter Vision note:", orErr.message);
+      }
+    }
+
+    // 5. Quinary Vision Provider: OpenAI GPT-4o-mini Vision
+    const openaiKey = process.env.OPENAI_API_KEY;
+    if (!proctorResult && openaiKey) {
+      try {
+        const oaiRes = await axios.post(
+          "https://api.openai.com/v1/chat/completions",
+          {
+            model: "gpt-4o-mini",
+            messages: [
+              {
+                role: "user",
+                content: [
+                  { type: "text", text: proctorPrompt },
+                  { type: "image_url", image_url: { url: dataUri } }
+                ]
+              }
+            ],
+            temperature: 0.1,
+            max_tokens: 300,
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${openaiKey}`,
+              "Content-Type": "application/json",
+            },
+            timeout: 8000,
+          }
+        );
+        const raw = (oaiRes.data?.choices?.[0]?.message?.content || "").replace(/```json|```/g, "").trim();
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed.violation === "boolean") {
+          proctorResult = { ...parsed, provider: "OpenAI_GPT4o_Vision" };
+        }
+      } catch (oaiErr) {
+        console.warn("[ProctorAI] OpenAI Vision note:", oaiErr.message);
+      }
+    }
+
+    // 6. Multi-Key Google Gemini 1.5 Flash Vision Pool
+    const geminiKeyPool = [
+      process.env.GEMINI_API_KEY,
+      process.env.GEMINI_API_KEY_2,
+      process.env.GEMINI_API_KEY_3,
+      process.env.GOOGLE_API_KEY,
+    ].filter(Boolean);
+
+    for (const gKey of geminiKeyPool) {
+      if (proctorResult) break;
+      try {
+        const { GoogleGenerativeAI } = require("@google/generative-ai");
+        const genAI = new GoogleGenerativeAI(gKey);
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        const result = await model.generateContent({
+          contents: [
+            {
+              role: "user",
+              parts: [
+                { text: proctorPrompt },
+                {
+                  inlineData: {
+                    mimeType: "image/jpeg",
+                    data: cleanBase64,
+                  }
+                }
+              ]
+            }
+          ],
+          generationConfig: {
+            temperature: 0.1,
+            maxOutputTokens: 300,
+            responseMimeType: "application/json",
+          }
+        });
+        const raw = (result.response.text() || "").replace(/```json|```/g, "").trim();
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed.violation === "boolean") {
+          proctorResult = { ...parsed, provider: "Gemini_Flash_Vision" };
+          break;
+        }
+      } catch (geminiErr) {
+        console.warn("[ProctorAI] Gemini Vision failover note:", geminiErr.message);
       }
     }
 
