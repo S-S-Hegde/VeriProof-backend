@@ -133,6 +133,33 @@ const startExam = async (req, res) => {
       });
     }
 
+    // ── STRICT SECURITY GUARD: Single-Attempt Lock for Completed Assessments ──
+    const completedExam = await Exam.findOne({
+      candidateId: req.user._id,
+      status: "Completed"
+    });
+
+    const completedApplicant = await RecruiterApplicant.findOne({
+      $or: [
+        { candidateUser: req.user._id },
+        { extractedEmail: req.user.email },
+        { extractedEmail: new RegExp(`^${req.user.email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") },
+        ...(req.user.githubUsername ? [{ githubUsername: req.user.githubUsername }] : [])
+      ],
+      examStatus: { $in: ["Attended", "Completed"] }
+    });
+
+    if (completedExam || completedApplicant) {
+      const finalScore = completedApplicant?.examScore ?? completedExam?.score ?? 0;
+      return res.status(403).json({
+        completed: true,
+        score: finalScore,
+        status: "Completed",
+        message: "Single attempt limit reached. You have already completed your official technical assessment.",
+        error: "Single attempt limit reached. Retakes are not permitted."
+      });
+    }
+
     // ── Resolve invitation + applicant record ──────────────────────────
     const invitation = await InvitationRegistry.findOne({
       $or: [
@@ -875,10 +902,21 @@ const submitExam = async (req, res) => {
         { extractedEmail: req.user.email },
         { extractedEmail: new RegExp(`^${req.user.email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") }
       ],
-      examStatus: "Attended"
+      examStatus: { $in: ["Attended", "Completed"] }
     });
 
-    const isFirstOfficialAttempt = !existingOfficialApplicant;
+    // STRICT LOCK: If already completed once, strictly forbid updating recruiter marks or re-emailing
+    if (existingOfficialApplicant) {
+      return res.status(200).json({
+        success: true,
+        completed: true,
+        score: existingOfficialApplicant.examScore || 0,
+        status: "Completed",
+        message: "Assessment was already finalized on your first attempt. Retakes are not permitted or recorded."
+      });
+    }
+
+    const isFirstOfficialAttempt = true;
 
     // Upsert VerificationResult & ResumeAnalysis for EVERY candidate type (Self-Registered, Invited, Recruiter)
     const InvitationRegistry = require("../models/InvitationRegistry");
