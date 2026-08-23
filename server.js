@@ -120,15 +120,72 @@ app.use(
   express.static(path.join(__dirname, "uploads"))
 );
 
-// Dynamic fallback route for recruiter resumes if container restarted
+// Helper to stamp the sleek VeriProof Verified banner on any PDF
+const stampVeriproofHeader = async (pdfBuffer) => {
+  try {
+    const { PDFDocument, rgb, StandardFonts } = require("pdf-lib");
+    const pdfDoc = await PDFDocument.load(pdfBuffer, { ignoreEncryption: true });
+    const pages = pdfDoc.getPages();
+    if (pages.length > 0) {
+      const firstPage = pages[0];
+      const { width, height } = firstPage.getSize();
+
+      const bannerHeight = 36;
+      const bannerY = height - bannerHeight;
+
+      // Draw top header background band (Dark slate #0d1226)
+      firstPage.drawRectangle({
+        x: 0,
+        y: bannerY,
+        width: width,
+        height: bannerHeight,
+        color: rgb(13 / 255, 18 / 255, 38 / 255),
+      });
+
+      // Embed standard bold font
+      const helveticaBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+      const helvetica = await pdfDoc.embedFont(StandardFonts.Helvetica);
+
+      // Title: VERIPROOF VERIFIED RESUME (Blue #6b8aff)
+      firstPage.drawText("VERIPROOF VERIFIED RESUME", {
+        x: 20,
+        y: bannerY + 18,
+        size: 11,
+        font: helveticaBold,
+        color: rgb(107 / 255, 138 / 255, 255 / 255),
+      });
+
+      // Subtitle: Official Recruiter Candidate Dossier
+      firstPage.drawText("Official Recruiter Candidate Dossier • Anti-Fraud Security Verified", {
+        x: 20,
+        y: bannerY + 6,
+        size: 7.5,
+        font: helvetica,
+        color: rgb(148 / 255, 160 / 255, 184 / 255),
+      });
+    }
+
+    const modifiedPdfBytes = await pdfDoc.save();
+    return Buffer.from(modifiedPdfBytes);
+  } catch (err) {
+    console.warn("[Header Stamp Note]", err.message);
+    return pdfBuffer; // fallback to original buffer if stamping fails
+  }
+};
+
+// Dynamic fallback route for recruiter resumes with VeriProof Verified header
 app.get("/uploads/recruiter-resumes/:filename", async (req, res) => {
   try {
     const filename = req.params.filename;
     const localFilePath = path.join(__dirname, "uploads", "recruiter-resumes", filename);
+
+    // 1. If physical file exists on disk, read buffer, stamp header, and stream
     if (fs.existsSync(localFilePath)) {
+      const fileBytes = fs.readFileSync(localFilePath);
+      const stampedPdf = await stampVeriproofHeader(fileBytes);
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
-      return res.sendFile(localFilePath);
+      return res.send(stampedPdf);
     }
 
     const RecruiterApplicant = require("./models/RecruiterApplicant");
@@ -140,18 +197,19 @@ app.get("/uploads/recruiter-resumes/:filename", async (req, res) => {
       ],
     });
 
-    // 1. If original binary buffer is in database, serve original binary PDF directly
+    // 2. If original binary buffer is in database, stamp header and stream original PDF
     if (applicant && applicant.fileBufferBase64) {
       const pdfBuffer = Buffer.from(applicant.fileBufferBase64, "base64");
-      res.setHeader("Content-Type", applicant.mimeType || "application/pdf");
+      const stampedPdf = await stampVeriproofHeader(pdfBuffer);
+      res.setHeader("Content-Type", "application/pdf");
       res.setHeader(
         "Content-Disposition",
         `inline; filename="${applicant.originalFileName || filename}"`
       );
-      return res.send(pdfBuffer);
+      return res.send(stampedPdf);
     }
 
-    // 2. If only structured resumeText exists (legacy record), generate a clean professional PDF using PDFKit
+    // 3. If only structured resumeText exists (legacy record), generate a clean professional PDF
     if (applicant && applicant.resumeText) {
       const PDFDocument = require("pdfkit");
       const doc = new PDFDocument({ margin: 40, size: "A4" });
@@ -164,8 +222,8 @@ app.get("/uploads/recruiter-resumes/:filename", async (req, res) => {
 
       // Header Banner
       doc.rect(0, 0, doc.page.width, 50).fill("#0d1226");
-      doc.fillColor("#6b8aff").fontSize(16).text("VERIPROOF VERIFIED RESUME", 40, 16);
-      doc.fillColor("#94a0b8").fontSize(8).text("Official Recruiter Candidate Dossier", 40, 34);
+      doc.fillColor("#6b8aff").fontSize(15).text("VERIPROOF VERIFIED RESUME", 40, 16);
+      doc.fillColor("#94a0b8").fontSize(8).text("Official Recruiter Candidate Dossier • Anti-Fraud Security Verified", 40, 34);
 
       doc.moveDown(2.5);
       doc.fillColor("#000000").fontSize(14).text(applicant.extractedName || "Verified Candidate", { bold: true });
