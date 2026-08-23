@@ -1299,9 +1299,17 @@ Respond with ONLY raw JSON (no backticks, no markdown):
 
     let proctorResult = null;
 
-    // 1. Primary Vision Provider: NVIDIA NIM Vision (meta/llama-3.2-11b-vision-instruct)
-    const nvidiaKey = process.env.NVIDIA_API_KEY_VISION || process.env.NVIDIA_API_KEY;
-    if (!proctorResult && nvidiaKey) {
+    // 1. Primary Vision Provider Pool: NVIDIA NIM Vision (meta/llama-3.2-11b-vision-instruct)
+    const nvidiaKeyPool = [
+      process.env.NVIDIA_API_KEY_VISION,
+      process.env.NVIDIA_API_KEY,
+      process.env.NVIDIA_API_KEY_2,
+      process.env.NVIDIA_API_KEY_3,
+      process.env.NVIDIA_API_KEY_4,
+    ].filter(Boolean);
+
+    for (const nKey of nvidiaKeyPool) {
+      if (proctorResult) break;
       try {
         const nvRes = await axios.post(
           "https://integrate.api.nvidia.com/v1/chat/completions",
@@ -1321,7 +1329,7 @@ Respond with ONLY raw JSON (no backticks, no markdown):
           },
           {
             headers: {
-              Authorization: `Bearer ${nvidiaKey}`,
+              Authorization: `Bearer ${nKey}`,
               "Content-Type": "application/json",
             },
             timeout: 8000,
@@ -1331,9 +1339,10 @@ Respond with ONLY raw JSON (no backticks, no markdown):
         const parsed = JSON.parse(raw);
         if (parsed && typeof parsed.violation === "boolean") {
           proctorResult = { ...parsed, provider: "NVIDIA_NIM_Vision" };
+          break;
         }
       } catch (nvErr) {
-        console.warn("[ProctorAI] NVIDIA NIM Vision note:", nvErr.response?.data?.message || nvErr.message);
+        console.warn("[ProctorAI] NVIDIA NIM Key failover note:", nvErr.response?.data?.message || nvErr.message);
       }
     }
 
