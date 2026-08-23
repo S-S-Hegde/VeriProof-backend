@@ -1219,7 +1219,7 @@ const deleteJob = asyncHandler(async (req, res) => {
   res.json({ message: "Blueprint deleted." });
 });
 
-// @desc    Delete an applicant record (Verdicts)
+// @desc    Delete an applicant record (Verdicts) & completely erase candidate profile and data
 // @route   DELETE /api/verify/applicants/:id
 // @access  Private (Recruiter)
 const deleteApplicant = asyncHandler(async (req, res) => {
@@ -1235,24 +1235,25 @@ const deleteApplicant = asyncHandler(async (req, res) => {
 
   const InvitationRegistry = require("../models/InvitationRegistry");
   const ResumeAnalysis = require("../models/ResumeAnalysis");
+  const VerificationResult = require("../models/VerificationResult");
+  const Exam = require("../models/Exam");
   const User = require("../models/User");
+  const Project = require("../models/Project");
   const fs = require("fs");
   const path = require("path");
 
   const email = applicant.extractedEmail ? applicant.extractedEmail.trim().toLowerCase() : null;
   const github = applicant.githubUsername ? applicant.githubUsername.trim() : null;
 
-  // 1. Delete associated InvitationRegistry entries for this job/applicant
-  await InvitationRegistry.deleteMany({
-    recruiterId: req.user._id,
-    jobId: applicant.jobId,
-    ...(email ? {
+  // 1. Delete associated InvitationRegistry entries
+  if (email) {
+    await InvitationRegistry.deleteMany({
       $or: [
         { email },
         { email: new RegExp(`^${email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") }
       ]
-    } : {})
-  });
+    });
+  }
 
   // 2. Delete local uploaded resume file from disk if stored locally
   if (applicant.fileUrl && applicant.fileUrl.startsWith("/uploads/")) {
@@ -1267,39 +1268,37 @@ const deleteApplicant = asyncHandler(async (req, res) => {
     }
   }
 
-  // 3. Locate candidate User record by ID, email, or githubUsername
-  let candidateUser = null;
-  if (applicant.candidateUser) {
-    candidateUser = await User.findById(applicant.candidateUser);
+  // 3. Find and completely purge all matching candidate User accounts and ALL associated artifacts
+  const userQuery = [];
+  if (applicant.candidateUser) userQuery.push({ _id: applicant.candidateUser });
+  if (email) {
+    userQuery.push({ email });
+    userQuery.push({ email: new RegExp(`^${email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") });
   }
-  if (!candidateUser && email) {
-    candidateUser = await User.findOne({
-      email: new RegExp(`^${email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i")
-    });
-  }
-  if (!candidateUser && github) {
-    candidateUser = await User.findOne({ githubUsername: github });
+  if (github) userQuery.push({ githubUsername: github });
+
+  const matchedUsers = userQuery.length > 0 ? await User.find({ $or: userQuery }) : [];
+
+  for (const candidateUser of matchedUsers) {
+    await Exam.deleteMany({ candidateId: candidateUser._id });
+    await VerificationResult.deleteMany({ candidateId: candidateUser._id });
+    await ResumeAnalysis.deleteMany({ $or: [{ candidateId: candidateUser._id }, { userId: candidateUser._id }] });
+    await Project.deleteMany({ userId: candidateUser._id });
+    await User.deleteOne({ _id: candidateUser._id });
+    console.log(`[Purge] Completely erased candidate profile: ${candidateUser.email} (${candidateUser._id})`);
   }
 
-  // 4. Clean up candidate pre-parsed analysis & reset to self_registered candidate if exam incomplete
-  if (candidateUser) {
-    await ResumeAnalysis.deleteMany({ candidateId: candidateUser._id });
-
-    if (candidateUser.pipelineStage !== "verification_complete") {
-      candidateUser.origin = "self_registered";
-      candidateUser.pipelineStage = "resume_upload";
-      candidateUser.resumeUrl = "";
-      candidateUser.resumeStatus = "Pending Evaluation";
-      await candidateUser.save();
-    }
+  // Also clean up any orphaned verification results
+  if (applicant.jobId && email) {
+    await VerificationResult.deleteMany({ jobId: applicant.jobId, candidateEmail: email });
   }
 
-  // 5. Permanently remove RecruiterApplicant document
+  // 4. Permanently remove RecruiterApplicant document
   await applicant.deleteOne();
-  res.json({ message: "Applicant resume and all associated analysis records permanently deleted." });
+  res.json({ message: "Applicant resume, candidate profile, and all associated assessment records permanently erased." });
 });
 
-// @desc    Bulk delete/remove multiple selected applicants
+// @desc    Bulk delete/remove multiple selected applicants & purge candidate profiles
 // @route   POST /api/verify/applicants/bulk-delete
 // @access  Private (Recruiter)
 const bulkDeleteApplicants = asyncHandler(async (req, res) => {
@@ -1314,44 +1313,60 @@ const bulkDeleteApplicants = asyncHandler(async (req, res) => {
     recruiterId: req.user._id,
   });
 
+  const InvitationRegistry = require("../models/InvitationRegistry");
+  const ResumeAnalysis = require("../models/ResumeAnalysis");
+  const VerificationResult = require("../models/VerificationResult");
+  const Exam = require("../models/Exam");
+  const User = require("../models/User");
+  const Project = require("../models/Project");
+  const fs = require("fs");
+  const path = require("path");
+
   let deletedCount = 0;
   for (const applicant of applicants) {
     const email = applicant.extractedEmail || applicant.emailSentTo;
     const github = applicant.githubUsername;
 
     if (email) {
-      await InvitationRegistry.deleteMany({ email: email.toLowerCase() });
-    }
-
-    let candidateUser = null;
-    if (applicant.candidateUser) {
-      candidateUser = await User.findById(applicant.candidateUser);
-    }
-    if (!candidateUser && email) {
-      candidateUser = await User.findOne({
-        email: new RegExp(`^${email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i")
+      const normalizedEmail = email.toLowerCase().trim();
+      await InvitationRegistry.deleteMany({
+        $or: [
+          { email: normalizedEmail },
+          { email: new RegExp(`^${normalizedEmail.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") }
+        ]
       });
     }
-    if (!candidateUser && github) {
-      candidateUser = await User.findOne({ githubUsername: github });
+
+    if (applicant.fileUrl && applicant.fileUrl.startsWith("/uploads/")) {
+      const filePath = path.join(__dirname, "..", applicant.fileUrl);
+      if (fs.existsSync(filePath)) {
+        try { fs.unlinkSync(filePath); } catch (e) {}
+      }
     }
 
-    if (candidateUser) {
-      await ResumeAnalysis.deleteMany({ candidateId: candidateUser._id });
-      if (candidateUser.pipelineStage !== "verification_complete") {
-        candidateUser.origin = "self_registered";
-        candidateUser.pipelineStage = "resume_upload";
-        candidateUser.resumeUrl = "";
-        candidateUser.resumeStatus = "Pending Evaluation";
-        await candidateUser.save();
-      }
+    const userQuery = [];
+    if (applicant.candidateUser) userQuery.push({ _id: applicant.candidateUser });
+    if (email) {
+      userQuery.push({ email: email.toLowerCase().trim() });
+      userQuery.push({ email: new RegExp(`^${email.toLowerCase().trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") });
+    }
+    if (github) userQuery.push({ githubUsername: github });
+
+    const matchedUsers = userQuery.length > 0 ? await User.find({ $or: userQuery }) : [];
+
+    for (const candidateUser of matchedUsers) {
+      await Exam.deleteMany({ candidateId: candidateUser._id });
+      await VerificationResult.deleteMany({ candidateId: candidateUser._id });
+      await ResumeAnalysis.deleteMany({ $or: [{ candidateId: candidateUser._id }, { userId: candidateUser._id }] });
+      await Project.deleteMany({ userId: candidateUser._id });
+      await User.deleteOne({ _id: candidateUser._id });
     }
 
     await applicant.deleteOne();
     deletedCount++;
   }
 
-  res.json({ message: `Successfully deleted ${deletedCount} applicants.`, deletedCount });
+  res.json({ message: `Successfully permanently erased ${deletedCount} applicants and candidate profiles.`, deletedCount });
 });
 
 // @desc    Run full End-to-End Candidate Verification Pipeline (Module 12)
