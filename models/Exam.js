@@ -4,6 +4,8 @@ const questionSchema = mongoose.Schema({
   questionText: { type: String, required: true },
   options: { type: [String], required: true },
   correctOption: { type: Number, required: true }, // Index of correct option (0-3)
+  skill: { type: String, default: "Technical" },
+  difficulty: { type: String, default: "Medium" },
 });
 
 const examSchema = mongoose.Schema(

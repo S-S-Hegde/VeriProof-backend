@@ -100,9 +100,59 @@ app.get("/", (req, res) => {
 // Apply a broad rate limit across all /api routes
 app.use("/api", generalLimiter);
 
-// Serve uploaded files statically
+// Ensure upload directories exist
 const path = require("path");
-app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+const fs = require("fs");
+const uploadDir = path.join(__dirname, "uploads", "recruiter-resumes");
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+// Serve uploaded files statically with open CORS
+app.use(
+  "/uploads",
+  (req, res, next) => {
+    res.header("Access-Control-Allow-Origin", "*");
+    res.header("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+    res.header("Cross-Origin-Resource-Policy", "cross-origin");
+    next();
+  },
+  express.static(path.join(__dirname, "uploads"))
+);
+
+// Dynamic fallback route for recruiter resumes if container restarted
+app.get("/uploads/recruiter-resumes/:filename", async (req, res) => {
+  try {
+    const filename = req.params.filename;
+    const localFilePath = path.join(__dirname, "uploads", "recruiter-resumes", filename);
+    if (fs.existsSync(localFilePath)) {
+      return res.sendFile(localFilePath);
+    }
+
+    const RecruiterApplicant = require("./models/RecruiterApplicant");
+    const applicant = await RecruiterApplicant.findOne({
+      $or: [
+        { fileUrl: new RegExp(filename.replace(/\.pdf$/i, ""), "i") },
+        { fileUrl: `/uploads/recruiter-resumes/${filename}` },
+      ],
+    });
+
+    if (applicant && applicant.resumeText) {
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.setHeader(
+        "Content-Disposition",
+        `inline; filename="${applicant.name || "candidate"}-resume.txt"`
+      );
+      return res.send(
+        `====================================================\nVERIPROOF VERIFIED RESUME RECORD\nCandidate: ${applicant.name || "Candidate"}\nEmail: ${applicant.extractedEmail || "N/A"}\n====================================================\n\n${applicant.resumeText}`
+      );
+    }
+
+    return res.status(404).send("Document not available on server.");
+  } catch (e) {
+    return res.status(500).send("Error reading document.");
+  }
+});
 
 // Mount API routes
 app.use("/api/users", authRoutes);

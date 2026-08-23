@@ -394,15 +394,18 @@ Return ONLY a valid JSON array without any markdown formatting, backticks, or ex
       skills: effectiveSkills,
       passingScore: 70,
       status: "In Progress",
-      questions: generatedMcqs.map((q) => {
+      questions: generatedMcqs.map((q, idx) => {
         const options = Array.isArray(q.options) ? q.options : ["Option A", "Option B", "Option C", "Option D"];
         const targetAns = q.correct_answer || q.correctAnswer || options[0];
         const correctIdx = options.indexOf(targetAns);
+        const skill = q.skill || q.category || (effectiveSkills[idx % effectiveSkills.length]) || "Technical";
+        const difficulty = q.difficulty || (idx < 10 ? "Easy" : idx < 25 ? "Medium" : "Hard");
         return {
           questionText: q.question_text || q.question || "Technical Question",
           options,
           correctOption: correctIdx !== -1 ? correctIdx : 0,
-          skill: q.skill || q.category || effectiveSkills[0] || "Technical",
+          skill,
+          difficulty,
         };
       }),
     });
@@ -423,7 +426,7 @@ Return ONLY a valid JSON array without any markdown formatting, backticks, or ex
     // ── Format for frontend UI ─────────────────────────────────────────
     const frontendQuestions = exam.questions.map((q, idx) => ({
       _id: q._id,
-      category: q.skill || effectiveSkills[0] || "General",
+      category: q.skill || (effectiveSkills[idx % effectiveSkills.length]) || "Technical",
       difficulty: q.difficulty || (idx < 10 ? "Easy" : idx < 25 ? "Medium" : "Hard"),
       text: q.questionText,
       options: q.options,
