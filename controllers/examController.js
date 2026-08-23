@@ -40,17 +40,20 @@ const generateDynamicAlgorithmicQuestions = (skills = [], difficulty = "intermed
     { question: "Which method creates a new array populated with the results of calling a provided function on every element?", options: ["Array.prototype.map()", "Array.prototype.forEach()", "Array.prototype.filter()", "Array.prototype.reduce()"], correctAnswer: "Array.prototype.map()", skill: "JavaScript", difficulty: "Easy" },
     { question: "What is a closure in JavaScript?", options: ["A function bundled with references to its lexical surrounding state", "A function that has no return statement", "A private class constructor", "A self-terminating loop"], correctAnswer: "A function bundled with references to its lexical surrounding state", skill: "JavaScript", difficulty: "Medium" },
     { question: "In TypeScript, what does the `unknown` type represent compared to `any`?", options: ["A type-safe counterpart where operations require type narrowing or assertions", "An alias for undefined", "A type that allows arbitrary method calls without checks", "A void return value"], correctAnswer: "A type-safe counterpart where operations require type narrowing or assertions", skill: "TypeScript", difficulty: "Hard" },
+    { question: "What is the difference between `type` and `interface` in TypeScript?", options: ["Interfaces can be merged with declaration merging, types cannot", "Types can only represent primitives", "Interfaces cannot extend each other", "There are no functional differences"], correctAnswer: "Interfaces can be merged with declaration merging, types cannot", skill: "TypeScript", difficulty: "Medium" },
 
     // React
     { question: "Which React hook is used to perform side effects in functional components?", options: ["useEffect", "useState", "useMemo", "useCallback"], correctAnswer: "useEffect", skill: "React", difficulty: "Easy" },
     { question: "What is the primary benefit of `useMemo` in React?", options: ["Memoizing the calculated result of expensive operations between re-renders", "Persisting state to local storage", "Creating DOM references", "Subscribing to WebSocket events"], correctAnswer: "Memoizing the calculated result of expensive operations between re-renders", skill: "React", difficulty: "Medium" },
     { question: "What is the role of the `key` prop when rendering lists in React?", options: ["Helps React identify which items have changed, been added, or been removed", "Provides CSS styling IDs", "Encrypts child components", "Registers browser focus"], correctAnswer: "Helps React identify which items have changed, been added, or been removed", skill: "React", difficulty: "Easy" },
     { question: "What is React Fiber?", options: ["A reimplementation of React's core reconciliation algorithm for incremental rendering", "A CSS framework for React", "A state management library", "A server runtime"], correctAnswer: "A reimplementation of React's core reconciliation algorithm for incremental rendering", skill: "React", difficulty: "Hard" },
+    { question: "When should you use `useCallback` instead of `useMemo` in React?", options: ["To memoize a callback function instance between renders", "To memoize JSX DOM nodes", "To trigger re-renders", "To fetch data from REST APIs"], correctAnswer: "To memoize a callback function instance between renders", skill: "React", difficulty: "Medium" },
 
     // Node.js & Express
     { question: "How does Node.js achieve non-blocking I/O operations despite being single-threaded?", options: ["By delegating I/O operations to libuv's background worker thread pool and OS kernel", "By launching child processes for every request", "By using multi-threaded JavaScript execution", "By pausing the main thread"], correctAnswer: "By delegating I/O operations to libuv's background worker thread pool and OS kernel", skill: "Node.js", difficulty: "Medium" },
     { question: "In Express.js middleware, what happens if you forget to call `next()`?", options: ["The request will hang indefinitely and time out", "An unhandled exception is thrown", "Express sends an automatic 200 OK", "The server crashes"], correctAnswer: "The request will hang indefinitely and time out", skill: "Node.js", difficulty: "Easy" },
     { question: "What is the purpose of `process.nextTick()` in Node.js?", options: ["Schedules a callback to be invoked at the end of the current operation, before the next event loop tick", "Delays execution by 1 millisecond", "Schedules work on a separate CPU core", "Cancels scheduled promises"], correctAnswer: "Schedules a callback to be invoked at the end of the current operation, before the next event loop tick", skill: "Node.js", difficulty: "Hard" },
+    { question: "Which Node.js core module provides stream and buffer utilities for handling large binary files?", options: ["stream", "file", "disk", "binary"], correctAnswer: "stream", skill: "Node.js", difficulty: "Medium" },
 
     // SQL & Databases
     { question: "Which SQL clause is used to filter aggregate query results?", options: ["HAVING", "WHERE", "GROUP BY", "ORDER BY"], correctAnswer: "HAVING", skill: "SQL", difficulty: "Easy" },
@@ -58,13 +61,19 @@ const generateDynamicAlgorithmicQuestions = (skills = [], difficulty = "intermed
     { question: "What is the main benefit of a Database Index (B-Tree)?", options: ["Speeds up search and retrieval queries at the cost of slower writes and additional storage", "Compresses stored table rows", "Enforces foreign key relationships", "Automatically backups data"], correctAnswer: "Speeds up search and retrieval queries at the cost of slower writes and additional storage", skill: "SQL", difficulty: "Medium" },
     { question: "What does ACID stand for in database transaction management?", options: ["Atomicity, Consistency, Isolation, Durability", "Accuracy, Control, Indexing, Delivery", "Authentication, Cryptography, Integrity, Decryption", "Allocation, Concurrency, Iteration, Deletion"], correctAnswer: "Atomicity, Consistency, Isolation, Durability", skill: "SQL", difficulty: "Easy" },
     { question: "In MongoDB, what is the Aggregation Pipeline used for?", options: ["Multi-stage document transformation, grouping, filtering, and statistical computation", "Managing cluster user logins", "Replicating data across regions", "Generating schema migrations"], correctAnswer: "Multi-stage document transformation, grouping, filtering, and statistical computation", skill: "MongoDB", difficulty: "Medium" },
+    { question: "What is an Inverted Index primarily used for in databases like Elasticsearch?", options: ["Fast full-text search by mapping words to their document locations", "Storing relational foreign keys", "Encrypting passwords", "Balancing CPU loads"], correctAnswer: "Fast full-text search by mapping words to their document locations", skill: "Databases", difficulty: "Hard" },
 
-    // System Architecture & Git
+    // Cloud, Caching & DevOps
+    { question: "What is Redis primarily utilized for in high-concurrency web systems?", options: ["In-memory caching, pub/sub messaging, and distributed session storage", "Relational ACID backups", "Parsing client-side CSS", "Compiling Go binaries"], correctAnswer: "In-memory caching, pub/sub messaging, and distributed session storage", skill: "Redis", difficulty: "Medium" },
     { question: "What is the primary role of a Reverse Proxy (such as NGINX)?", options: ["Directing client requests to backend servers, handling SSL termination, and caching", "Rendering browser HTML", "Managing local Git branches", "Compiling client JavaScript"], correctAnswer: "Directing client requests to backend servers, handling SSL termination, and caching", skill: "Architecture", difficulty: "Easy" },
     { question: "Which Git command is used to integrate commits from one branch by reapplying them on top of another base tip?", options: ["git rebase", "git merge", "git cherry-pick", "git branch"], correctAnswer: "git rebase", skill: "Git", difficulty: "Medium" },
     { question: "What is the main purpose of Docker containerization?", options: ["Packaging an application and its dependencies into a lightweight, reproducible executable environment", "Virtualizing complete physical hardware", "Managing relational database transactions", "Formatting source code"], correctAnswer: "Packaging an application and its dependencies into a lightweight, reproducible executable environment", skill: "DevOps", difficulty: "Easy" },
     { question: "In RESTful API design, which HTTP method is considered idempotent for replacing a complete resource representation?", options: ["PUT", "POST", "PATCH", "CONNECT"], correctAnswer: "PUT", skill: "API Design", difficulty: "Easy" },
     { question: "What is the CAP Theorem trade-off in distributed data stores?", options: ["A distributed system can guarantee at most two out of Consistency, Availability, and Partition Tolerance", "Computers must balance CPU, Architecture, and Performance", "Code, Accuracy, and Precision must be equal", "Concurrency, Allocation, and Persistence"], correctAnswer: "A distributed system can guarantee at most two out of Consistency, Availability, and Partition Tolerance", skill: "Architecture", difficulty: "Hard" },
+    { question: "What is the primary advantage of WebSockets over standard HTTP polling?", options: ["Full-duplex, persistent bi-directional communication over a single TCP connection", "Automatic encryption", "Faster TLS handshakes", "Stateless response headers"], correctAnswer: "Full-duplex, persistent bi-directional communication over a single TCP connection", skill: "WebSockets", difficulty: "Medium" },
+    { question: "How does JWT (JSON Web Token) authentication provide statelessness?", options: ["The server cryptographically verifies the signed token payload without database lookups", "The server stores session IDs in RAM", "Tokens are stored in cookies only", "The client encrypts the database credentials"], correctAnswer: "The server cryptographically verifies the signed token payload without database lookups", skill: "Security", difficulty: "Medium" },
+    { question: "In Kubernetes, what is the smallest deployable computing unit?", options: ["Pod", "Node", "Cluster", "Service"], correctAnswer: "Pod", skill: "DevOps", difficulty: "Medium" },
+    { question: "What is the purpose of Database Connection Pooling?", options: ["Reusing an active pool of database connections to eliminate the overhead of repeated TCP/TLS handshakes", "Backing up table schemas", "Encrypting database disk storage", "Generating SQL migrations automatically"], correctAnswer: "Reusing an active pool of database connections to eliminate the overhead of repeated TCP/TLS handshakes", skill: "Architecture", difficulty: "Hard" },
   ];
 
   const normalizedCandidateSkills = (skills || []).map(s => s.toLowerCase());
@@ -74,7 +83,7 @@ const generateDynamicAlgorithmicQuestions = (skills = [], difficulty = "intermed
   const otherPool = fullBank.filter(q => !matchedPool.includes(q));
 
   const combinedSelection = [...shuffle(matchedPool), ...shuffle(otherPool)];
-  const selectedQuestions = combinedSelection.slice(0, 20);
+  const selectedQuestions = combinedSelection.slice(0, 35);
 
   return selectedQuestions.map((q) => {
     const shuffledOptions = shuffle(q.options);
@@ -226,14 +235,14 @@ Candidate Verified Skills: ${effectiveSkills.join(", ")}
 Target Seniority Level: "${jobDifficulty}"
 
 ── ASSESSMENT BLUEPRINT & SCENARIO-BASED INSTRUCTIONS ──
-1. Analyze the Job Description (JD) and generate exactly 20 unique, scenario-based multiple-choice technical questions directly mapped to the JD requirements.
+1. Analyze the Job Description (JD) and generate exactly 35 unique, scenario-based multiple-choice technical questions directly mapped to the JD requirements.
 2. Questions must test practical problem-solving in real-world scenarios described in the JD (e.g., architectural trade-offs, debugging broken code, state management, database query optimization, security vulnerabilities, RESTful API contracts, and high-concurrency scaling).
 3. Avoid generic definitions or surface-level syntax trivia. Use concrete code snippets and engineering scenarios.
 
-── PROGRESSIVE 3-TIER DIFFICULTY BREAKDOWN ──
-- Tier 1 (Questions 1 to 6) — "Easy": Core fundamentals, syntax precision, and standard library patterns required by the JD.
-- Tier 2 (Questions 7 to 14) — "Medium": Practical implementation, debugging broken logic, data flow, and API design.
-- Tier 3 (Questions 15 to 20) — "Hard": High-scale system design, database indexing/concurrency, distributed failure modes, and security mitigations.
+── PROGRESSIVE 3-TIER DIFFICULTY BREAKDOWN (35 QUESTIONS TOTAL) ──
+- Tier 1 (Questions 1 to 10) — "Easy": Core fundamentals, syntax precision, and standard library patterns required by the JD.
+- Tier 2 (Questions 11 to 25) — "Medium": Practical implementation, debugging broken logic, data flow, and API design.
+- Tier 3 (Questions 26 to 35) — "Hard": High-scale system design, database indexing/concurrency, distributed failure modes, and security mitigations.
 
 Return ONLY a valid JSON array without any markdown formatting, backticks, or extra text:
 [
@@ -410,7 +419,7 @@ Return ONLY a valid JSON array without any markdown formatting, backticks, or ex
     const frontendQuestions = exam.questions.map((q, idx) => ({
       _id: q._id,
       category: q.skill || effectiveSkills[0] || "General",
-      difficulty: q.difficulty || (idx < 6 ? "Easy" : idx < 14 ? "Medium" : "Hard"),
+      difficulty: q.difficulty || (idx < 10 ? "Easy" : idx < 25 ? "Medium" : "Hard"),
       text: q.questionText,
       options: q.options,
     }));
