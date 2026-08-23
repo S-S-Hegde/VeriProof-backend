@@ -26,10 +26,20 @@ const getBrevoAccounts = () => {
   const sender2 = (process.env.FROM_EMAIL_2 || sender1).trim();
   if (key2) accounts.push({ key: key2, sender: sender2, id: "Brevo-Account-2" });
 
-  // Account 3 (if provided)
+  // Account 3
   const key3 = (process.env.BREVO_API_KEY_3 || "").trim();
   const sender3 = (process.env.FROM_EMAIL_3 || sender1).trim();
   if (key3) accounts.push({ key: key3, sender: sender3, id: "Brevo-Account-3" });
+
+  // Account 4
+  const key4 = (process.env.BREVO_API_KEY_4 || "").trim();
+  const sender4 = (process.env.FROM_EMAIL_4 || sender1).trim();
+  if (key4) accounts.push({ key: key4, sender: sender4, id: "Brevo-Account-4" });
+
+  // Account 5
+  const key5 = (process.env.BREVO_API_KEY_5 || "").trim();
+  const sender5 = (process.env.FROM_EMAIL_5 || sender1).trim();
+  if (key5) accounts.push({ key: key5, sender: sender5, id: "Brevo-Account-5" });
 
   return accounts;
 };
