@@ -29,7 +29,13 @@ const examSchema = mongoose.Schema(
     timeTaken: { type: Number, default: 0 },
     codeQuality: { type: Number, default: 0 },
     answers: { type: Array, default: [] },
-    integrityScore: { type: Number, default: 100 }
+    
+    // Anti-Cheat & Proctoring Telemetry
+    integrityScore: { type: Number, default: 100 },
+    violationCount: { type: Number, default: 0 },
+    violations: { type: Array, default: [] },
+    isTerminated: { type: Boolean, default: false },
+    proctoringLogs: { type: Array, default: [] },
   },
   {
     timestamps: true,

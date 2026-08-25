@@ -758,7 +758,7 @@ const submitExam = async (req, res) => {
       }
     }
 
-    const { answers = [], code_snippet, behavioral_response, isTerminated = false } = req.body;
+    const { answers = [], code_snippet, behavioral_response, isTerminated = false, violationCount = 0, violations = [], integrityScore = 100, proctoringLogs = [] } = req.body;
 
     // Handle security termination / violation disqualification
     if (isTerminated) {
@@ -784,6 +784,11 @@ const submitExam = async (req, res) => {
       if (exam) {
         exam.status = "Terminated";
         exam.score = 0;
+        exam.isTerminated = true;
+        exam.violationCount = violationCount || 3;
+        exam.violations = violations;
+        exam.integrityScore = 0;
+        exam.proctoringLogs = proctoringLogs;
         await exam.save();
       }
 
@@ -902,6 +907,11 @@ const submitExam = async (req, res) => {
       exam.timeTaken = 30;
       exam.codeQuality = score;
       exam.answers = answers;
+      exam.isTerminated = false;
+      exam.violationCount = violationCount;
+      exam.violations = violations;
+      exam.integrityScore = Math.max(0, 100 - (violationCount * 25));
+      exam.proctoringLogs = proctoringLogs;
       await exam.save();
     }
 
