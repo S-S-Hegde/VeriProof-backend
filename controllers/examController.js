@@ -758,10 +758,48 @@ const submitExam = async (req, res) => {
       }
     }
 
-    const { answers = [], code_snippet, behavioral_response, isTerminated = false, violationCount = 0, violations = [], integrityScore = 100, proctoringLogs = [] } = req.body;
+    const { answers = [], code_snippet, behavioral_response, isTerminated = false, violationCount = 0, violations = [], proctoringLogs = [] } = req.body;
+
+    // ── 1. Resolve Active Exam Session with Strict Ownership ───────────
+    let exam = req.activeExam;
+    if (!exam) {
+      exam = await Exam.findOne({
+        candidateId: req.user._id,
+        status: "In Progress",
+      }).sort({ createdAt: -1 });
+    }
+
+    if (!exam) {
+      // Check if this attempt was already finalized (anti-replay guard)
+      const existingExam = await Exam.findOne({
+        candidateId: req.user._id,
+      }).sort({ createdAt: -1 });
+
+      if (existingExam && (existingExam.status === "Completed" || existingExam.status === "Terminated")) {
+        return res.status(409).json({
+          success: false,
+          error: "EXAM_ALREADY_FINALIZED",
+          message: "This examination has already been completed and cannot be resubmitted.",
+        });
+      }
+
+      return res.status(404).json({
+        success: false,
+        error: "NO_ACTIVE_EXAM",
+        message: "No active examination found for this candidate.",
+      });
+    }
+
+    // ── 2. Server-Authoritative Anti-Cheat & Violation Merging ─────────
+    const serverViolations = Array.isArray(exam.serverViolations) ? exam.serverViolations : [];
+    const serverCount = Number(exam.serverViolationCount || serverViolations.length || 0);
+    const clientCount = Number(violationCount || 0);
+    const effectiveViolationCount = Math.max(serverCount, clientCount);
+    const calculatedIntegrityScore = Math.max(0, 100 - (effectiveViolationCount * 25));
+    const isSecurityDisqualified = isTerminated === true || effectiveViolationCount >= 3 || exam.isTerminated === true;
 
     // Handle security termination / violation disqualification
-    if (isTerminated) {
+    if (isSecurityDisqualified) {
       const RecruiterApplicant = require("../models/RecruiterApplicant");
       await RecruiterApplicant.updateMany(
         {
@@ -776,26 +814,27 @@ const submitExam = async (req, res) => {
           status: "Disqualified",
           examStatus: "Violated",
           examScore: 0,
-          reasoning: "Disqualified due to proctoring and security violations during assessment."
+          reasoning: `Disqualified due to security violations (${effectiveViolationCount} total incidents).`
         }
       );
 
-      const exam = await Exam.findOne({ candidateId: req.user._id }).sort({ createdAt: -1 });
-      if (exam) {
-        exam.status = "Terminated";
-        exam.score = 0;
-        exam.isTerminated = true;
-        exam.violationCount = violationCount || 3;
-        exam.violations = violations;
-        exam.integrityScore = 0;
-        exam.proctoringLogs = proctoringLogs;
-        await exam.save();
-      }
+      exam.status = "Terminated";
+      exam.score = 0;
+      exam.isTerminated = true;
+      exam.violationCount = effectiveViolationCount;
+      exam.serverViolationCount = serverCount;
+      exam.violations = Array.isArray(violations) && violations.length > 0 ? violations : serverViolations;
+      exam.integrityScore = 0;
+      exam.proctoringLogs = proctoringLogs;
+      exam.submittedAt = new Date();
+      await exam.save();
 
       return res.status(200).json({
         success: false,
         disqualified: true,
         score: 0,
+        integrityScore: 0,
+        violationCount: effectiveViolationCount,
         message: "Assessment terminated due to security violations. Result disqualified.",
       });
     }
@@ -804,30 +843,21 @@ const submitExam = async (req, res) => {
       return res.status(400).json({ message: "Answers are required." });
     }
 
-    // Lookup the dynamically generated exam
-    const questionIds = answers
-      .map((entry) => entry.questionId)
-      .filter(Boolean);
-    const exam = await Exam.findOne({ "questions._id": { $in: questionIds } });
+    // ── 3. Tamper-Proof Question Scoring (Fixed Denominator Defense) ────
+    const totalQuestions = exam.questions && exam.questions.length > 0 ? exam.questions.length : (answers.length || 1);
+    const questionMap = new Map(
+      exam.questions.map((q) => [q._id.toString(), q.correctOption])
+    );
 
     let correctCount = 0;
-    let totalQuestions = answers.length;
+    answers.forEach(({ questionId, answerIndex }) => {
+      if (questionMap.has(String(questionId)) && questionMap.get(String(questionId)) === answerIndex) {
+        correctCount += 1;
+      }
+    });
 
-    if (exam) {
-      const questionMap = new Map(
-        exam.questions.map((q) => [q._id.toString(), q.correctOption]),
-      );
-      answers.forEach(({ questionId, answerIndex }) => {
-        if (questionMap.get(String(questionId)) === answerIndex) {
-          correctCount += 1;
-        }
-      });
-    }
-
-    let score =
-      totalQuestions > 0
-        ? Math.round((correctCount / totalQuestions) * 100)
-        : 0;
+    // Score is strictly calculated against ALL exam questions (unanswered questions score 0)
+    let score = Math.min(100, Math.max(0, Math.round((correctCount / totalQuestions) * 100)));
 
     // --- PROXY TO PYTHON: Grade Code Snippets ---
     if (code_snippet) {
@@ -908,10 +938,12 @@ const submitExam = async (req, res) => {
       exam.codeQuality = score;
       exam.answers = answers;
       exam.isTerminated = false;
-      exam.violationCount = violationCount;
-      exam.violations = violations;
-      exam.integrityScore = Math.max(0, 100 - (violationCount * 25));
+      exam.violationCount = effectiveViolationCount;
+      exam.serverViolationCount = serverCount;
+      exam.violations = Array.isArray(violations) && violations.length > 0 ? violations : serverViolations;
+      exam.integrityScore = calculatedIntegrityScore;
       exam.proctoringLogs = proctoringLogs;
+      exam.submittedAt = new Date();
       await exam.save();
     }
 
@@ -1565,10 +1597,87 @@ Respond with ONLY raw JSON (no backticks, no markdown):
       };
     }
 
+    // ── Server-Authoritative Violation Recording ─────────────────────
+    if (proctorResult.violation && req.user && req.user._id) {
+      try {
+        const activeExam = await Exam.findOne({
+          candidateId: req.user._id,
+          status: "In Progress",
+        }).sort({ createdAt: -1 });
+
+        if (activeExam) {
+          activeExam.serverViolationCount = (activeExam.serverViolationCount || 0) + 1;
+          if (!Array.isArray(activeExam.serverViolations)) activeExam.serverViolations = [];
+          activeExam.serverViolations.push({
+            type: proctorResult.violationType || "VISION_ANOMALY",
+            reason: proctorResult.reason || "AI Vision proctoring anomaly detected.",
+            confidence: proctorResult.confidence || 0.9,
+            provider: proctorResult.provider || "AI_Vision",
+            timestamp: new Date(),
+          });
+          activeExam.integrityScore = Math.max(0, 100 - (activeExam.serverViolationCount * 25));
+          if (activeExam.serverViolationCount >= 3) {
+            activeExam.isTerminated = true;
+            activeExam.status = "Terminated";
+          }
+          await activeExam.save();
+        }
+      } catch (saveErr) {
+        console.warn("[ProctorAI] Could not persist server-side violation:", saveErr.message);
+      }
+    }
+
     res.json(proctorResult);
   } catch (error) {
     console.error("[Proctor Snapshot Error]", error);
     res.status(500).json({ message: "Proctoring analysis error", violation: false });
+  }
+};
+
+// @desc    Record server-authoritative telemetry violation from ACE / frontend
+// @route   POST /api/exams/record-violation
+// @access  Private
+const recordProctorViolation = async (req, res) => {
+  try {
+    const { type = "SECURITY_VIOLATION", reason = "Proctoring anomaly detected", confidence = 0.9, telemetry = {} } = req.body;
+    if (!req.user || !req.user._id) {
+      return res.status(401).json({ success: false, message: "Authentication required." });
+    }
+
+    const activeExam = await Exam.findOne({
+      candidateId: req.user._id,
+      status: "In Progress",
+    }).sort({ createdAt: -1 });
+
+    if (!activeExam) {
+      return res.status(404).json({ success: false, message: "No active exam session found." });
+    }
+
+    activeExam.serverViolationCount = (activeExam.serverViolationCount || 0) + 1;
+    if (!Array.isArray(activeExam.serverViolations)) activeExam.serverViolations = [];
+    activeExam.serverViolations.push({
+      type,
+      reason,
+      confidence,
+      telemetry,
+      timestamp: new Date(),
+    });
+    activeExam.integrityScore = Math.max(0, 100 - (activeExam.serverViolationCount * 25));
+    if (activeExam.serverViolationCount >= 3) {
+      activeExam.isTerminated = true;
+      activeExam.status = "Terminated";
+    }
+    await activeExam.save();
+
+    return res.json({
+      success: true,
+      serverViolationCount: activeExam.serverViolationCount,
+      integrityScore: activeExam.integrityScore,
+      isTerminated: activeExam.isTerminated,
+    });
+  } catch (err) {
+    console.error("[RecordViolation Error]", err.message);
+    res.status(500).json({ success: false, message: "Failed to record proctoring telemetry." });
   }
 };
 
@@ -1577,4 +1686,6 @@ module.exports = {
   submitExam,
   getExamHistory,
   analyzeProctorSnapshot,
+  recordProctorViolation,
 };
+

@@ -5,13 +5,20 @@ const {
   submitExam,
   getExamHistory,
   analyzeProctorSnapshot,
+  recordProctorViolation,
 } = require("../controllers/examController");
 const { protect } = require("../middleware/authMiddleware");
+const {
+  validateExamSubmission,
+  examActionRateLimit,
+} = require("../middleware/examSecurityFirewall");
 
 // GET /api/exams/start
-router.get("/start", protect, startExam);
-router.post("/submit", protect, submitExam);
+router.get("/start", protect, examActionRateLimit, startExam);
+router.post("/submit", protect, examActionRateLimit, validateExamSubmission, submitExam);
 router.get("/history", protect, getExamHistory);
 router.post("/proctor-snapshot", protect, analyzeProctorSnapshot);
+router.post("/record-violation", protect, recordProctorViolation);
 
 module.exports = router;
+

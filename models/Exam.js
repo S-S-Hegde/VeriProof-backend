@@ -30,12 +30,17 @@ const examSchema = mongoose.Schema(
     codeQuality: { type: Number, default: 0 },
     answers: { type: Array, default: [] },
     
-    // Anti-Cheat & Proctoring Telemetry
+    // Anti-Cheat & Proctoring Telemetry (Server-Authoritative)
     integrityScore: { type: Number, default: 100 },
     violationCount: { type: Number, default: 0 },
+    serverViolationCount: { type: Number, default: 0 },
     violations: { type: Array, default: [] },
+    serverViolations: { type: Array, default: [] },
     isTerminated: { type: Boolean, default: false },
     proctoringLogs: { type: Array, default: [] },
+    startedAt: { type: Date, default: Date.now },
+    submittedAt: { type: Date },
+    tamperAttemptCount: { type: Number, default: 0 },
   },
   {
     timestamps: true,
