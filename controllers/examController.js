@@ -22,8 +22,8 @@ const shuffle = (arr) => {
   return copy;
 };
 
-// ── Dynamic Algorithmic Question Generator (Strictly Equal Option Lengths) ──
-const generateDynamicAlgorithmicQuestions = (skills = [], difficulty = "intermediate") => {
+// ── Dynamic Algorithmic Question Generator (2-Section Core + Elective Partition) ──
+const generateDynamicAlgorithmicQuestions = (coreSkills = [], claimedSkills = [], difficulty = "intermediate") => {
   const fullBank = [
     // Python
     { question: "What is the primary difference between a List and a Tuple in Python?", options: ["Lists are mutable while Tuples are strictly immutable", "Lists are immutable while Tuples are strictly mutable", "Lists only accept strings while Tuples hold any data", "Lists are statically typed while Tuples are untyped"], correctAnswer: "Lists are mutable while Tuples are strictly immutable", skill: "Python", difficulty: "Easy" },
@@ -76,25 +76,62 @@ const generateDynamicAlgorithmicQuestions = (skills = [], difficulty = "intermed
     { question: "What is the operational purpose of Database Connection Pooling?", options: ["Reuses open connections to prevent handshake latency", "Backs up relational table schemas to disk automatically", "Encrypts database storage volumes at block levels", "Generates automatic SQL migration schema scripts"], correctAnswer: "Reuses open connections to prevent handshake latency", skill: "Architecture", difficulty: "Hard" },
   ];
 
-  const normalizedCandidateSkills = (skills || []).map(s => s.toLowerCase());
-  const matchedPool = fullBank.filter(q =>
-    normalizedCandidateSkills.some(cs => cs.includes(q.skill.toLowerCase()) || q.skill.toLowerCase().includes(cs))
-  );
-  const otherPool = fullBank.filter(q => !matchedPool.includes(q));
+  const effectiveCore = (coreSkills && coreSkills.length > 0)
+    ? coreSkills
+    : ["Software Engineering", "Full Stack Development", "API Design", "Databases"];
 
-  const combinedSelection = [...shuffle(matchedPool), ...shuffle(otherPool)];
-  const selectedQuestions = combinedSelection.slice(0, 35);
+  const effectiveElectives = (claimedSkills && claimedSkills.length > 0)
+    ? claimedSkills
+    : effectiveCore;
 
-  return selectedQuestions.map((q) => {
-    const shuffledOptions = shuffle(q.options);
-    return {
+  // Helper to extract a target number of questions with specific difficulty quotas
+  const pickSectionQuestions = (skillsList, targetEasy, targetMedium, targetHard, sectionName, usedQuestions) => {
+    const normalizedSkills = skillsList.map(s => s.toLowerCase());
+
+    const matchedPool = fullBank.filter(q =>
+      !usedQuestions.has(q.question) &&
+      normalizedSkills.some(cs => cs.includes(q.skill.toLowerCase()) || q.skill.toLowerCase().includes(cs))
+    );
+    const otherPool = fullBank.filter(q => !usedQuestions.has(q.question) && !matchedPool.includes(q));
+
+    const getByDiff = (pool, diff) => pool.filter(q => (q.difficulty || "Medium").toLowerCase() === diff.toLowerCase());
+
+    const easyCandidates = [...shuffle(getByDiff(matchedPool, "Easy")), ...shuffle(getByDiff(otherPool, "Easy"))];
+    const medCandidates = [...shuffle(getByDiff(matchedPool, "Medium")), ...shuffle(getByDiff(otherPool, "Medium"))];
+    const hardCandidates = [...shuffle(getByDiff(matchedPool, "Hard")), ...shuffle(getByDiff(otherPool, "Hard"))];
+
+    const selected = [
+      ...easyCandidates.slice(0, targetEasy),
+      ...medCandidates.slice(0, targetMedium),
+      ...hardCandidates.slice(0, targetHard),
+    ];
+
+    // If quotas were not fully met due to bank size, fill remaining with any unused questions
+    const totalRequired = targetEasy + targetMedium + targetHard;
+    if (selected.length < totalRequired) {
+      const remainingUnused = fullBank.filter(q => !usedQuestions.has(q.question) && !selected.includes(q));
+      selected.push(...shuffle(remainingUnused).slice(0, totalRequired - selected.length));
+    }
+
+    selected.forEach(q => usedQuestions.add(q.question));
+
+    return selected.map(q => ({
       question_text: q.question,
-      options: shuffledOptions,
+      options: shuffle(q.options),
       correct_answer: q.correctAnswer,
       skill: q.skill,
-      difficulty: q.difficulty || "Medium"
-    };
-  });
+      difficulty: q.difficulty || "Medium",
+      section: sectionName,
+    }));
+  };
+
+  const usedQuestions = new Set();
+  // Section 1: Core Baseline (20 Qs: 5 Easy, 10 Medium, 5 Hard)
+  const section1Core = pickSectionQuestions(effectiveCore, 5, 10, 5, "Core", usedQuestions);
+  // Section 2: Candidate Electives (15 Qs: 5 Easy, 5 Medium, 5 Hard)
+  const section2Electives = pickSectionQuestions(effectiveElectives, 5, 5, 5, "Elective", usedQuestions);
+
+  return [...section1Core, ...section2Electives];
 };
 
 // @desc    Fetch a generated exam payload
@@ -197,7 +234,7 @@ const startExam = async (req, res) => {
       || applicant?.resumeText
       || "";
 
-    // ── Skill resolution: job skills ∪ resume/applicant skills ─────────
+    // ── Skill resolution: Core Baseline Skills vs Candidate Claimed Electives ──
     const analysisSkills = (analysis?.claims?.skills || []).map(
       s => (typeof s === "string" ? s : s.name || s.skill || "")
     ).filter(Boolean);
@@ -206,17 +243,17 @@ const startExam = async (req, res) => {
       s => (typeof s === "string" ? s : s.name || s.skill || "")
     ).filter(Boolean);
 
-    const claimedSkills = analysisSkills.length > 0 ? analysisSkills : applicantSkills;
-    const combinedSkills = [...new Set([...jobTargetSkills, ...claimedSkills])];
+    const rawClaimedSkills = analysisSkills.length > 0 ? analysisSkills : applicantSkills;
 
-    // Ensure invited candidates always have at least the job skills to generate questions from
-    const effectiveSkills = combinedSkills.length > 0
-      ? combinedSkills
-      : isInvitedCandidate
+    if (jobTargetSkills.length === 0) {
+      jobTargetSkills = isInvitedCandidate
         ? ["Software Engineering", "Full Stack Development", "API Design", "Databases"]
-        : ["Python", "SQL", "React", "Node.js", "MongoDB", "Git"];
+        : ["JavaScript", "Node.js", "SQL", "React", "Python"];
+    }
 
-    const formattedClaims = effectiveSkills.map((skill) => ({
+    const claimedSkills = rawClaimedSkills.length > 0 ? rawClaimedSkills : jobTargetSkills;
+
+    const formattedClaims = [...new Set([...jobTargetSkills, ...claimedSkills])].map((skill) => ({
       skill,
       context: (invitation || applicant) ? `Job Alignment Assessment (${jobTitle})` : "Practice Assessment",
     }));
@@ -230,8 +267,8 @@ Session Randomization Seed: ${sessionSalt}
 
 ── JOB CONTEXT & TECHNICAL STACK ──
 Job Description: "${jobDescription || "Design, develop, scale, and maintain high-performance software systems and APIs."}"
-Required Core Competencies: ${jobTargetSkills.join(", ") || effectiveSkills.join(", ")}
-Candidate Verified Competencies: ${effectiveSkills.join(", ")}
+Core Required Competencies (Baseline): ${jobTargetSkills.join(", ")}
+Candidate Claimed Competencies (Electives): ${claimedSkills.join(", ")}
 Target Seniority Level: "${jobDifficulty}"
 
 ── ABSOLUTE REQUIREMENT: ZERO OPTION LENGTH BIAS (EQUAL OPTION LENGTHS) ──
@@ -241,29 +278,36 @@ Target Seniority Level: "${jobDifficulty}"
 
 ── QUESTION ARCHITECTURE & NPTEL/LEETCODE STYLES ──
 Adopt the analytical rigor of LeetCode / HackerRank / NPTEL examination problems:
-• STYLE A: "Code Output & Execution Trace" — Multi-line code snippets testing closures, async/await event loops, recursion, mutation, and edge cases.
-• STYLE B: "Multi-Statement Evaluation (NPTEL Style)" — Present a scenario followed by 3 statements (I, II, III) and ask which are True/False:
-  e.g., "(A) I and II only", "(B) II and III only", "(C) I and III only", "(D) I, II, and III".
-• STYLE C: "Time/Space Complexity & Algorithmic Trade-offs" — Deep asymptotic analysis of data structure operations and caching strategies.
-• STYLE D: "High-Concurrency & Distributed Architecture" — Diagnosing race conditions, deadlocks, partition tolerance, and database transaction isolation levels.
+• STYLE A: "Code Output & Execution Trace"
+• STYLE B: "Multi-Statement Evaluation (NPTEL Style)"
+• STYLE C: "Time/Space Complexity & Algorithmic Trade-offs"
+• STYLE D: "High-Concurrency & Distributed Architecture"
 
-── PROGRESSIVE 3-TIER DIFFICULTY BREAKDOWN (35 QUESTIONS TOTAL) ──
-• Tier 1 (Questions 1 to 10) — "Easy": Focused 3-6 line code snippets, syntax precision, edge-case evaluations, and fundamental APIs.
-• Tier 2 (Questions 11 to 25) — "Medium": Multi-step code traces, async ordering, SQL CTE/window functions, and state mutation diagnostics requiring 1-2 minutes of analysis.
-• Tier 3 (Questions 26 to 35) — "Hard": Complex NPTEL-style multi-statement evaluations, distributed system failure modes, caching invalidation anomalies, and high-concurrency race condition scenarios.
+── ASSESSMENT STRUCTURE (35 QUESTIONS TOTAL) ──
+You must strictly partition the 35 questions into two distinct sections:
+
+SECTION 1: CORE BASELINE (20 Questions)
+- Generate exactly 20 questions using ONLY the Core Required Competencies: ${jobTargetSkills.join(", ")}
+- Difficulty distribution: 5 Easy, 10 Medium, 5 Hard.
+
+SECTION 2: CANDIDATE ELECTIVES (15 Questions)
+- Generate exactly 15 questions using ONLY the Candidate Claimed Competencies: ${claimedSkills.join(", ")}
+- Difficulty distribution: 5 Easy, 5 Medium, 5 Hard.
+- If the Candidate Claimed Competencies list is empty, default to generating these 15 questions from the Core Required Competencies instead.
 
 Return ONLY a valid JSON array without any markdown formatting, backticks, or extra text:
 [
   {
     "question": "Rigorous scenario or code snippet question text",
-    "options": ["Option A (equal length)", "Option B (equal length)", "Option C (equal length)", "Option D (equal length)"],
+    "options": ["Option A", "Option B", "Option C", "Option D"],
     "correct_answer": "Exact string of correct option",
-    "skill": "Specific skill name from JD",
-    "difficulty": "Easy" | "Medium" | "Hard"
+    "skill": "Specific skill name tested",
+    "difficulty": "Easy" | "Medium" | "Hard",
+    "section": "Core" | "Elective"
   }
 ]`;
 
-    // 1. Primary Provider: Google Gemini 1.5/2.0 Flash (Ultra-Fast 1.5s & High Token Limits)
+    // 1. Primary Provider: Google Gemini 1.5/2.0 Flash (Deterministic temperature 0.2)
     if (!generatedMcqs || generatedMcqs.length === 0) {
       const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
       if (geminiKey) {
@@ -274,7 +318,7 @@ Return ONLY a valid JSON array without any markdown formatting, backticks, or ex
           const result = await model.generateContent({
             contents: [{ role: "user", parts: [{ text: systemPrompt }] }],
             generationConfig: {
-              temperature: 0.75,
+              temperature: 0.2,
               maxOutputTokens: 6000,
               responseMimeType: "application/json",
             },
@@ -292,7 +336,7 @@ Return ONLY a valid JSON array without any markdown formatting, backticks, or ex
       }
     }
 
-    // 2. Secondary Provider: Groq Cloud (Llama-3.3 70B Versatile with Extended Token Budget)
+    // 2. Secondary Provider: Groq Cloud (Llama-3.3 70B Versatile with temperature 0.2)
     if (!generatedMcqs || generatedMcqs.length === 0) {
       const groqKey = process.env.GROQ_API_KEY;
       if (groqKey) {
@@ -305,7 +349,7 @@ Return ONLY a valid JSON array without any markdown formatting, backticks, or ex
                 { role: "system", content: "You are an expert technical interviewer that outputs raw JSON only." },
                 { role: "user", content: systemPrompt }
               ],
-              temperature: 0.75,
+              temperature: 0.2,
               max_tokens: 6000,
             },
             {
@@ -326,7 +370,7 @@ Return ONLY a valid JSON array without any markdown formatting, backticks, or ex
       }
     }
 
-    // 3. Tertiary Provider: Mistral AI (mistral-small-latest)
+    // 3. Tertiary Provider: Mistral AI (mistral-small-latest with temperature 0.2)
     if (!generatedMcqs || generatedMcqs.length === 0) {
       const mistralKey = process.env.MISTRAL_API_KEY;
       if (mistralKey) {
@@ -339,7 +383,7 @@ Return ONLY a valid JSON array without any markdown formatting, backticks, or ex
                 { role: "system", content: "You are an expert technical interviewer that outputs raw JSON only." },
                 { role: "user", content: systemPrompt }
               ],
-              temperature: 0.75,
+              temperature: 0.2,
               max_tokens: 6000,
             },
             {
@@ -360,7 +404,7 @@ Return ONLY a valid JSON array without any markdown formatting, backticks, or ex
       }
     }
 
-    // 4. Quaternary Provider: OpenRouter (Meta LLaMA / DeepSeek)
+    // 4. Quaternary Provider: OpenRouter (Meta LLaMA with temperature 0.2)
     if (!generatedMcqs || generatedMcqs.length === 0) {
       const openRouterKey = process.env.OPENROUTER_API_KEY;
       if (openRouterKey) {
@@ -373,7 +417,7 @@ Return ONLY a valid JSON array without any markdown formatting, backticks, or ex
                 { role: "system", content: "You are an expert technical interviewer that outputs raw JSON only." },
                 { role: "user", content: systemPrompt }
               ],
-              temperature: 0.75,
+              temperature: 0.2,
               max_tokens: 6000,
             },
             {
@@ -417,30 +461,33 @@ Return ONLY a valid JSON array without any markdown formatting, backticks, or ex
       }
     }
 
-    // 5. Zero-Failure Fallback: Dynamic Randomized Algorithmic Engine
+    // 5. Zero-Failure Fallback: 2-Section Core + Elective Partitioned Algorithmic Engine
     if (!generatedMcqs || !Array.isArray(generatedMcqs) || generatedMcqs.length === 0) {
-      generatedMcqs = generateDynamicAlgorithmicQuestions(effectiveSkills, jobDifficulty);
+      generatedMcqs = generateDynamicAlgorithmicQuestions(jobTargetSkills, claimedSkills, jobDifficulty);
     }
 
     // ── Save exam to DB ────────────────────────────────────────────────
     const exam = await Exam.create({
       candidateId: req.user._id,
       topic: (invitation || applicant) ? "Job Alignment Assessment" : "Dynamic Practice Exam",
-      skills: effectiveSkills,
+      skills: [...new Set([...jobTargetSkills, ...claimedSkills])],
       passingScore: 70,
       status: "In Progress",
       questions: generatedMcqs.map((q, idx) => {
         const options = Array.isArray(q.options) ? q.options : ["Option A", "Option B", "Option C", "Option D"];
         const targetAns = q.correct_answer || q.correctAnswer || options[0];
         const correctIdx = options.indexOf(targetAns);
-        const skill = q.skill || q.category || (effectiveSkills[idx % effectiveSkills.length]) || "Technical";
-        const difficulty = q.difficulty || (idx < 10 ? "Easy" : idx < 25 ? "Medium" : "Hard");
+        const isCore = idx < 20;
+        const skill = q.skill || q.category || (isCore ? (jobTargetSkills[idx % jobTargetSkills.length] || "Core") : (claimedSkills[(idx - 20) % claimedSkills.length] || "Elective"));
+        const difficulty = q.difficulty || (idx < 5 ? "Easy" : idx < 15 ? "Medium" : idx < 20 ? "Hard" : idx < 25 ? "Easy" : idx < 30 ? "Medium" : "Hard");
+        const section = q.section || (isCore ? "Core" : "Elective");
         return {
           questionText: q.question_text || q.question || "Technical Question",
           options,
           correctOption: correctIdx !== -1 ? correctIdx : 0,
           skill,
           difficulty,
+          section,
         };
       }),
     });
@@ -461,8 +508,9 @@ Return ONLY a valid JSON array without any markdown formatting, backticks, or ex
     // ── Format for frontend UI ─────────────────────────────────────────
     const frontendQuestions = exam.questions.map((q, idx) => ({
       _id: q._id,
-      category: q.skill || (effectiveSkills[idx % effectiveSkills.length]) || "Technical",
-      difficulty: q.difficulty || (idx < 10 ? "Easy" : idx < 25 ? "Medium" : "Hard"),
+      category: q.skill || (idx < 20 ? "Core Technical" : "Candidate Elective"),
+      difficulty: q.difficulty || "Medium",
+      section: q.section || (idx < 20 ? "Core" : "Elective"),
       text: q.questionText,
       options: q.options,
     }));

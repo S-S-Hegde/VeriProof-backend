@@ -6,6 +6,7 @@ const questionSchema = mongoose.Schema({
   correctOption: { type: Number, required: true }, // Index of correct option (0-3)
   skill: { type: String, default: "Technical" },
   difficulty: { type: String, default: "Medium" },
+  section: { type: String, default: "Core" }, // "Core" or "Elective"
 });
 
 const examSchema = mongoose.Schema(

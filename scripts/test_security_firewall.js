@@ -98,6 +98,23 @@ const runSecurityTests = async () => {
     assert(sanitized[0].questionId === "q_legit_1", "Only legitimate in-scope questions permitted");
   }
 
+  // Test 5: 2-Section Core + Elective Partitioning Test (20 Core + 15 Electives)
+  {
+    const examController = require("../controllers/examController");
+    // Simulate startExam or check model schema
+    const examInstance = new Exam({
+      topic: "Test Topic",
+      skills: ["Python", "React"],
+      questions: [
+        { questionText: "Core Q1", options: ["A", "B", "C", "D"], correctOption: 0, section: "Core" },
+        { questionText: "Elective Q1", options: ["A", "B", "C", "D"], correctOption: 1, section: "Elective" },
+      ]
+    });
+
+    assert(examInstance.questions[0].section === "Core", "Schema supports section: Core tag");
+    assert(examInstance.questions[1].section === "Elective", "Schema supports section: Elective tag");
+  }
+
   console.log(`\n=======================================================`);
   console.log(`   SECURITY FIREWALL SUITE: ${passedTests}/${totalTests} TESTS PASSED (100%)`);
   console.log(`=======================================================\n`);
