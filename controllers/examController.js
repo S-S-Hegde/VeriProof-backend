@@ -1,3 +1,5 @@
+const fs = require("fs");
+const path = require("path");
 const axios = require("axios");
 const Exam = require("../models/Exam");
 const User = require("../models/User");
@@ -1207,35 +1209,104 @@ const submitExam = async (req, res) => {
           }).catch((err) => console.warn("[PostExam] Candidate email error:", err.message));
         }
 
-        // Email to Recruiter
-        const recruiterId = matchedInvitation?.recruiterId;
+        // ── Email to Recruiter with Embedded Forensic Proctoring Evidence ──
+        let recruiterId = matchedInvitation?.recruiterId;
+        if (!recruiterId && job?.recruiterId) {
+          recruiterId = job.recruiterId;
+        }
+
+        const candidateViolations = [
+          ...(exam?.serverViolations || []),
+          ...(exam?.violations || [])
+        ];
+
+        // Format unique violations list with evidence URLs
+        const backendBase = (process.env.BACKEND_URL || "http://localhost:5000").replace(/\/$/, "");
+        const proctorHtml = (candidateViolations.length > 0 || effectiveViolationCount > 0)
+          ? `
+          <div style="background:#1a1013;border:1px solid #ef4444;border-radius:12px;padding:20px;margin:20px 0;">
+            <div style="color:#ef4444;font-size:16px;font-weight:800;letter-spacing:-0.5px;margin-bottom:6px;">
+              ⚠️ PROCTORING INCIDENT REPORT (${effectiveViolationCount} Security Strike${effectiveViolationCount > 1 ? "s" : ""})
+            </div>
+            <p style="color:#fca5a5;font-size:12px;margin:0 0 14px 0;">
+              Integrity Score: <strong>${calculatedIntegrityScore}%</strong> ${isSecurityDisqualified ? " &bull; <span style='color:#ef4444;font-weight:900;'>STATUS: DISQUALIFIED</span>" : ""}
+            </p>
+            <table style="width:100%;border-collapse:collapse;margin-bottom:12px;font-size:12px;">
+              <thead>
+                <tr style="background:#2a1419;color:#f87171;">
+                  <th style="padding:8px 10px;text-align:left;">Violation Type</th>
+                  <th style="padding:8px 10px;text-align:left;">Reason / Details</th>
+                  <th style="padding:8px 10px;text-align:left;">Timestamp</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${candidateViolations.map((v, i) => `
+                  <tr style="background:${i % 2 === 0 ? '#1f0d11' : '#17090c'};border-bottom:1px solid #33151b;">
+                    <td style="padding:8px 10px;color:#fca5a5;font-weight:700;">${String(v.type || "SECURITY_ALERT").toUpperCase()}</td>
+                    <td style="padding:8px 10px;color:#e2e8f0;">${v.reason || v.vlmReason || v.details || "Threshold anomaly detected"}</td>
+                    <td style="padding:8px 10px;color:#94a3b8;font-family:monospace;font-size:11px;">${v.timestamp ? new Date(v.timestamp).toLocaleTimeString() : "Session Time"}</td>
+                  </tr>
+                  ${Array.isArray(v.evidenceUrls) && v.evidenceUrls.length > 0 ? `
+                  <tr style="background:${i % 2 === 0 ? '#1f0d11' : '#17090c'};">
+                    <td colspan="3" style="padding:8px 10px;">
+                      <div style="font-size:11px;font-weight:700;color:#f87171;margin-bottom:6px;">Captured 3-Frame Burst Proof:</div>
+                      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                        ${v.evidenceUrls.map((url, frameIdx) => {
+                          const fullUrl = url.startsWith("http") ? url : `${backendBase}${url}`;
+                          const frameLabels = ["Start Frame", "Peak Violation", "End Frame"];
+                          return `
+                            <div style="display:inline-block;margin-right:8px;text-align:center;background:#0d0507;padding:6px;border-radius:6px;border:1px solid #451a20;">
+                              <a href="${fullUrl}" target="_blank" style="text-decoration:none;">
+                                <img src="${fullUrl}" alt="Proof Frame" style="width:160px;height:90px;object-fit:cover;border-radius:4px;display:block;border:1px solid #ef4444;" />
+                              </a>
+                              <span style="font-size:10px;color:#94a3b8;margin-top:4px;display:block;">${frameLabels[frameIdx] || `Frame ${frameIdx + 1}`}</span>
+                            </div>
+                          `;
+                        }).join('')}
+                      </div>
+                    </td>
+                  </tr>` : ""}
+                `).join('')}
+              </tbody>
+            </table>
+          </div>`
+          : `
+          <div style="background:#091d14;border:1px solid #10b981;border-radius:12px;padding:16px;margin:20px 0;text-align:center;">
+            <div style="color:#10b981;font-size:14px;font-weight:700;">✓ Proctoring Integrity: 100% (Clean Session)</div>
+            <div style="color:#6ee7b7;font-size:12px;margin-top:4px;">No suspicious devices, eye-gaze anomalies, or multi-person events detected.</div>
+          </div>`;
+
         if (recruiterId) {
           const recruiterUser = await User.findById(recruiterId);
           if (recruiterUser?.email) {
             const recruiterHtml = `
 <!DOCTYPE html><html><head><meta charset="UTF-8"></head>
 <body style="font-family:sans-serif;background:#0a0e1a;color:#e8ecf4;padding:40px;">
-  <div style="max-width:620px;margin:0 auto;">
+  <div style="max-width:640px;margin:0 auto;">
     <h1 style="font-size:28px;font-weight:900;font-style:italic;letter-spacing:-1px;margin-bottom:4px;">
       VERI<span style="color:#6b8aff">PROOF</span><span style="color:#6b8aff">.</span>
     </h1>
-    <p style="font-family:monospace;font-size:10px;letter-spacing:3px;text-transform:uppercase;color:#5a6478;margin-top:0;">Candidate Assessment Notification</p>
+    <p style="font-family:monospace;font-size:10px;letter-spacing:3px;text-transform:uppercase;color:#5a6478;margin-top:0;">Forensic Candidate Assessment &amp; Proctoring Audit</p>
     <hr style="border-color:#1a2040;margin:24px 0;">
     <p>Hi <strong>${recruiterUser.name || "Recruiter"}</strong>,</p>
-    <p>Candidate <strong>${user.name || req.user.email}</strong> (${req.user.email}) has just completed their technical assessment for your job role.</p>
+    <p>Candidate <strong>${user.name || req.user.email}</strong> (${req.user.email}) has completed the technical assessment for <strong>${jobTitle}</strong>.</p>
+    
     <div style="background:#0d1226;border:1px solid #6b8aff;border-radius:12px;padding:24px;margin:20px 0;text-align:center;">
       <div style="font-size:44px;font-weight:900;color:${scoreColor};">${score}%</div>
       <div style="font-size:14px;font-weight:700;color:${scoreColor};margin-top:4px;">${verdict}</div>
-      <div style="font-size:12px;color:#5a6478;margin-top:8px;">Score has been automatically synced to your Recruiter Verdicts &amp; Rankings Dashboard.</div>
+      <div style="font-size:12px;color:#5a6478;margin-top:8px;">Passing Threshold: 70% &bull; Questions: ${totalQuestions} &bull; Correct: ${correctCount}</div>
     </div>
+
+    ${proctorHtml}
+
     <hr style="border-color:#1a2040;margin:24px 0;">
-    <p style="color:#5a6478;font-size:11px;font-family:monospace;">VeriProof &mdash; Forensic Credential Intelligence</p>
+    <p style="color:#5a6478;font-size:11px;font-family:monospace;">VeriProof &mdash; Forensic Credential Intelligence &amp; Optical Proctoring Engine</p>
   </div>
 </body></html>`;
 
             sendEmail({
               email: recruiterUser.email,
-              subject: `[VeriProof Alert] Candidate ${user.name || req.user.email} completed assessment (${score}%)`,
+              subject: `[VeriProof Forensic Alert] Candidate ${user.name || req.user.email} completed assessment (${score}%) ${effectiveViolationCount > 0 ? `⚠️ ${effectiveViolationCount} Strikes` : "✓ Clean"}`,
               html: recruiterHtml,
             }).catch(err => console.warn("[PostExam] Recruiter notification email error:", err.message));
           }
@@ -1729,11 +1800,107 @@ const recordProctorViolation = async (req, res) => {
   }
 };
 
+// @desc    Record 3-frame burst snapshot evidence & persist image files
+// @route   POST /api/exams/record-violation-snapshot
+// @access  Public / Private
+const recordViolationSnapshot = async (req, res) => {
+  try {
+    const {
+      type = "SECURITY_VIOLATION",
+      details = "Proctoring anomaly detected",
+      vlm_reason = "",
+      confidence = 0.95,
+      timestamp = new Date(),
+      burstFrames = [],
+      examId,
+    } = req.body;
+
+    let candidateId = req.user?._id;
+
+    // Find active exam
+    let activeExam = null;
+    if (examId) {
+      activeExam = await Exam.findById(examId);
+    } else if (candidateId) {
+      activeExam = await Exam.findOne({ candidateId, status: "In Progress" }).sort({ createdAt: -1 });
+    } else {
+      activeExam = await Exam.findOne({ status: "In Progress" }).sort({ createdAt: -1 });
+    }
+
+    if (!activeExam) {
+      return res.status(404).json({ success: false, message: "No active exam session found." });
+    }
+
+    // Save burst frames to static uploads directory
+    const evidenceUrls = [];
+    const violationsDir = path.join(__dirname, "../uploads", "violations");
+    if (!fs.existsSync(violationsDir)) {
+      fs.mkdirSync(violationsDir, { recursive: true });
+    }
+
+    const timeKey = Date.now();
+    const cleanType = String(type).replace(/[^a-zA-Z0-9_-]/g, "_").toLowerCase();
+
+    if (Array.isArray(burstFrames) && burstFrames.length > 0) {
+      for (const item of burstFrames) {
+        const tag = item.tag || "frame";
+        let base64Data = item.base64 || "";
+        if (base64Data.startsWith("data:image")) {
+          base64Data = base64Data.split(",")[1] || "";
+        }
+        if (base64Data) {
+          const filename = `violation_${activeExam._id}_${timeKey}_${cleanType}_${tag}.jpg`;
+          const filePath = path.join(violationsDir, filename);
+          const buffer = Buffer.from(base64Data, "base64");
+          fs.writeFileSync(filePath, buffer);
+          evidenceUrls.push(`/uploads/violations/${filename}`);
+        }
+      }
+    }
+
+    activeExam.serverViolationCount = (activeExam.serverViolationCount || 0) + 1;
+    if (!Array.isArray(activeExam.serverViolations)) activeExam.serverViolations = [];
+    if (!Array.isArray(activeExam.violations)) activeExam.violations = [];
+
+    const violationObj = {
+      type,
+      reason: details || vlm_reason || "Proctoring violation detected",
+      vlmReason: vlm_reason,
+      confidence,
+      evidenceUrls,
+      timestamp: timestamp ? new Date(timestamp) : new Date(),
+    };
+
+    activeExam.serverViolations.push(violationObj);
+    activeExam.violations.push(violationObj);
+    activeExam.integrityScore = Math.max(0, 100 - (activeExam.serverViolationCount * 25));
+
+    if (activeExam.serverViolationCount >= 3) {
+      activeExam.isTerminated = true;
+      activeExam.status = "Terminated";
+    }
+
+    await activeExam.save();
+
+    return res.json({
+      success: true,
+      serverViolationCount: activeExam.serverViolationCount,
+      integrityScore: activeExam.integrityScore,
+      isTerminated: activeExam.isTerminated,
+      evidenceUrls,
+    });
+  } catch (err) {
+    console.error("[RecordViolationSnapshot Error]", err.message);
+    res.status(500).json({ success: false, message: "Failed to record burst snapshot violation." });
+  }
+};
+
 module.exports = {
   startExam,
   submitExam,
   getExamHistory,
   analyzeProctorSnapshot,
   recordProctorViolation,
+  recordViolationSnapshot,
 };
 

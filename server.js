@@ -104,8 +104,12 @@ app.use("/api", generalLimiter);
 const path = require("path");
 const fs = require("fs");
 const uploadDir = path.join(__dirname, "uploads", "recruiter-resumes");
+const violationsDir = path.join(__dirname, "uploads", "violations");
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
+}
+if (!fs.existsSync(violationsDir)) {
+  fs.mkdirSync(violationsDir, { recursive: true });
 }
 
 // Serve uploaded files statically with open CORS
