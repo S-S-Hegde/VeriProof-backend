@@ -468,6 +468,33 @@ Return ONLY a valid JSON array without any markdown formatting, backticks, or ex
       generatedMcqs = generateDynamicAlgorithmicQuestions(jobTargetSkills, claimedSkills, jobDifficulty);
     }
 
+    // ── STRICT HARD FLOOR: Enforce Exactly 35 Questions (20 Core Baseline + 15 Candidate Electives) ──
+    let coreQs = generatedMcqs.filter(q => q.section === "Core");
+    let electiveQs = generatedMcqs.filter(q => q.section === "Elective");
+
+    // If LLM returned raw array without section tags, partition by positional index
+    if (coreQs.length === 0 && electiveQs.length === 0) {
+      coreQs = generatedMcqs.slice(0, 20).map(q => ({ ...q, section: "Core" }));
+      electiveQs = generatedMcqs.slice(20, 35).map(q => ({ ...q, section: "Elective" }));
+    }
+
+    // If either section has a shortfall, backfill from algorithmic generator
+    const algorithmicBackup = generateDynamicAlgorithmicQuestions(jobTargetSkills, claimedSkills, jobDifficulty);
+    if (coreQs.length < 20) {
+      const backupCore = algorithmicBackup.filter(q => q.section === "Core");
+      coreQs.push(...backupCore.slice(0, 20 - coreQs.length));
+    }
+    if (electiveQs.length < 15) {
+      const backupElective = algorithmicBackup.filter(q => q.section === "Elective");
+      electiveQs.push(...backupElective.slice(0, 15 - electiveQs.length));
+    }
+
+    // Strictly limit to 20 Core + 15 Electives (Total: Exactly 35 Questions)
+    const final35Questions = [
+      ...coreQs.slice(0, 20),
+      ...electiveQs.slice(0, 15)
+    ];
+
     // ── Save exam to DB ────────────────────────────────────────────────
     const exam = await Exam.create({
       candidateId: req.user._id,
@@ -475,7 +502,7 @@ Return ONLY a valid JSON array without any markdown formatting, backticks, or ex
       skills: [...new Set([...jobTargetSkills, ...claimedSkills])],
       passingScore: 70,
       status: "In Progress",
-      questions: generatedMcqs.map((q, idx) => {
+      questions: final35Questions.map((q, idx) => {
         const options = Array.isArray(q.options) ? q.options : ["Option A", "Option B", "Option C", "Option D"];
         const targetAns = q.correct_answer || q.correctAnswer || options[0];
         const correctIdx = options.indexOf(targetAns);
