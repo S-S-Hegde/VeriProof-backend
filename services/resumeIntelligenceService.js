@@ -221,7 +221,7 @@ const analyzeResumeBuffer = async (buffer, options = {}) => {
     });
 
     const aiResult = await aiEngineClient.post("/api/extract-claims-pdf", formData, {
-      timeout: options.timeout || 2500,
+      timeout: options.timeout || 8000,
       headers: {
         "x-internal-api-key": process.env.INTERNAL_API_KEY || "veriproof-dev-secret",
         ...formData.getHeaders(),

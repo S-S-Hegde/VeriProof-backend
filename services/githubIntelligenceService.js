@@ -120,12 +120,27 @@ const fetchRepoDetails = async (owner, repoName, defaultBranch = "main") => {
 };
 
 // ── Call Python /api/verify-github ───────────────────────────────────────────
-const callRepoIntelligence = async (githubUsername, claims) => {
+const callRepoIntelligence = async (githubUsername, claims, repoDetails = null, repo = null) => {
   try {
-    const result = await aiEngineClient.post("/api/verify-github", {
+    const payload = {
       github_username: githubUsername,
       claims: claims || [],
-    });
+    };
+    if (repoDetails) {
+      payload.tree_paths = repoDetails.treePaths || [];
+      payload.commits = (repoDetails.commitList || []).slice(0, 15);
+    }
+    if (repo) {
+      payload.repo_data = {
+        name: repo.name,
+        language: repo.language || "JavaScript",
+        fork: repo.fork || false,
+        stargazers_count: repo.stargazers_count || 0,
+        forks_count: repo.forks_count || 0,
+      };
+    }
+
+    const result = await aiEngineClient.post("/api/verify-github", payload, { timeout: 15000 });
     return result.data?.result || {};
   } catch (err) {
     console.warn(`[GitHub Intelligence] /api/verify-github failed: ${err.message}`);
@@ -136,7 +151,7 @@ const callRepoIntelligence = async (githubUsername, claims) => {
 // ── Call Python /api/generate-repo-docs ──────────────────────────────────────
 const callDocGenerator = async (payload) => {
   try {
-    const result = await aiEngineClient.post("/api/generate-repo-docs", payload);
+    const result = await aiEngineClient.post("/api/generate-repo-docs", payload, { timeout: 15000 });
     return result.data?.result || {};
   } catch (err) {
     console.warn(`[GitHub Intelligence] /api/generate-repo-docs failed: ${err.message}`);
@@ -261,24 +276,20 @@ const runGitHubAnalysis = async (userId) => {
       source_quote: s.sourceQuote || "",
     }));
 
-    // ── 3. Process each repo ──────────────────────────────────────────────
+    // ── 3. Process all top repos concurrently in parallel ────────────────
     let reposProcessed = 0;
 
-    for (const repo of topRepos) {
+    const processSingleRepo = async (repo) => {
       try {
         const owner         = repo.owner?.login || username;
         const repoName      = repo.name;
         const defaultBranch = repo.default_branch || "main";
 
-        console.log(`[GitHub Intelligence] Processing repo: ${repoName}`);
+        console.log(`[GitHub Intelligence] Processing repo in parallel: ${repoName}`);
 
-        // Fetch tree, commits, README, languages
+        // Fetch tree, commits, README, languages concurrently
         const repoDetails = await fetchRepoDetails(owner, repoName, defaultBranch);
 
-        // Call existing Repository Intelligence Engine
-        const repoIntelligence = await callRepoIntelligence(username, claimsForEngine);
-
-        // Call new Documentation Generator
         const docPayload = {
           repo_name:        repoName,
           github_username:  username,
@@ -296,7 +307,11 @@ const runGitHubAnalysis = async (userId) => {
           forks:            repo.forks_count || 0,
         };
 
-        const docResult = await callDocGenerator(docPayload);
+        // Run Repository Intelligence & Documentation Generator concurrently in parallel
+        const [repoIntelligence, docResult] = await Promise.all([
+          callRepoIntelligence(username, claimsForEngine, repoDetails, repo),
+          callDocGenerator(docPayload),
+        ]);
 
         // Upsert Project document
         const project = await upsertProject(userId, repo, repoDetails, repoIntelligence, docResult);
@@ -326,9 +341,10 @@ const runGitHubAnalysis = async (userId) => {
         console.log(`[GitHub Intelligence] Completed repo ${reposProcessed}/${topRepos.length}: ${repoName}`);
       } catch (repoErr) {
         console.error(`[GitHub Intelligence] Error processing repo ${repo.name}:`, repoErr.message);
-        // Continue to next repo — don't abort entire pipeline
       }
-    }
+    };
+
+    await Promise.allSettled(topRepos.map((repo) => processSingleRepo(repo)));
 
     setStatus(userId, { status: "complete", reposProcessed });
     console.log(`[GitHub Intelligence] Pipeline complete for @${username}: ${reposProcessed}/${topRepos.length} repos processed.`);
