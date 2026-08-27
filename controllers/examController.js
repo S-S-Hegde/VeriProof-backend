@@ -1478,12 +1478,13 @@ const getExamHistory = async (req, res) => {
 // @access  Private
 const analyzeProctorSnapshot = async (req, res) => {
   try {
-    const { imageBase64, clientMetrics } = req.body;
-    if (!imageBase64) {
+    const rawImage = req.body.imageBase64 || req.body.image;
+    const clientMetrics = req.body.clientMetrics;
+    if (!rawImage) {
       return res.status(400).json({ message: "No image frame provided for proctoring analysis." });
     }
 
-    const cleanBase64 = imageBase64.replace(/^data:image\/[a-z]+;base64,/, "").trim();
+    const cleanBase64 = rawImage.replace(/^data:image\/[a-z]+;base64,/, "").trim();
     const dataUri = `data:image/jpeg;base64,${cleanBase64}`;
 
     // Fast-path client metric evaluation (Shutter / black screen)
@@ -1510,13 +1511,35 @@ VIOLATION TYPES TO CHECK:
 OUTPUT FORMAT:
 Respond with ONLY raw JSON (no backticks, no markdown):
 {
-  "violation": true/false,
-  "violationType": "NONE" | "SHUTTER_COVERED" | "STATIC_PHOTO" | "NO_FACE" | "MULTIPLE_FACES" | "PHONE_SUSPICIOUS",
-  "reason": "Clear 1-sentence finding",
-  "confidence": 0.95
+  "violation": false,
+  "violationType": "NONE",
+  "reason": "Single authenticated candidate visible and focused on screen.",
+  "confidence": 0.98
 }`;
 
     let proctorResult = null;
+
+    // 0. High-Speed Gemini 2.0 Flash Vision
+    if (process.env.GEMINI_API_KEY) {
+      try {
+        const { GoogleGenerativeAI } = require("@google/generative-ai");
+        const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+        const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash", generationConfig: { responseMimeType: "application/json", temperature: 0.1 } });
+        
+        const geminiRes = await model.generateContent([
+          { text: proctorPrompt },
+          { inlineData: { data: cleanBase64, mimeType: "image/jpeg" } }
+        ]);
+
+        const raw = (geminiRes.response.text() || "").replace(/```json|```/g, "").trim();
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed.violation === "boolean") {
+          proctorResult = { ...parsed, provider: "Gemini_Vision" };
+        }
+      } catch (geminiErr) {
+        console.warn("[ProctorAI] Gemini Vision failover note:", geminiErr.message);
+      }
+    }
 
     // 1. Primary Vision Provider Pool: NVIDIA NIM Vision (meta/llama-3.2-11b-vision-instruct)
     const nvidiaKeyPool = [
