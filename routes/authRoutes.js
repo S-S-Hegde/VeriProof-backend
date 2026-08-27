@@ -240,6 +240,7 @@ router.post(
       // Trigger async resume parsing and intelligence pipeline (non-blocking)
       const { runAnalysis } = require("../services/resumeIntelligenceService");
       runAnalysis(user._id, fileUrl, {
+        buffer: req.file.buffer,
         originalFileName: req.file.originalname,
         mimeType: req.file.mimetype,
       }).catch((err) => {

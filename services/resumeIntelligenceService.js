@@ -221,7 +221,7 @@ const analyzeResumeBuffer = async (buffer, options = {}) => {
     });
 
     const aiResult = await aiEngineClient.post("/api/extract-claims-pdf", formData, {
-      timeout: options.timeout || 8000,
+      timeout: options.timeout || 4000,
       headers: {
         "x-internal-api-key": process.env.INTERNAL_API_KEY || "veriproof-dev-secret",
         ...formData.getHeaders(),
@@ -273,27 +273,33 @@ const setProgress = async (userId, status, progress, stage) => {
 const runAnalysis = async (userId, fileUrl, options = {}) => {
   try {
     // ── Stage 1: Parsing PDF ────────────────────────────────────────────────
-    await setProgress(userId, "Parsing", 15, "Parsing PDF document...");
+    await setProgress(userId, "Parsing", 25, "Parsing PDF document...");
 
-    let buffer;
-    if (fileUrl.startsWith("http")) {
-      const response = await axios.get(fileUrl, { responseType: "arraybuffer", timeout: 15000 });
-      buffer = Buffer.from(response.data);
-    } else {
-      const fs = require("fs");
-      const path = require("path");
-      const relativeUrl = fileUrl.startsWith('/') ? fileUrl.slice(1) : fileUrl;
-      const fullPath = path.isAbsolute(fileUrl) ? fileUrl : path.join(__dirname, "..", relativeUrl);
-      buffer = fs.readFileSync(fullPath);
+    let buffer = options.buffer;
+    if (!buffer) {
+      if (fileUrl && fileUrl.startsWith("http")) {
+        const response = await axios.get(fileUrl, { responseType: "arraybuffer", timeout: 10000 });
+        buffer = Buffer.from(response.data);
+      } else if (fileUrl) {
+        const fs = require("fs");
+        const path = require("path");
+        const relativeUrl = fileUrl.startsWith('/') ? fileUrl.slice(1) : fileUrl;
+        const fullPath = path.isAbsolute(fileUrl) ? fileUrl : path.join(__dirname, "..", relativeUrl);
+        buffer = fs.readFileSync(fullPath);
+      }
+    }
+
+    if (!buffer) {
+      throw new Error("No resume file buffer available for analysis");
     }
 
     // ── Stage 2: Extracting Claims ──────────────────────────────────────────
-    await setProgress(userId, "Extracting Information", 35, "Running AI claim extraction...");
+    await setProgress(userId, "Extracting Information", 55, "Running AI claim extraction...");
 
     const result = await analyzeResumeBuffer(buffer, options);
 
     // ── Stage 3: Resume Verification ───────────────────────────────────────
-    await setProgress(userId, "Parsing", 60, "Verifying extracted claims...");
+    await setProgress(userId, "Parsing", 80, "Verifying extracted claims...");
 
     // Map full claim objects into the ResumeAnalysis schema
     // Python returns: { claim_id, skill, context, source_quote }
