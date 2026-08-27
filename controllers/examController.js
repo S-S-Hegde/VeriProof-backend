@@ -220,7 +220,7 @@ const startExam = async (req, res) => {
     let jobTitle = "Senior Full Stack Software Engineer";
     let jobDescription = "Design, develop, and test scalable web applications and APIs.";
 
-    const jobId = invitation?.jobId || applicant?.jobId || null;
+    const jobId = req.query.jobId || req.body.jobId || invitation?.jobId || applicant?.jobId || null;
     if (jobId) {
       const job = await Job.findById(jobId);
       if (job) {
@@ -265,9 +265,9 @@ const startExam = async (req, res) => {
       }
     }
 
-    // ── Resolve question count (Custom selectable count for self-registered candidates) ──
-    let targetQuestionCount = 35;
-    const allowedCounts = [10, 20, 35, 50];
+    // ── Resolve question count (Default to standard 20 questions: 65% JD / 35% Resume) ──
+    let targetQuestionCount = 20;
+    const allowedCounts = [10, 20, 30, 35, 50];
     if (!isInvitedCandidate && req.query.count) {
       const parsedCount = parseInt(req.query.count, 10);
       if (allowedCounts.includes(parsedCount)) {
@@ -275,8 +275,9 @@ const startExam = async (req, res) => {
       }
     }
 
-    const coreQuota = Math.max(1, Math.round(targetQuestionCount * 0.6));
-    const electiveQuota = Math.max(1, targetQuestionCount - coreQuota);
+    // Exactly 65% from the Job Description & 35% from the Candidate's Resume Skills
+    const coreQuota = Math.max(1, Math.round(targetQuestionCount * 0.65)); // 13 questions
+    const electiveQuota = Math.max(1, targetQuestionCount - coreQuota);    // 7 questions
 
     if (jobTargetSkills.length === 0) {
       jobTargetSkills = isInvitedCandidate
@@ -288,54 +289,52 @@ const startExam = async (req, res) => {
 
     const formattedClaims = [...new Set([...jobTargetSkills, ...claimedSkills])].map((skill) => ({
       skill,
-      context: (invitation || applicant) ? `Job Alignment Assessment (${jobTitle})` : "Practice Assessment",
+      context: (invitation || applicant || jobId) ? `Job Alignment Assessment (${jobTitle})` : "Practice Assessment",
     }));
 
     // ── Multi-Provider AI Question Generation Engine ───────────────────
     let generatedMcqs = [];
     const sessionSalt = `${Date.now()}_${Math.floor(Math.random() * 1000000)}`;
 
-    const systemPrompt = `You are a Principal Staff Engineer, IIT/NPTEL Examination Chair, and Senior Technical Evaluator designing an elite, rigorous proctored technical assessment for the role: "${jobTitle}".
+    const coreEasy = Math.max(1, Math.round(coreQuota * 0.40));
+    const coreMed = coreQuota - coreEasy;
+    const electiveEasy = Math.max(1, Math.round(electiveQuota * 0.45));
+    const electiveMed = electiveQuota - electiveEasy;
+
+    const systemPrompt = `You are a Senior Technical Examiner and Assessment Architect designing a balanced, practical technical assessment for the role: "${jobTitle}".
 Session Randomization Seed: ${sessionSalt}
 
 ── JOB CONTEXT & TECHNICAL STACK ──
 Job Description: "${jobDescription || "Design, develop, scale, and maintain high-performance software systems and APIs."}"
-Core Required Competencies (Baseline): ${jobTargetSkills.join(", ")}
-Candidate Claimed Competencies (Electives): ${claimedSkills.join(", ")}
-Target Seniority Level: "${jobDifficulty}"
+Core Required Competencies (from Job Description - 65% weight): ${jobTargetSkills.join(", ")}
+Candidate Claimed Competencies (from Candidate Resume - 35% weight): ${claimedSkills.join(", ")}
+Difficulty Calibration: Focus on practical, real-world Easy and Medium questions (conceptual clarity, syntax, debugging, and standard architectures) without overly complex or impossible trick questions.
 
 ── ABSOLUTE REQUIREMENT: ZERO OPTION LENGTH BIAS (EQUAL OPTION LENGTHS) ──
 1. STRICT EQUAL LENGTH: All 4 options (A, B, C, D) for EVERY question MUST have virtually IDENTICAL word counts (within 1 to 2 words of each other).
 2. NEVER make the correct answer longer, more nuanced, or more detailed than distractor options.
 3. Every incorrect option must be an intelligent, realistic developer pitfall of equal length and depth.
 
-── QUESTION ARCHITECTURE & NPTEL/LEETCODE STYLES ──
-Adopt the analytical rigor of LeetCode / HackerRank / NPTEL examination problems:
-• STYLE A: "Code Output & Execution Trace"
-• STYLE B: "Multi-Statement Evaluation (NPTEL Style)"
-• STYLE C: "Time/Space Complexity & Algorithmic Trade-offs"
-• STYLE D: "High-Concurrency & Distributed Architecture"
-
-── ASSESSMENT STRUCTURE (${targetQuestionCount} QUESTIONS TOTAL) ──
+── ASSESSMENT STRUCTURE (EXACTLY ${targetQuestionCount} QUESTIONS TOTAL) ──
 You must strictly partition the ${targetQuestionCount} questions into two distinct sections:
 
-SECTION 1: CORE BASELINE (${coreQuota} Questions)
-- Generate exactly ${coreQuota} questions using ONLY the Core Required Competencies: ${jobTargetSkills.join(", ")}
-- Difficulty distribution: ${Math.max(1, Math.round(coreQuota * 0.25))} Easy, ${Math.max(1, coreQuota - 2 * Math.max(1, Math.round(coreQuota * 0.25)))} Medium, ${Math.max(1, Math.round(coreQuota * 0.25))} Hard.
+SECTION 1: CORE JOB DESCRIPTION COMPETENCIES (EXACTLY ${coreQuota} Questions — 65%)
+- Generate exactly ${coreQuota} questions covering ONLY the Job Description competencies: ${jobTargetSkills.join(", ")}
+- Difficulty breakdown: ${coreEasy} Easy, ${coreMed} Medium.
 
-SECTION 2: CANDIDATE ELECTIVES (${electiveQuota} Questions)
-- Generate exactly ${electiveQuota} questions using ONLY the Candidate Claimed Competencies: ${claimedSkills.join(", ")}
-- Difficulty distribution: ${Math.max(1, Math.round(electiveQuota * 0.33))} Easy, ${Math.max(1, electiveQuota - 2 * Math.max(1, Math.round(electiveQuota * 0.33)))} Medium, ${Math.max(1, Math.round(electiveQuota * 0.33))} Hard.
-- If the Candidate Claimed Competencies list is empty, default to generating these ${electiveQuota} questions from the Core Required Competencies instead.
+SECTION 2: CANDIDATE RESUME SKILLS (EXACTLY ${electiveQuota} Questions — 35%)
+- Generate exactly ${electiveQuota} questions covering ONLY the Candidate's Resume skills: ${claimedSkills.join(", ")}
+- Difficulty breakdown: ${electiveEasy} Easy, ${electiveMed} Medium.
+- If the Candidate Resume skills list is empty, generate from the Job Description competencies instead.
 
 Return ONLY a valid JSON array without any markdown formatting, backticks, or extra text:
 [
   {
-    "question": "Rigorous scenario or code snippet question text",
+    "question": "Clear scenario or code snippet question text",
     "options": ["Option A", "Option B", "Option C", "Option D"],
     "correct_answer": "Exact string of correct option",
     "skill": "Specific skill name tested",
-    "difficulty": "Easy" | "Medium" | "Hard",
+    "difficulty": "Easy" | "Medium",
     "section": "Core" | "Elective"
   }
 ]`;
@@ -529,7 +528,10 @@ Return ONLY a valid JSON array without any markdown formatting, backticks, or ex
     // ── Save exam to DB ────────────────────────────────────────────────
     const exam = await Exam.create({
       candidateId: req.user._id,
-      topic: (invitation || applicant) ? "Job Alignment Assessment" : "Dynamic Practice Exam",
+      jobId,
+      jobTitle,
+      recruiterId: job?.recruiterId || invitation?.recruiterId || applicant?.recruiterId || null,
+      topic: jobTitle || ((invitation || applicant) ? "Job Alignment Assessment" : "Dynamic Practice Exam"),
       skills: [...new Set([...jobTargetSkills, ...claimedSkills])],
       passingScore: 70,
       status: "In Progress",
@@ -539,7 +541,7 @@ Return ONLY a valid JSON array without any markdown formatting, backticks, or ex
         const correctIdx = options.indexOf(targetAns);
         const isCore = idx < coreQuota;
         const skill = q.skill || q.category || (isCore ? (jobTargetSkills[idx % jobTargetSkills.length] || "Core") : (claimedSkills[(idx - coreQuota) % claimedSkills.length] || "Elective"));
-        const difficulty = q.difficulty || (idx < Math.round(targetQuestionCount * 0.3) ? "Easy" : idx < Math.round(targetQuestionCount * 0.7) ? "Medium" : "Hard");
+        const difficulty = q.difficulty || (idx < Math.round(targetQuestionCount * 0.4) ? "Easy" : "Medium");
         const section = q.section || (isCore ? "Core" : "Elective");
         return {
           questionText: q.question_text || q.question || "Technical Question",
@@ -552,18 +554,19 @@ Return ONLY a valid JSON array without any markdown formatting, backticks, or ex
       }),
     });
 
-    // Mark exam status as In Progress for this candidate on recruiter workspace
-    await RecruiterApplicant.updateMany(
-      {
-        $or: [
-          { candidateUser: req.user._id },
-          { extractedEmail: req.user.email },
-          { extractedEmail: new RegExp(`^${req.user.email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") },
-          ...(req.user.githubUsername ? [{ githubUsername: req.user.githubUsername }] : [])
-        ]
-      },
-      { examStatus: "In Progress" }
-    );
+    // Mark exam status as In Progress for this specific job role
+    const applicantQuery = {
+      $or: [
+        { candidateUser: req.user._id },
+        { extractedEmail: req.user.email },
+        { extractedEmail: new RegExp(`^${req.user.email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") },
+        ...(req.user.githubUsername ? [{ githubUsername: req.user.githubUsername }] : [])
+      ]
+    };
+    if (jobId) {
+      applicantQuery.jobId = jobId;
+    }
+    await RecruiterApplicant.updateMany(applicantQuery, { examStatus: "In Progress" });
 
     // ── Format for frontend UI ─────────────────────────────────────────
     const frontendQuestions = exam.questions.map((q, idx) => ({
@@ -1118,12 +1121,20 @@ const submitExam = async (req, res) => {
         ...(req.user.githubUsername ? [{ githubUsername: req.user.githubUsername }] : [])
       ]
     });
-    const jobId = matchedInvitation?.jobId || null;
+    // Resolve specific job context for this exam session
+    const targetJobId = exam?.jobId || req.body.jobId || matchedInvitation?.jobId || null;
+    const Job = require("../models/Job");
+    const job = targetJobId ? await Job.findById(targetJobId) : null;
+    const jobTitle = job?.title || exam?.jobTitle || exam?.topic || "Technical Assessment";
 
     let vResult = await VerificationResult.findOne({
       candidateId: req.user._id,
-      ...(jobId ? { jobId } : {}),
-    }).sort({ createdAt: -1 }) || await VerificationResult.findOne({ candidateId: req.user._id }).sort({ createdAt: -1 });
+      ...(targetJobId ? { jobId: targetJobId } : {}),
+    }).sort({ createdAt: -1 });
+
+    if (!vResult && !targetJobId) {
+      vResult = await VerificationResult.findOne({ candidateId: req.user._id }).sort({ createdAt: -1 });
+    }
 
     const alignScore = vResult?.alignmentScore || 85;
     const compositeTrustScore = Math.min(100, Math.max(0, Math.round((alignScore * 0.4) + (score * 0.4) + 20)));
@@ -1134,12 +1145,12 @@ const submitExam = async (req, res) => {
         vResult.trustScore = compositeTrustScore;
         vResult.status = isPassed ? "Verified" : "Failed";
         if (!vResult.alignmentScore) vResult.alignmentScore = alignScore;
-        if (jobId && !vResult.jobId) vResult.jobId = jobId;
+        if (targetJobId && !vResult.jobId) vResult.jobId = targetJobId;
         await vResult.save();
       } else {
         vResult = await VerificationResult.create({
           candidateId: req.user._id,
-          jobId,
+          jobId: targetJobId,
           examScore: score,
           alignmentScore: alignScore,
           trustScore: compositeTrustScore,
@@ -1169,26 +1180,29 @@ const submitExam = async (req, res) => {
       await user.save();
     }
 
-    // Only update recruiter pipeline on FIRST official attempt
-    if (isFirstOfficialAttempt) {
-      await RecruiterApplicant.updateMany(
-        {
-          $or: [
-            { candidateUser: req.user._id },
-            { extractedEmail: req.user.email },
-            { extractedEmail: new RegExp(`^${req.user.email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") },
-            ...(req.user.githubUsername ? [{ githubUsername: req.user.githubUsername }] : [])
-          ]
-        },
-        {
-          status: "Completed",
-          candidateUser: req.user._id,
-          examScore: score,
-          examStatus: "Attended",
-          reasoning: `Assessment completed. Score: ${score}%. Verification Verdict: ${isPassed ? 'VERIFIED' : 'NEEDS IMPROVEMENT'}. Composite Trust Score: ${compositeTrustScore}%.`
-        }
-      );
+    // Update recruiter pipeline specifically for the target job role
+    const applicantUpdateQuery = {
+      $or: [
+        { candidateUser: req.user._id },
+        { extractedEmail: req.user.email },
+        { extractedEmail: new RegExp(`^${req.user.email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") },
+        ...(req.user.githubUsername ? [{ githubUsername: req.user.githubUsername }] : [])
+      ]
+    };
+    if (targetJobId) {
+      applicantUpdateQuery.jobId = targetJobId;
     }
+
+    await RecruiterApplicant.updateMany(
+      applicantUpdateQuery,
+      {
+        status: "Completed",
+        candidateUser: req.user._id,
+        examScore: score,
+        examStatus: "Attended",
+        reasoning: `Assessment completed for ${jobTitle}. Score: ${score}%. Verification Verdict: ${isPassed ? 'VERIFIED' : 'NEEDS IMPROVEMENT'}. Composite Trust Score: ${compositeTrustScore}%.`
+      }
+    );
 
     // ── Build failed questions analysis ─────────────────────────────────
     const failedQuestions = [];
@@ -1209,34 +1223,33 @@ const submitExam = async (req, res) => {
       });
     }
 
-    // Send emails if this was their first official attempt
-    if (isFirstOfficialAttempt) {
-      try {
-        const scoreColor = isPassed ? "#34d399" : "#f87171";
-        const verdict = isPassed ? "PASSED \u2705" : "NEEDS IMPROVEMENT \u274c";
+    // Send emails on exam completion
+    try {
+      const scoreColor = isPassed ? "#34d399" : "#f87171";
+      const verdict = isPassed ? "PASSED \u2705" : "NEEDS IMPROVEMENT \u274c";
 
-        const failedHtml = failedQuestions.length > 0
-          ? `<table style="width:100%;border-collapse:collapse;margin-top:12px;font-size:12px;">
-              <thead><tr style="background:#1a2040;">
-                <th style="padding:8px 10px;text-align:left;color:#94a0b8;">Skill</th>
-                <th style="padding:8px 10px;text-align:left;color:#94a0b8;">Question</th>
-                <th style="padding:8px 10px;text-align:left;color:#f87171;">Your Answer</th>
-                <th style="padding:8px 10px;text-align:left;color:#34d399;">Correct Answer</th>
-              </tr></thead>
-              <tbody>${failedQuestions.map((fq, i) => `
-                <tr style="background:${i % 2 === 0 ? '#0d1226' : '#0a0e1a'};">
-                  <td style="padding:8px 10px;color:#6b8aff;font-weight:600;">${fq.skill}</td>
-                  <td style="padding:8px 10px;color:#c8d0e4;">${fq.question}</td>
-                  <td style="padding:8px 10px;color:#f87171;">${fq.yourAnswer}</td>
-                  <td style="padding:8px 10px;color:#34d399;">${fq.correctAnswer}</td>
-                </tr>`).join('')}
-              </tbody>
-            </table>`
-          : `<p style="color:#34d399;font-weight:600;">Perfect score — no incorrect answers!</p>`;
+      const failedHtml = failedQuestions.length > 0
+        ? `<table style="width:100%;border-collapse:collapse;margin-top:12px;font-size:12px;">
+            <thead><tr style="background:#1a2040;">
+              <th style="padding:8px 10px;text-align:left;color:#94a0b8;">Skill</th>
+              <th style="padding:8px 10px;text-align:left;color:#94a0b8;">Question</th>
+              <th style="padding:8px 10px;text-align:left;color:#f87171;">Your Answer</th>
+              <th style="padding:8px 10px;text-align:left;color:#34d399;">Correct Answer</th>
+            </tr></thead>
+            <tbody>${failedQuestions.map((fq, i) => `
+              <tr style="background:${i % 2 === 0 ? '#0d1226' : '#0a0e1a'};">
+                <td style="padding:8px 10px;color:#6b8aff;font-weight:600;">${fq.skill}</td>
+                <td style="padding:8px 10px;color:#c8d0e4;">${fq.question}</td>
+                <td style="padding:8px 10px;color:#f87171;">${fq.yourAnswer}</td>
+                <td style="padding:8px 10px;color:#34d399;">${fq.correctAnswer}</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>`
+        : `<p style="color:#34d399;font-weight:600;">Perfect score — no incorrect answers!</p>`;
 
-        // Email to Candidate
-        if (user?.email) {
-          const candidateHtml = `
+      // Email to Candidate
+      if (user?.email) {
+        const candidateHtml = `
 <!DOCTYPE html><html><head><meta charset="UTF-8"></head>
 <body style="font-family:sans-serif;background:#0a0e1a;color:#e8ecf4;padding:40px;">
   <div style="max-width:620px;margin:0 auto;">
@@ -1246,7 +1259,7 @@ const submitExam = async (req, res) => {
     <p style="font-family:monospace;font-size:10px;letter-spacing:3px;text-transform:uppercase;color:#5a6478;margin-top:0;">Forensic Credential Intelligence</p>
     <hr style="border-color:#1a2040;margin:24px 0;">
     <p>Hi <strong>${user.name || "Candidate"}</strong>,</p>
-    <p>You have completed your technical assessment. Here are your official results:</p>
+    <p>You have completed your assessment for <strong>${jobTitle}</strong>. Here are your official results:</p>
     <div style="background:#0d1226;border:1px solid #1a2040;border-radius:12px;padding:24px;margin:20px 0;text-align:center;">
       <div style="font-size:48px;font-weight:900;color:${scoreColor};">${score}%</div>
       <div style="font-size:14px;font-weight:700;color:${scoreColor};margin-top:4px;">${verdict}</div>
@@ -1260,84 +1273,60 @@ const submitExam = async (req, res) => {
   </div>
 </body></html>`;
 
-          sendEmail({
-            email: user.email,
-            subject: `[VeriProof] Your Assessment Results: ${score}% — ${verdict}`,
-            html: candidateHtml,
-          }).catch((err) => console.warn("[PostExam] Candidate email error:", err.message));
-        }
+        sendEmail({
+          email: user.email,
+          subject: `[VeriProof] Your Assessment Results for ${jobTitle}: ${score}% — ${verdict}`,
+          html: candidateHtml,
+        }).catch((err) => console.warn("[PostExam] Candidate email error:", err.message));
+      }
 
-        // ── Email to Recruiter with Embedded Forensic Proctoring Evidence ──
-        let recruiterId = matchedInvitation?.recruiterId;
-        if (!recruiterId && job?.recruiterId) {
-          recruiterId = job.recruiterId;
-        }
+      // ── Email to Recruiter with Embedded Forensic Proctoring Evidence ──
+      let recruiterId = job?.recruiterId || exam?.recruiterId || matchedInvitation?.recruiterId || null;
 
-        const candidateViolations = [
-          ...(exam?.serverViolations || []),
-          ...(exam?.violations || [])
-        ];
+      const candidateViolations = [
+        ...(exam?.serverViolations || []),
+        ...(exam?.violations || [])
+      ];
 
-        // Format unique violations list with evidence URLs
-        const backendBase = (process.env.BACKEND_URL || "http://localhost:5000").replace(/\/$/, "");
-        const proctorHtml = (candidateViolations.length > 0 || effectiveViolationCount > 0)
-          ? `
-          <div style="background:#1a1013;border:1px solid #ef4444;border-radius:12px;padding:20px;margin:20px 0;">
-            <div style="color:#ef4444;font-size:16px;font-weight:800;letter-spacing:-0.5px;margin-bottom:6px;">
-              ⚠️ PROCTORING INCIDENT REPORT (${effectiveViolationCount} Security Strike${effectiveViolationCount > 1 ? "s" : ""})
-            </div>
-            <p style="color:#fca5a5;font-size:12px;margin:0 0 14px 0;">
-              Integrity Score: <strong>${calculatedIntegrityScore}%</strong> ${isSecurityDisqualified ? " &bull; <span style='color:#ef4444;font-weight:900;'>STATUS: DISQUALIFIED</span>" : ""}
-            </p>
-            <table style="width:100%;border-collapse:collapse;margin-bottom:12px;font-size:12px;">
-              <thead>
-                <tr style="background:#2a1419;color:#f87171;">
-                  <th style="padding:8px 10px;text-align:left;">Violation Type</th>
-                  <th style="padding:8px 10px;text-align:left;">Reason / Details</th>
-                  <th style="padding:8px 10px;text-align:left;">Timestamp</th>
+      const backendBase = (process.env.BACKEND_URL || "http://localhost:5000").replace(/\/$/, "");
+      const proctorHtml = (candidateViolations.length > 0 || effectiveViolationCount > 0)
+        ? `
+        <div style="background:#1a1013;border:1px solid #ef4444;border-radius:12px;padding:20px;margin:20px 0;">
+          <div style="color:#ef4444;font-size:16px;font-weight:800;letter-spacing:-0.5px;margin-bottom:6px;">
+            ⚠️ PROCTORING INCIDENT REPORT (${effectiveViolationCount} Security Strike${effectiveViolationCount > 1 ? "s" : ""})
+          </div>
+          <p style="color:#fca5a5;font-size:12px;margin:0 0 14px 0;">
+            Integrity Score: <strong>${calculatedIntegrityScore}%</strong> ${isSecurityDisqualified ? " &bull; <span style='color:#ef4444;font-weight:900;'>STATUS: DISQUALIFIED</span>" : ""}
+          </p>
+          <table style="width:100%;border-collapse:collapse;margin-bottom:12px;font-size:12px;">
+            <thead>
+              <tr style="background:#2a1419;color:#f87171;">
+                <th style="padding:8px 10px;text-align:left;">Violation Type</th>
+                <th style="padding:8px 10px;text-align:left;">Reason / Details</th>
+                <th style="padding:8px 10px;text-align:left;">Timestamp</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${candidateViolations.map((v, i) => `
+                <tr style="background:${i % 2 === 0 ? '#1f0d11' : '#17090c'};border-bottom:1px solid #33151b;">
+                  <td style="padding:8px 10px;color:#fca5a5;font-weight:700;">${String(v.type || "SECURITY_ALERT").toUpperCase()}</td>
+                  <td style="padding:8px 10px;color:#e2e8f0;">${v.reason || v.vlmReason || v.details || "Threshold anomaly detected"}</td>
+                  <td style="padding:8px 10px;color:#94a3b8;font-family:monospace;font-size:11px;">${v.timestamp ? new Date(v.timestamp).toLocaleTimeString() : "Session Time"}</td>
                 </tr>
-              </thead>
-              <tbody>
-                ${candidateViolations.map((v, i) => `
-                  <tr style="background:${i % 2 === 0 ? '#1f0d11' : '#17090c'};border-bottom:1px solid #33151b;">
-                    <td style="padding:8px 10px;color:#fca5a5;font-weight:700;">${String(v.type || "SECURITY_ALERT").toUpperCase()}</td>
-                    <td style="padding:8px 10px;color:#e2e8f0;">${v.reason || v.vlmReason || v.details || "Threshold anomaly detected"}</td>
-                    <td style="padding:8px 10px;color:#94a3b8;font-family:monospace;font-size:11px;">${v.timestamp ? new Date(v.timestamp).toLocaleTimeString() : "Session Time"}</td>
-                  </tr>
-                  ${Array.isArray(v.evidenceUrls) && v.evidenceUrls.length > 0 ? `
-                  <tr style="background:${i % 2 === 0 ? '#1f0d11' : '#17090c'};">
-                    <td colspan="3" style="padding:8px 10px;">
-                      <div style="font-size:11px;font-weight:700;color:#f87171;margin-bottom:6px;">Captured 3-Frame Burst Proof:</div>
-                      <div style="display:flex;gap:8px;flex-wrap:wrap;">
-                        ${v.evidenceUrls.map((url, frameIdx) => {
-                          const fullUrl = url.startsWith("http") ? url : `${backendBase}${url}`;
-                          const frameLabels = ["Start Frame", "Peak Violation", "End Frame"];
-                          return `
-                            <div style="display:inline-block;margin-right:8px;text-align:center;background:#0d0507;padding:6px;border-radius:6px;border:1px solid #451a20;">
-                              <a href="${fullUrl}" target="_blank" style="text-decoration:none;">
-                                <img src="${fullUrl}" alt="Proof Frame" style="width:160px;height:90px;object-fit:cover;border-radius:4px;display:block;border:1px solid #ef4444;" />
-                              </a>
-                              <span style="font-size:10px;color:#94a3b8;margin-top:4px;display:block;">${frameLabels[frameIdx] || `Frame ${frameIdx + 1}`}</span>
-                            </div>
-                          `;
-                        }).join('')}
-                      </div>
-                    </td>
-                  </tr>` : ""}
-                `).join('')}
-              </tbody>
-            </table>
-          </div>`
-          : `
-          <div style="background:#091d14;border:1px solid #10b981;border-radius:12px;padding:16px;margin:20px 0;text-align:center;">
-            <div style="color:#10b981;font-size:14px;font-weight:700;">✓ Proctoring Integrity: 100% (Clean Session)</div>
-            <div style="color:#6ee7b7;font-size:12px;margin-top:4px;">No suspicious devices, eye-gaze anomalies, or multi-person events detected.</div>
-          </div>`;
+              `).join('')}
+            </tbody>
+          </table>
+        </div>`
+        : `
+        <div style="background:#091d14;border:1px solid #10b981;border-radius:12px;padding:16px;margin:20px 0;text-align:center;">
+          <div style="color:#10b981;font-size:14px;font-weight:700;">✓ Proctoring Integrity: 100% (Clean Session)</div>
+          <div style="color:#6ee7b7;font-size:12px;margin-top:4px;">No suspicious devices, eye-gaze anomalies, or multi-person events detected.</div>
+        </div>`;
 
-        if (recruiterId) {
-          const recruiterUser = await User.findById(recruiterId);
-          if (recruiterUser?.email) {
-            const recruiterHtml = `
+      if (recruiterId) {
+        const recruiterUser = await User.findById(recruiterId);
+        if (recruiterUser?.email) {
+          const recruiterHtml = `
 <!DOCTYPE html><html><head><meta charset="UTF-8"></head>
 <body style="font-family:sans-serif;background:#0a0e1a;color:#e8ecf4;padding:40px;">
   <div style="max-width:640px;margin:0 auto;">
@@ -1362,16 +1351,15 @@ const submitExam = async (req, res) => {
   </div>
 </body></html>`;
 
-            sendEmail({
-              email: recruiterUser.email,
-              subject: `[VeriProof Forensic Alert] Candidate ${user.name || req.user.email} completed assessment (${score}%) ${effectiveViolationCount > 0 ? `⚠️ ${effectiveViolationCount} Strikes` : "✓ Clean"}`,
-              html: recruiterHtml,
-            }).catch(err => console.warn("[PostExam] Recruiter notification email error:", err.message));
-          }
+          sendEmail({
+            email: recruiterUser.email,
+            subject: `[VeriProof Alert] Candidate ${user.name || req.user.email} completed assessment for ${jobTitle} (${score}%) ${effectiveViolationCount > 0 ? `⚠️ ${effectiveViolationCount} Strikes` : "✓ Clean"}`,
+            html: recruiterHtml,
+          }).catch(err => console.warn("[PostExam] Recruiter notification email error:", err.message));
         }
-      } catch (postEmailErr) {
-        console.warn("[PostExam] Email delivery note:", postEmailErr.message);
       }
+    } catch (postEmailErr) {
+      console.warn("[PostExam] Post-exam notification error:", postEmailErr.message);
     }
 
 

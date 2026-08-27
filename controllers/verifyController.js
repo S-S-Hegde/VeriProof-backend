@@ -335,6 +335,30 @@ const submitExam = asyncHandler(async (req, res) => {
     await candidateUser.save();
   }
 
+  // Update RecruiterApplicant scoped to this specific jobId
+  const RecruiterApplicant = require("../models/RecruiterApplicant");
+  const job = result.jobId ? await Job.findById(result.jobId) : null;
+  const jobTitle = job?.title || exam.topic || "Technical Assessment";
+
+  const applicantQuery = {
+    $or: [
+      { candidateUser: result.candidateId },
+      { extractedEmail: candidateUser?.email },
+      ...(candidateUser?.githubUsername ? [{ githubUsername: candidateUser.githubUsername }] : [])
+    ]
+  };
+  if (result.jobId) {
+    applicantQuery.jobId = result.jobId;
+  }
+
+  await RecruiterApplicant.updateMany(applicantQuery, {
+    status: "Completed",
+    candidateUser: result.candidateId,
+    examScore,
+    examStatus: "Attended",
+    reasoning: `Assessment completed for ${jobTitle}. Score: ${examScore}%. Status: ${newStatus.toUpperCase()}.`
+  });
+
   await rebuildSkillProgression(result.candidateId, {
     type: "recruiter_assessment",
     label: `Recruiter exam: ${exam.topic}`,
@@ -344,6 +368,42 @@ const submitExam = asyncHandler(async (req, res) => {
     completed: newStatus === "Verified",
     source: result._id.toString(),
   });
+
+  // Dispatch candidate and recruiter result emails
+  try {
+    const scoreColor = examScore >= 70 ? "#34d399" : "#f87171";
+    const verdict = examScore >= 70 ? "PASSED \u2705" : "NEEDS IMPROVEMENT \u274c";
+
+    if (candidateUser?.email) {
+      sendEmail({
+        email: candidateUser.email,
+        subject: `[VeriProof] Assessment Result for ${jobTitle}: ${examScore}% (${verdict})`,
+        html: `<div style="font-family:sans-serif;background:#0a0e1a;color:#e8ecf4;padding:30px;">
+          <h2>VERIPROOF ASSESSMENT REPORT</h2>
+          <p>Hi <strong>${candidateUser.name || "Candidate"}</strong>, your assessment for <strong>${jobTitle}</strong> is complete.</p>
+          <div style="font-size:36px;font-weight:900;color:${scoreColor};margin:15px 0;">${examScore}% &bull; ${verdict}</div>
+          <p style="color:#94a3b8;font-size:12px;">Passing Threshold: 70% &bull; Total Questions: ${exam.questions.length}</p>
+        </div>`
+      }).catch(err => console.warn("[VerifySubmit] Candidate email notice:", err.message));
+    }
+
+    if (job?.recruiterId) {
+      const recruiterUser = await User.findById(job.recruiterId);
+      if (recruiterUser?.email) {
+        sendEmail({
+          email: recruiterUser.email,
+          subject: `[VeriProof Alert] Candidate ${candidateUser?.name || candidateUser?.email} completed assessment for ${jobTitle} (${examScore}%)`,
+          html: `<div style="font-family:sans-serif;background:#0a0e1a;color:#e8ecf4;padding:30px;">
+            <h2>CANDIDATE ASSESSMENT COMPLETE</h2>
+            <p>Candidate <strong>${candidateUser?.name || candidateUser?.email}</strong> (${candidateUser?.email}) has finished the assessment for <strong>${jobTitle}</strong>.</p>
+            <div style="font-size:36px;font-weight:900;color:${scoreColor};margin:15px 0;">Score: ${examScore}% &bull; ${verdict}</div>
+          </div>`
+        }).catch(err => console.warn("[VerifySubmit] Recruiter email notice:", err.message));
+      }
+    }
+  } catch (emailErr) {
+    console.warn("[VerifySubmit] Email delivery notice:", emailErr.message);
+  }
 
   res.json({ examScore, status: newStatus, pipelineStage: "verification_complete" });
 });
@@ -917,7 +977,7 @@ ${candidateText}
             candidateName: extractedName,
             recruiterName: req.user.name,
             jobTitle: job.title,
-            loginUrl: `${LOGIN_URL}?email=${encodeURIComponent(extractedEmail)}&role=student`,
+            loginUrl: `${LOGIN_URL}?email=${encodeURIComponent(extractedEmail)}&role=student&jobId=${job._id}`,
             email: extractedEmail,
             githubUsername: extractedGithub || null,
           });

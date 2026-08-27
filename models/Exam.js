@@ -13,6 +13,9 @@ const examSchema = mongoose.Schema(
   {
     verificationResultId: { type: mongoose.Schema.Types.ObjectId, ref: "VerificationResult", index: true },
     sourceAnalysisId: { type: mongoose.Schema.Types.ObjectId, ref: "ResumeAnalysis" },
+    jobId: { type: mongoose.Schema.Types.ObjectId, ref: "Job", index: true },
+    jobTitle: { type: String, default: "" },
+    recruiterId: { type: mongoose.Schema.Types.ObjectId, ref: "User", index: true },
     skills: { type: [String], default: [] },
     topic: {
       type: String, // E.g., "MERN Stack Application", "React Fundamentals"
