@@ -90,6 +90,15 @@ const extractTextLocally = async (buffer, mimeType = "", filename = "") => {
 
 // ── Local keyword dictionary (exhaustive high-accuracy fallback) ──────────────
 const SKILL_DICT = [
+  ["Project Management",     "project management", "project manager", "project lead", "project planning", "scope management", "resource coordination", "pmp", "ibm project manager"],
+  ["Agile & Scrum",          "agile", "scrum", "kanban", "sprints", "daily stand-ups", "retrospectives", "waterfall"],
+  ["SDLC",                   "sdlc", "software development lifecycle", "software development lifecycles"],
+  ["Software Development",   "software development", "software engineering"],
+  ["Web Technologies",       "web technologies", "web development"],
+  ["Quality Assurance & UAT","system testing", "user acceptance testing", "uat", "qa", "testing", "break-fixes", "troubleshooting"],
+  ["Data Analysis",          "data analysis", "analytical thinking", "performance metrics", "data analytics"],
+  ["Data Visualization",     "data visualization", "visualization tools", "tableau", "power bi", "dashboard"],
+  ["Enterprise Platforms",   "enterprise platforms", "enterprise solutions", "microsoft office 365", "office 365", "trello", "asana", "jira", "confluence"],
   ["Distributed Systems",    "distributed systems", "distributed computing", "high scalability", "scalable platforms", "massive-scale"],
   ["Databases",              "database", "databases", "rdbms", "nosql", "sql", "plsql"],
   ["Algorithms",             "algorithm", "algorithms", "data structures", "dsa"],
@@ -100,7 +109,6 @@ const SKILL_DICT = [
   ["Machine Learning",       "machine learning", "ml", "deep learning", "neural network", "ai"],
   ["Enterprise Architecture","enterprise architecture", "software architecture", "enterprise-grade", "system design", "hld", "lld"],
   ["Full Stack",             "full stack", "full-stack", "mern", "web development"],
-  ["Agile",                  "agile", "scrum", "kanban", "sprints"],
   ["Financial Modeling",     "financial models", "finance", "financial services", "investment banking", "stochastic calculus", "trading"],
   ["UI/UX",                  "ui/ux", "ui / ux", "user interface", "designers", "figma"],
   ["Networking",             "networking", "network protocols", "tcp/ip", "sockets"],
