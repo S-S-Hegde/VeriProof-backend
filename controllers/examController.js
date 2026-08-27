@@ -24,8 +24,7 @@ const shuffle = (arr) => {
   return copy;
 };
 
-// ── Dynamic Algorithmic Question Generator (2-Section Core + Elective Partition) ──
-const generateDynamicAlgorithmicQuestions = (coreSkills = [], claimedSkills = [], difficulty = "intermediate") => {
+const generateDynamicAlgorithmicQuestions = (coreSkills = [], claimedSkills = [], difficulty = "intermediate", targetTotal = 35) => {
   const fullBank = [
     // Python
     { question: "What is the primary difference between a List and a Tuple in Python?", options: ["Lists are mutable while Tuples are strictly immutable", "Lists are immutable while Tuples are strictly mutable", "Lists only accept strings while Tuples hold any data", "Lists are statically typed while Tuples are untyped"], correctAnswer: "Lists are mutable while Tuples are strictly immutable", skill: "Python", difficulty: "Easy" },
@@ -128,12 +127,21 @@ const generateDynamicAlgorithmicQuestions = (coreSkills = [], claimedSkills = []
   };
 
   const usedQuestions = new Set();
-  // Section 1: Core Baseline (20 Qs: 5 Easy, 10 Medium, 5 Hard)
-  const section1Core = pickSectionQuestions(effectiveCore, 5, 10, 5, "Core", usedQuestions);
-  // Section 2: Candidate Electives (15 Qs: 5 Easy, 5 Medium, 5 Hard)
-  const section2Electives = pickSectionQuestions(effectiveElectives, 5, 5, 5, "Elective", usedQuestions);
+  const coreTarget = Math.max(1, Math.round(targetTotal * 0.6));
+  const electiveTarget = Math.max(1, targetTotal - coreTarget);
 
-  return [...section1Core, ...section2Electives];
+  const coreEasy = Math.max(1, Math.round(coreTarget * 0.25));
+  const coreHard = Math.max(1, Math.round(coreTarget * 0.25));
+  const coreMed = Math.max(1, coreTarget - coreEasy - coreHard);
+
+  const electiveEasy = Math.max(1, Math.round(electiveTarget * 0.33));
+  const electiveHard = Math.max(1, Math.round(electiveTarget * 0.33));
+  const electiveMed = Math.max(1, electiveTarget - electiveEasy - electiveHard);
+
+  const section1Core = pickSectionQuestions(effectiveCore, coreEasy, coreMed, coreHard, "Core", usedQuestions);
+  const section2Electives = pickSectionQuestions(effectiveElectives, electiveEasy, electiveMed, electiveHard, "Elective", usedQuestions);
+
+  return [...section1Core, ...section2Electives].slice(0, targetTotal);
 };
 
 // @desc    Fetch a generated exam payload
@@ -247,10 +255,33 @@ const startExam = async (req, res) => {
 
     const rawClaimedSkills = analysisSkills.length > 0 ? analysisSkills : applicantSkills;
 
+    // ── STRICT SECURITY GUARD: Self-Registered Candidates MUST have an analyzed resume ──
+    if (!isInvitedCandidate) {
+      if (!analysis || analysisSkills.length === 0) {
+        return res.status(400).json({
+          error: "RESUME_ANALYSIS_REQUIRED",
+          message: "Please upload and analyze your resume in the Student Dashboard before generating examination questions.",
+        });
+      }
+    }
+
+    // ── Resolve question count (Custom selectable count for self-registered candidates) ──
+    let targetQuestionCount = 35;
+    const allowedCounts = [10, 20, 35, 50];
+    if (!isInvitedCandidate && req.query.count) {
+      const parsedCount = parseInt(req.query.count, 10);
+      if (allowedCounts.includes(parsedCount)) {
+        targetQuestionCount = parsedCount;
+      }
+    }
+
+    const coreQuota = Math.max(1, Math.round(targetQuestionCount * 0.6));
+    const electiveQuota = Math.max(1, targetQuestionCount - coreQuota);
+
     if (jobTargetSkills.length === 0) {
       jobTargetSkills = isInvitedCandidate
         ? ["Software Engineering", "Full Stack Development", "API Design", "Databases"]
-        : ["JavaScript", "Node.js", "SQL", "React", "Python"];
+        : (analysisSkills.slice(0, 4).length > 0 ? analysisSkills.slice(0, 4) : ["JavaScript", "Node.js", "SQL", "React", "Python"]);
     }
 
     const claimedSkills = rawClaimedSkills.length > 0 ? rawClaimedSkills : jobTargetSkills;
@@ -285,17 +316,17 @@ Adopt the analytical rigor of LeetCode / HackerRank / NPTEL examination problems
 • STYLE C: "Time/Space Complexity & Algorithmic Trade-offs"
 • STYLE D: "High-Concurrency & Distributed Architecture"
 
-── ASSESSMENT STRUCTURE (35 QUESTIONS TOTAL) ──
-You must strictly partition the 35 questions into two distinct sections:
+── ASSESSMENT STRUCTURE (${targetQuestionCount} QUESTIONS TOTAL) ──
+You must strictly partition the ${targetQuestionCount} questions into two distinct sections:
 
-SECTION 1: CORE BASELINE (20 Questions)
-- Generate exactly 20 questions using ONLY the Core Required Competencies: ${jobTargetSkills.join(", ")}
-- Difficulty distribution: 5 Easy, 10 Medium, 5 Hard.
+SECTION 1: CORE BASELINE (${coreQuota} Questions)
+- Generate exactly ${coreQuota} questions using ONLY the Core Required Competencies: ${jobTargetSkills.join(", ")}
+- Difficulty distribution: ${Math.max(1, Math.round(coreQuota * 0.25))} Easy, ${Math.max(1, coreQuota - 2 * Math.max(1, Math.round(coreQuota * 0.25)))} Medium, ${Math.max(1, Math.round(coreQuota * 0.25))} Hard.
 
-SECTION 2: CANDIDATE ELECTIVES (15 Questions)
-- Generate exactly 15 questions using ONLY the Candidate Claimed Competencies: ${claimedSkills.join(", ")}
-- Difficulty distribution: 5 Easy, 5 Medium, 5 Hard.
-- If the Candidate Claimed Competencies list is empty, default to generating these 15 questions from the Core Required Competencies instead.
+SECTION 2: CANDIDATE ELECTIVES (${electiveQuota} Questions)
+- Generate exactly ${electiveQuota} questions using ONLY the Candidate Claimed Competencies: ${claimedSkills.join(", ")}
+- Difficulty distribution: ${Math.max(1, Math.round(electiveQuota * 0.33))} Easy, ${Math.max(1, electiveQuota - 2 * Math.max(1, Math.round(electiveQuota * 0.33)))} Medium, ${Math.max(1, Math.round(electiveQuota * 0.33))} Hard.
+- If the Candidate Claimed Competencies list is empty, default to generating these ${electiveQuota} questions from the Core Required Competencies instead.
 
 Return ONLY a valid JSON array without any markdown formatting, backticks, or extra text:
 [
@@ -465,34 +496,34 @@ Return ONLY a valid JSON array without any markdown formatting, backticks, or ex
 
     // 5. Zero-Failure Fallback: 2-Section Core + Elective Partitioned Algorithmic Engine
     if (!generatedMcqs || !Array.isArray(generatedMcqs) || generatedMcqs.length === 0) {
-      generatedMcqs = generateDynamicAlgorithmicQuestions(jobTargetSkills, claimedSkills, jobDifficulty);
+      generatedMcqs = generateDynamicAlgorithmicQuestions(jobTargetSkills, claimedSkills, jobDifficulty, targetQuestionCount);
     }
 
-    // ── STRICT HARD FLOOR: Enforce Exactly 35 Questions (20 Core Baseline + 15 Candidate Electives) ──
+    // ── STRICT HARD FLOOR: Enforce Exactly targetQuestionCount Questions ──
     let coreQs = generatedMcqs.filter(q => q.section === "Core");
     let electiveQs = generatedMcqs.filter(q => q.section === "Elective");
 
     // If LLM returned raw array without section tags, partition by positional index
     if (coreQs.length === 0 && electiveQs.length === 0) {
-      coreQs = generatedMcqs.slice(0, 20).map(q => ({ ...q, section: "Core" }));
-      electiveQs = generatedMcqs.slice(20, 35).map(q => ({ ...q, section: "Elective" }));
+      coreQs = generatedMcqs.slice(0, coreQuota).map(q => ({ ...q, section: "Core" }));
+      electiveQs = generatedMcqs.slice(coreQuota, targetQuestionCount).map(q => ({ ...q, section: "Elective" }));
     }
 
     // If either section has a shortfall, backfill from algorithmic generator
-    const algorithmicBackup = generateDynamicAlgorithmicQuestions(jobTargetSkills, claimedSkills, jobDifficulty);
-    if (coreQs.length < 20) {
+    const algorithmicBackup = generateDynamicAlgorithmicQuestions(jobTargetSkills, claimedSkills, jobDifficulty, targetQuestionCount);
+    if (coreQs.length < coreQuota) {
       const backupCore = algorithmicBackup.filter(q => q.section === "Core");
-      coreQs.push(...backupCore.slice(0, 20 - coreQs.length));
+      coreQs.push(...backupCore.slice(0, coreQuota - coreQs.length));
     }
-    if (electiveQs.length < 15) {
+    if (electiveQs.length < electiveQuota) {
       const backupElective = algorithmicBackup.filter(q => q.section === "Elective");
-      electiveQs.push(...backupElective.slice(0, 15 - electiveQs.length));
+      electiveQs.push(...backupElective.slice(0, electiveQuota - electiveQs.length));
     }
 
-    // Strictly limit to 20 Core + 15 Electives (Total: Exactly 35 Questions)
-    const final35Questions = [
-      ...coreQs.slice(0, 20),
-      ...electiveQs.slice(0, 15)
+    // Strictly limit to coreQuota + electiveQuota (Total: Exactly targetQuestionCount Questions)
+    const finalQuestions = [
+      ...coreQs.slice(0, coreQuota),
+      ...electiveQs.slice(0, electiveQuota)
     ];
 
     // ── Save exam to DB ────────────────────────────────────────────────
@@ -502,13 +533,13 @@ Return ONLY a valid JSON array without any markdown formatting, backticks, or ex
       skills: [...new Set([...jobTargetSkills, ...claimedSkills])],
       passingScore: 70,
       status: "In Progress",
-      questions: final35Questions.map((q, idx) => {
+      questions: finalQuestions.map((q, idx) => {
         const options = Array.isArray(q.options) ? q.options : ["Option A", "Option B", "Option C", "Option D"];
         const targetAns = q.correct_answer || q.correctAnswer || options[0];
         const correctIdx = options.indexOf(targetAns);
-        const isCore = idx < 20;
-        const skill = q.skill || q.category || (isCore ? (jobTargetSkills[idx % jobTargetSkills.length] || "Core") : (claimedSkills[(idx - 20) % claimedSkills.length] || "Elective"));
-        const difficulty = q.difficulty || (idx < 5 ? "Easy" : idx < 15 ? "Medium" : idx < 20 ? "Hard" : idx < 25 ? "Easy" : idx < 30 ? "Medium" : "Hard");
+        const isCore = idx < coreQuota;
+        const skill = q.skill || q.category || (isCore ? (jobTargetSkills[idx % jobTargetSkills.length] || "Core") : (claimedSkills[(idx - coreQuota) % claimedSkills.length] || "Elective"));
+        const difficulty = q.difficulty || (idx < Math.round(targetQuestionCount * 0.3) ? "Easy" : idx < Math.round(targetQuestionCount * 0.7) ? "Medium" : "Hard");
         const section = q.section || (isCore ? "Core" : "Elective");
         return {
           questionText: q.question_text || q.question || "Technical Question",
