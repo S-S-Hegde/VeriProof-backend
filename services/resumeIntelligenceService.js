@@ -188,33 +188,54 @@ const extractClaimsWithGemini = async (text) => {
   try {
     const model = getModel();
     if (!model) return null;
-    const prompt = `Extract all verified technical skills, programming languages, frameworks, developer tools, databases, and technologies from this candidate's resume text:
+    const prompt = `Extract all verified technical skills AND candidate projects from this resume text:
 """
-${text.substring(0, 4000)}
+${text.substring(0, 4500)}
 """
 
 Return strict JSON format:
 {
   "skills": [
     { "skill": "React", "context": "Built modern UI with React and Vite", "source_quote": "React" }
+  ],
+  "projects": [
+    {
+      "title": "Project Name",
+      "description": "Short 1-2 sentence description of what the project does",
+      "technologies": ["React", "Node.js"],
+      "liveDemoUrl": "https://...",
+      "githubUrl": "https://..."
+    }
   ]
 }`;
     const result = await Promise.race([
       model.generateContent(prompt),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("Gemini timeout")), 2500))
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Gemini timeout")), 3000))
     ]);
     const responseText = result.response.text();
     const parsed = JSON.parse(responseText);
-    if (parsed && Array.isArray(parsed.skills) && parsed.skills.length > 0) {
-      return parsed.skills.map((s, idx) => ({
-        claim_id: `claim_${idx + 1}`,
-        skill: s.skill || s.name || "",
-        context: s.context || "Extracted from candidate resume",
-        source_quote: s.source_quote || s.skill || "",
-        category: "Skill",
-        confidence: 95
-      })).filter(s => Boolean(s.skill));
-    }
+    
+    const mappedSkills = Array.isArray(parsed.skills) ? parsed.skills.map((s, idx) => ({
+      claim_id: `claim_${idx + 1}`,
+      skill: s.skill || s.name || "",
+      context: s.context || "Extracted from candidate resume",
+      source_quote: s.source_quote || s.skill || "",
+      category: "Skill",
+      confidence: 95
+    })).filter(s => Boolean(s.skill)) : [];
+
+    const mappedProjects = Array.isArray(parsed.projects) ? parsed.projects.map((p) => ({
+      title: p.title || "",
+      description: p.description || "",
+      technologies: Array.isArray(p.technologies) ? p.technologies : [],
+      liveDemoUrl: p.liveDemoUrl || "",
+      githubUrl: p.githubUrl || "",
+    })).filter(p => Boolean(p.title && p.title.length > 2)) : [];
+
+    return {
+      skills: mappedSkills,
+      projects: mappedProjects,
+    };
   } catch (err) {
     console.warn(`[Resume Intelligence] Gemini direct extraction note: ${err.message}`);
   }
@@ -225,6 +246,7 @@ Return strict JSON format:
 const analyzeResumeBuffer = async (buffer, options = {}) => {
   let source = "local";
   let skills = [];
+  let projects = [];
   let meta = {};
 
   // 1. Instant local text extraction (< 10ms)
@@ -246,21 +268,23 @@ const analyzeResumeBuffer = async (buffer, options = {}) => {
   }));
 
   // 3. Fast direct Gemini extraction in Node.js (< 1.5s)
-  const geminiClaims = await extractClaimsWithGemini(text);
+  const geminiData = await extractClaimsWithGemini(text);
 
-  if (geminiClaims && geminiClaims.length > 0) {
-    skills = geminiClaims;
+  if (geminiData && geminiData.skills && geminiData.skills.length > 0) {
+    skills = geminiData.skills;
+    projects = geminiData.projects || [];
     source = "gemini_direct";
-    meta = { fullClaimsData: geminiClaims };
+    meta = { fullClaimsData: geminiData.skills, projectsCount: projects.length };
   } else {
     skills = localClaims;
+    projects = [];
     source = "local_dictionary";
     meta = { fullClaimsData: localClaims };
   }
 
   return {
     normalizedText: text,
-    claims: { skills },
+    claims: { skills, projects },
     analysis: { ...meta, extractionSource: source, skillCount: skills.length },
   };
 };
@@ -422,6 +446,38 @@ const runAnalysis = async (userId, fileUrl, options = {}) => {
     }
 
     await user.save();
+
+    // ── Stage 5.5: Auto-populate Extracted Projects ─────────────────────────
+    try {
+      const Project = require("../models/Project");
+      const extractedProjects = result.claims?.projects || [];
+      for (const p of extractedProjects) {
+        if (p.title && p.title.trim().length > 2) {
+          const existing = await Project.findOne({
+            user: userId,
+            title: new RegExp(`^${p.title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i"),
+          });
+
+          if (!existing) {
+            await Project.create({
+              user: userId,
+              title: p.title.trim(),
+              description: p.description || `Project extracted from candidate resume.`,
+              technologies: Array.isArray(p.technologies) && p.technologies.length > 0 ? p.technologies : ["Full Stack"],
+              repositoryUrl: p.githubUrl || (user.githubUsername ? `https://github.com/${user.githubUsername}/${p.title.toLowerCase().replace(/[^a-z0-9]/g, "-")}` : "https://github.com"),
+              liveUrl: p.liveDemoUrl || "",
+              liveDemoUrl: p.liveDemoUrl || "",
+              sourceType: "resume_auto",
+              status: "Published",
+              verificationStatus: "Unverified",
+            });
+            console.log(`[Resume Intelligence] Auto-created project "${p.title}" for user ${userId}`);
+          }
+        }
+      }
+    } catch (projErr) {
+      console.warn("[Resume Intelligence] Project auto-creation note:", projErr.message);
+    }
 
     // Rebuild skill progression from resume evidence
     try {

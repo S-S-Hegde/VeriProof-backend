@@ -15,6 +15,7 @@ const {
   uploadProjectAttachment,
   syncProject,
   getMyAnalytics,
+  verifyProjectDualSource,
 } = require("../controllers/projectController");
 const { checkPlagiarism, globalPlagiarismReport } = require("../controllers/plagiarismController");
 const { protect, recruiterOnly } = require("../middleware/authMiddleware");
@@ -52,6 +53,7 @@ router
   .put(protect, updateProject)
   .delete(protect, deleteProject);
 router.post("/:id/attachments", protect, attachmentUpload.single("attachment"), uploadProjectAttachment);
+router.post("/:id/verify-live", protect, verifyProjectDualSource);
 router.route("/:id/sync").put(protect, syncProject);
 router.route("/:id/plagiarism").get(protect, checkPlagiarism);
 

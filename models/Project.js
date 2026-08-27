@@ -84,10 +84,26 @@ const projectSchema = new mongoose.Schema(
       lastEditedAt:         { type: Date },
     },
 
+    // ── Live Demo & Dual-Source Verification ────────────────────────────────
+    liveDemoUrl:          { type: String, default: "" },
+    verificationStatus:   { type: String, enum: ["Unverified", "Pending", "Verified", "Discrepancy"], default: "Unverified" },
+    matchScore:           { type: Number, default: 0 },
+    proofHash:            { type: String, default: "" },
+    liveAuditReport: {
+      demoCrawled:        { type: Boolean, default: false },
+      githubAudited:      { type: Boolean, default: false },
+      resumeFidelityScore:{ type: Number, default: 0 },
+      verifiedFeatures:   { type: [String], default: [] },
+      discrepancies:      { type: [String], default: [] },
+      summary:            { type: String, default: "" },
+      auditedAt:          { type: Date },
+      verifierModel:      { type: String, default: "" },
+    },
+
     // ── Source type flags ────────────────────────────────────────────────────
     sourceType: {
       type: String,
-      enum: ["manual", "github_auto"],
+      enum: ["manual", "github_auto", "resume_auto"],
       default: "manual",
     },
   },

@@ -456,6 +456,23 @@ const uploadProjectAttachment = async (req, res) => {
   }
 };
 
+// @desc    Verify project dual-source (Live Demo + GitHub Repo vs Resume claims)
+// @route   POST /api/projects/:id/verify-live
+// @access  Private (Owner)
+const verifyProjectDualSource = async (req, res) => {
+  try {
+    const { liveDemoUrl } = req.body;
+    const { verifyProjectLive } = require("../services/projectVerificationService");
+    const updatedProject = await verifyProjectLive(req.params.id, req.user._id, liveDemoUrl);
+    res.json({
+      message: "Dual-source project verification completed",
+      project: updatedProject,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
 module.exports = {
   createProject,
   getProjects,
@@ -466,4 +483,5 @@ module.exports = {
   uploadProjectAttachment,
   syncProject,
   getMyAnalytics,
+  verifyProjectDualSource,
 };
