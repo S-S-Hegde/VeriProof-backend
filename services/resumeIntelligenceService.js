@@ -88,84 +88,137 @@ const extractTextLocally = async (buffer, mimeType = "", filename = "") => {
   return "";
 };
 
-// ── Local keyword dictionary (exhaustive high-accuracy fallback) ──────────────
+// ── Universal IT Industry Taxonomy (Exhaustive High-Accuracy Dictionary) ──────────────
 const SKILL_DICT = [
-  ["Project Management",     "project management", "project manager", "project lead", "project planning", "scope management", "resource coordination", "pmp", "ibm project manager"],
-  ["Agile & Scrum",          "agile", "scrum", "kanban", "sprints", "daily stand-ups", "retrospectives", "waterfall"],
-  ["SDLC",                   "sdlc", "software development lifecycle", "software development lifecycles"],
-  ["Software Development",   "software development", "software engineering"],
-  ["Web Technologies",       "web technologies", "web development"],
-  ["Quality Assurance & UAT","system testing", "user acceptance testing", "uat", "qa", "testing", "break-fixes", "troubleshooting"],
-  ["Data Analysis",          "data analysis", "analytical thinking", "performance metrics", "data analytics"],
-  ["Data Visualization",     "data visualization", "visualization tools", "tableau", "power bi", "dashboard"],
-  ["Enterprise Platforms",   "enterprise platforms", "enterprise solutions", "microsoft office 365", "office 365", "trello", "asana", "jira", "confluence"],
-  ["Distributed Systems",    "distributed systems", "distributed computing", "high scalability", "scalable platforms", "massive-scale"],
-  ["Databases",              "database", "databases", "rdbms", "nosql", "sql", "plsql"],
-  ["Algorithms",             "algorithm", "algorithms", "data structures", "dsa"],
-  ["Low Latency",            "low latency", "low-latency", "high-throughput", "low latency infrastructure"],
-  ["Cloud Computing",        "cloud", "cloud solutions", "cloud engineers", "aws", "gcp", "azure", "cloud-based"],
-  ["Cyber Security",         "cyber security", "cybersecurity", "security by design", "cyber threats", "security experts", "penetration testing", "owasp"],
-  ["Big Data",               "big data", "big data platforms", "data engineering", "data scientists"],
-  ["Machine Learning",       "machine learning", "ml", "deep learning", "neural network", "ai"],
-  ["Enterprise Architecture","enterprise architecture", "software architecture", "enterprise-grade", "system design", "hld", "lld"],
-  ["Full Stack",             "full stack", "full-stack", "mern", "web development"],
-  ["Financial Modeling",     "financial models", "finance", "financial services", "investment banking", "stochastic calculus", "trading"],
-  ["UI/UX",                  "ui/ux", "ui / ux", "user interface", "designers", "figma"],
-  ["Networking",             "networking", "network protocols", "tcp/ip", "sockets"],
-  ["Programming Languages",  "programming languages", "run-time systems", "runtime systems"],
-  ["Developer Tooling",      "developer tooling", "devops", "ci/cd", "tooling"],
-  ["JavaScript",             "javascript", "js", "ecmascript", "es6"],
-  ["TypeScript",             "typescript", "ts"],
-  ["Python",                 "python", "pandas", "numpy"],
-  ["Java",                   "java", "spring boot", "spring"],
-  ["C++",                    "c++", "cpp"],
-  ["C#",                     "c#", "csharp", ".net"],
-  ["Go",                     "golang", "go"],
-  ["Rust",                   "rust"],
-  ["Ruby",                   "ruby", "rails"],
-  ["PHP",                    "php", "laravel"],
-  ["Swift",                  "swift"],
-  ["Kotlin",                 "kotlin"],
-  ["Dart",                   "dart", "flutter"],
-  ["HTML/CSS",               "html", "css", "sass", "scss"],
-  ["React",                  "react", "reactjs"],
-  ["Next.js",                "next.js", "nextjs"],
-  ["Vue.js",                 "vue", "vuejs"],
-  ["Angular",                "angular"],
-  ["Svelte",                 "svelte"],
-  ["Tailwind CSS",           "tailwind"],
-  ["Redux",                  "redux", "zustand", "mobx"],
-  ["GraphQL",                "graphql", "apollo"],
-  ["WebSockets",             "websocket", "socket.io"],
-  ["Node.js",                "node.js", "nodejs"],
-  ["Express",                "express"],
-  ["FastAPI",                "fastapi"],
-  ["Django",                 "django"],
-  ["Flask",                  "flask"],
-  ["REST API",               "rest api", "restful", "crud"],
-  ["Microservices",          "microservices"],
-  ["MongoDB",                "mongodb", "mongo"],
-  ["PostgreSQL",             "postgresql", "postgres"],
-  ["MySQL",                  "mysql"],
-  ["Redis",                  "redis"],
-  ["Firebase",               "firebase", "firestore"],
-  ["Elasticsearch",          "elasticsearch"],
-  ["Git/GitHub",             "git", "github", "gitlab"],
-  ["Docker",                 "docker", "dockerfile"],
-  ["Kubernetes",             "kubernetes", "k8s"],
-  ["CI/CD",                  "ci/cd", "github actions", "jenkins"],
-  ["AWS",                    "aws", "ec2", "s3", "lambda"],
-  ["GCP",                    "gcp", "google cloud"],
-  ["Azure",                  "azure"],
-  ["Linux",                  "linux", "bash", "shell"],
-  ["TensorFlow",             "tensorflow", "keras"],
-  ["PyTorch",                "pytorch"],
-  ["scikit-learn",           "scikit-learn", "sklearn"],
-  ["LLMs",                   "llm", "openai", "gemini", "hugging face"],
-  ["NLP",                    "nlp", "natural language processing"],
-  ["Authentication",         "jwt", "oauth", "bcrypt"],
-  ["Testing",                "unit testing", "tdd", "jest", "pytest"],
-  ["Stripe",                 "stripe"],
+  // ── 1. Leadership, Management, Methodologies & Operations ──
+  ["Project Management",       "project management", "project manager", "project lead", "project planning", "scope management", "resource coordination", "pmp", "capm", "prince2"],
+  ["Agile & Scrum",            "agile", "scrum", "kanban", "sprints", "daily stand-ups", "retrospectives", "scrum master", "safe", "sprint planning"],
+  ["SDLC",                     "sdlc", "software development lifecycle", "software development lifecycles", "waterfall", "v-model"],
+  ["Product Management",       "product management", "product manager", "product owner", "roadmapping", "user stories", "product strategy"],
+  ["Business Analysis",        "business analysis", "business analyst", "requirements gathering", "brd", "frd", "gap analysis", "stakeholder management"],
+  ["IT Service Management",    "itil", "itsm", "servicenow", "jira service desk", "incident management", "change management", "sla"],
+  ["Enterprise Platforms",     "enterprise platforms", "enterprise solutions", "microsoft office 365", "office 365", "trello", "asana", "jira", "confluence", "notion"],
+
+  // ── 2. Software Engineering & Architecture ──
+  ["Software Development",     "software development", "software engineering", "software engineer", "developer", "programmer"],
+  ["Enterprise Architecture",  "enterprise architecture", "software architecture", "enterprise-grade", "system design", "hld", "lld", "design patterns", "clean architecture", "solid principles"],
+  ["Full Stack",               "full stack", "full-stack", "mern", "mean", "lamp", "fullstack"],
+  ["Frontend Development",     "frontend", "front-end", "client-side", "ui development", "single page applications", "spa"],
+  ["Backend Development",      "backend", "back-end", "server-side", "api development", "business logic"],
+  ["Microservices",            "microservices", "microservice", "service-oriented architecture", "soa", "monolith to microservices", "grpc", "event-driven architecture"],
+  ["REST API",                 "rest api", "restful", "crud", "api design", "openapi", "swagger", "postman"],
+  ["GraphQL",                  "graphql", "apollo", "relay", "schema design"],
+  ["WebSockets",               "websocket", "socket.io", "real-time", "real time communication", "sse"],
+  ["Low Latency",              "low latency", "low-latency", "high-throughput", "low latency infrastructure", "hft", "high frequency trading", "real-time systems"],
+  ["Distributed Systems",      "distributed systems", "distributed computing", "high scalability", "scalable platforms", "massive-scale", "consensus protocols", "raft", "paxos"],
+  ["Web Technologies",         "web technologies", "web development", "progressive web apps", "pwa", "web assembly", "wasm"],
+
+  // ── 3. Programming Languages ──
+  ["JavaScript",               "javascript", "js", "ecmascript", "es6", "es2020", "esnext"],
+  ["TypeScript",               "typescript", "ts"],
+  ["Python",                   "python", "python3", "pandas", "numpy", "scipy"],
+  ["Java",                     "java", "spring boot", "spring framework", "hibernate", "jpa", "jvm"],
+  ["C++",                      "c++", "cpp", "modern c++", "c++17", "c++20", "stl"],
+  ["C#",                       "c#", "csharp", ".net", ".net core", "asp.net", "entity framework"],
+  ["C",                        "c programming", "ansi c", "embedded c"],
+  ["Go",                       "golang", "go programming", "goroutines"],
+  ["Rust",                     "rust", "cargo", "memory safety", "tokio"],
+  ["Ruby",                     "ruby", "ruby on rails", "rails"],
+  ["PHP",                      "php", "laravel", "symfony", "wordpress"],
+  ["Swift",                    "swift", "swiftui", "cocoa touch", "ios development"],
+  ["Kotlin",                   "kotlin", "jetpack compose", "android development", "kotlin multiplatform"],
+  ["Dart",                     "dart", "flutter"],
+  ["Scala",                    "scala", "akka", "play framework"],
+  ["R",                        "r programming", "rstudio", "ggplot2"],
+  ["Shell / Bash",             "bash", "shell scripting", "powershell", "zsh", "sh"],
+  ["SQL",                      "sql", "pl/sql", "t-sql", "stored procedures"],
+
+  // ── 4. Web Frameworks & UI/UX ──
+  ["React",                    "react", "reactjs", "react.js", "jsx", "tsx"],
+  ["Next.js",                  "next.js", "nextjs", "server-side rendering", "ssr", "ssg"],
+  ["Vue.js",                   "vue", "vuejs", "vue 3", "nuxt", "pinia"],
+  ["Angular",                  "angular", "angularjs", "angular 2+", "rxjs", "ngrx"],
+  ["Svelte",                   "svelte", "sveltekit"],
+  ["HTML/CSS",                 "html", "html5", "css", "css3", "sass", "scss", "less"],
+  ["Tailwind CSS",             "tailwind", "tailwindcss"],
+  ["Redux",                    "redux", "redux toolkit", "rtk", "zustand", "mobx", "recoil"],
+  ["Node.js",                  "node.js", "nodejs", "npm", "yarn", "pnpm", "bun"],
+  ["Express",                  "express", "express.js", "expressjs"],
+  ["NestJS",                   "nestjs", "nest.js"],
+  ["FastAPI",                  "fastapi", "uvicorn", "pydantic"],
+  ["Django",                   "django", "django rest framework", "drf"],
+  ["Flask",                    "flask", "jinja"],
+  ["UI/UX",                    "ui/ux", "ui / ux", "user interface", "user experience", "figma", "adobe xd", "sketch", "wireframing", "prototyping", "design systems"],
+
+  // ── 5. Databases & Caching ──
+  ["Databases",                "database", "databases", "rdbms", "nosql", "relational database", "schema design", "acid"],
+  ["PostgreSQL",               "postgresql", "postgres", "pgvector", "supabase"],
+  ["MySQL",                    "mysql", "mariadb"],
+  ["MongoDB",                  "mongodb", "mongo", "mongoose"],
+  ["Redis",                    "redis", "in-memory cache", "key-value store", "redis streams"],
+  ["Elasticsearch",            "elasticsearch", "elastic stack", "elk", "kibana", "opensearch", "lucene"],
+  ["Cassandra",                "cassandra", "apache cassandra", "scylladb"],
+  ["DynamoDB",                 "dynamodb", "aws dynamodb"],
+  ["Firebase",                 "firebase", "firestore", "realtime database"],
+  ["Oracle DB",                "oracle database", "oracle db", "plsql"],
+  ["SQL Server",               "sql server", "ms sql", "ssms"],
+
+  // ── 6. Cloud, DevOps & Infrastructure ──
+  ["Cloud Computing",          "cloud", "cloud solutions", "cloud engineers", "public cloud", "private cloud", "hybrid cloud", "serverless", "cloud architecture"],
+  ["AWS",                      "aws", "amazon web services", "ec2", "s3", "lambda", "fargate", "cloudformation", "iam", "route 53", "rds"],
+  ["GCP",                      "gcp", "google cloud", "google cloud platform", "bigquery", "cloud run", "gke", "cloud functions"],
+  ["Azure",                    "azure", "microsoft azure", "azure devops", "azure functions", "aks", "app service"],
+  ["Docker",                   "docker", "dockerfile", "containerization", "containers", "docker compose"],
+  ["Kubernetes",               "kubernetes", "k8s", "helm", "istio", "ingress", "cluster management"],
+  ["CI/CD",                    "ci/cd", "ci / cd", "continuous integration", "continuous deployment", "github actions", "gitlab ci", "jenkins", "argo cd", "circleci"],
+  ["Terraform",                "terraform", "infrastructure as code", "iac", "terragrunt", "pulumi"],
+  ["Ansible",                  "ansible", "configuration management", "chef", "puppet"],
+  ["Linux / Unix",             "linux", "unix", "ubuntu", "centos", "redhat", "rhel", "debian", "kernel"],
+  ["Networking",               "networking", "network protocols", "tcp/ip", "udp", "http/2", "http/3", "dns", "load balancing", "nginx", "reverse proxy", "haproxy"],
+  ["Site Reliability (SRE)",   "sre", "site reliability engineering", "observability", "prometheus", "grafana", "datadog", "new relic", "splunk", "opentelemetry"],
+
+  // ── 7. Data Engineering, Big Data & Analytics ──
+  ["Data Engineering",         "data engineering", "data pipelines", "etl", "elt", "data modeling", "data warehousing", "data lake"],
+  ["Big Data",                 "big data", "big data platforms", "apache spark", "spark", "hadoop", "hdfs", "pyspark", "flink"],
+  ["Data Streaming",           "apache kafka", "kafka", "rabbitmq", "message queues", "pulsar", "event streaming"],
+  ["Data Warehousing",         "snowflake", "databricks", "dbt", "redshift", "bigquery", "synapse"],
+  ["Data Analysis",            "data analysis", "analytical thinking", "performance metrics", "data analytics", "eda", "statistical analysis", "kpi"],
+  ["Data Visualization",       "data visualization", "visualization tools", "tableau", "power bi", "powerbi", "looker", "dashboard", "metabase"],
+  ["Financial Modeling",       "financial models", "finance", "financial services", "investment banking", "stochastic calculus", "trading algorithms", "quantitative analysis"],
+
+  // ── 8. AI, Machine Learning & GenAI ──
+  ["Machine Learning",         "machine learning", "ml", "supervised learning", "unsupervised learning", "reinforcement learning", "feature engineering"],
+  ["Deep Learning",            "deep learning", "neural network", "neural networks", "cnn", "rnn", "transformers", "lstm"],
+  ["Generative AI & LLMs",     "generative ai", "genai", "llm", "llms", "large language models", "openai", "gpt", "rag", "retrieval augmented generation", "langchain", "llamaindex", "prompt engineering", "fine-tuning", "vector database", "pinecone", "chromadb"],
+  ["PyTorch",                  "pytorch", "torch"],
+  ["TensorFlow",               "tensorflow", "keras", "tf"],
+  ["scikit-learn",             "scikit-learn", "sklearn"],
+  ["Computer Vision",          "computer vision", "opencv", "yolo", "image processing", "object detection", "image classification"],
+  ["Natural Language (NLP)",   "nlp", "natural language processing", "spacy", "nltk", "bert", "hugging face", "tokenization", "text classification"],
+  ["MLOps",                    "mlops", "mlflow", "kubeflow", "model deployment", "wandb", "feature store"],
+
+  // ── 9. Cybersecurity & Information Security ──
+  ["Cyber Security",           "cyber security", "cybersecurity", "security by design", "cyber threats", "security experts", "infosec", "information security"],
+  ["Penetration Testing",      "penetration testing", "pen testing", "ethical hacking", "vulnerability assessment", "burp suite", "metasploit", "nmap", "kali linux"],
+  ["Security Operations (SOC)","soc", "siem", "splunk", "incident response", "threat hunting", "edr", "crowdstrike", "sentinel"],
+  ["Application Security",     "appsec", "application security", "owasp", "owasp top 10", "sast", "dast", "security audits"],
+  ["Cloud Security & IAM",     "cloud security", "iam", "identity and access management", "zero trust", "kms", "oauth2", "oidc", "saml"],
+  ["Cryptography",             "cryptography", "encryption", "tls", "ssl", "pki", "hashing", "aes", "rsa"],
+  ["Compliance & Governance",  "gdpr", "hipaa", "soc 2", "soc2", "iso 27001", "pci-dss", "nist", "security compliance"],
+
+  // ── 10. Quality Assurance, Testing & Automation ──
+  ["Quality Assurance & Testing", "qa", "quality assurance", "software testing", "test cases", "test plans", "bug tracking", "system testing", "regression testing"],
+  ["Test Automation",          "test automation", "automated testing", "selenium", "cypress", "playwright", "appium", "webdriver"],
+  ["Unit & Integration Testing","unit testing", "integration testing", "tdd", "test driven development", "bdd", "jest", "mocha", "chai", "pytest", "junit", "testng"],
+  ["Performance & Load Testing","performance testing", "load testing", "stress testing", "jmeter", "k6", "gatling", "locust"],
+  ["User Acceptance Testing",  "user acceptance testing", "uat", "manual testing", "exploratory testing", "break-fixes", "troubleshooting"],
+
+  // ── 11. Enterprise CRM, ERP & Specialized Tech ──
+  ["Salesforce",               "salesforce", "apex", "lightning web components", "lwc", "soql", "sales cloud", "service cloud"],
+  ["SAP",                      "sap", "abap", "s/4hana", "sap hana", "sap erp", "fiori"],
+  ["Blockchain & Web3",        "blockchain", "web3", "smart contracts", "solidity", "ethereum", "ethers.js", "web3.js", "hyperledger", "defi"],
+  ["Embedded Systems & IoT",   "embedded systems", "iot", "internet of things", "microcontrollers", "arduino", "raspberry pi", "rtos", "mqtt"],
+  ["AR / VR & Gaming",         "unity", "unity3d", "unreal engine", "ar/vr", "augmented reality", "virtual reality", "c# unity", "game development"],
 ];
 
 const extractSkillsLocally = (text) => {
@@ -218,22 +271,25 @@ const extractGithubFromText = (text) => {
 const extractClaimsWithGemini = async (text) => {
   if (!text || text.length < 30) return null;
 
-  const prompt = `Extract all verified technical skills, engineering disciplines, and candidate projects from this document:
+  const prompt = `You are a Principal IT Talent Acquisition Architect & Senior Technical Evaluator.
+Analyze this document (Job Description or Candidate Resume) and extract the official Job Title / Candidate Name, all core and specialized IT technical competencies, frameworks, tools, cloud architectures, and project claims:
 """
-${text.substring(0, 5000)}
+${text.substring(0, 6000)}
 """
+
+Extract all relevant skills across all IT sectors (Software Engineering, Frontend, Backend, Cloud/DevOps, Data/AI/ML, Cybersecurity, QA/Testing, Product/Agile, Systems Architecture).
 
 Return strict JSON format:
 {
-  "title": "Official Job Title or Candidate Name",
+  "title": "Official Job Title or Candidate Name (e.g., Managing Director - Software Engineering, Technical Project Manager, Cloud Architect)",
   "skills": [
-    { "skill": "Distributed Systems", "context": "Massively scalable software and distributed systems", "source_quote": "distributed systems" }
+    { "skill": "Standardized Skill Name", "context": "Context or requirement quote from text", "source_quote": "exact phrase" }
   ],
   "projects": [
     {
       "title": "Project Name",
-      "description": "Short description",
-      "technologies": ["React", "Node.js"],
+      "description": "Brief summary",
+      "technologies": ["React", "Node.js", "Docker"],
       "liveDemoUrl": "",
       "githubUrl": ""
     }
