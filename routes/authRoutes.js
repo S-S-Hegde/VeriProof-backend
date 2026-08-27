@@ -273,15 +273,24 @@ router.get("/profile/resume-analysis", protect, async (req, res) => {
     const ResumeAnalysis = require("../models/ResumeAnalysis");
     const RecruiterApplicant = require("../models/RecruiterApplicant");
 
-    let analysis = await ResumeAnalysis.findOne({ candidateId: req.user._id, active: true });
+    let analysis = await ResumeAnalysis.findOne({ 
+      $or: [
+        { candidateId: req.user._id },
+        { candidateId: String(req.user._id) }
+      ],
+      active: true 
+    });
 
-    // If an analysis document already exists for this candidate, return its real state directly!
+    const isUserAnalyzed = req.user.resumeStatus === "Analyzed" || ["repository_analysis", "technical_assessment", "verification_complete"].includes(req.user.pipelineStage);
+
+    // If an analysis document already exists for this candidate
     if (analysis) {
+      const isComplete = analysis.status === "Analysis Complete" || analysis.status === "Completed" || isUserAnalyzed;
       return res.json({
-        status: analysis.status || "Analysis Complete",
-        progress: analysis.progress !== undefined ? analysis.progress : 100,
-        stage: analysis.stage || "Ready",
-        estimatedRemainingStage: analysis.estimatedRemainingStage || "Complete",
+        status: isComplete ? "Analysis Complete" : (analysis.status || "Parsing"),
+        progress: isComplete ? 100 : (analysis.progress !== undefined ? analysis.progress : 100),
+        stage: isComplete ? "Ready" : (analysis.stage || "Ready"),
+        estimatedRemainingStage: isComplete ? "Complete" : (analysis.estimatedRemainingStage || "Complete"),
         claims: analysis.claims || { skills: [] },
         analysis: analysis.analysis || {},
         error: analysis.error || "",
@@ -289,7 +298,20 @@ router.get("/profile/resume-analysis", protect, async (req, res) => {
       });
     }
 
-    // If no analysis exists yet:
+    // If user's resume is already marked Analyzed on User model
+    if (isUserAnalyzed) {
+      return res.json({
+        status: "Analysis Complete",
+        progress: 100,
+        stage: "Ready",
+        estimatedRemainingStage: "Complete",
+        claims: { skills: [] },
+        analysis: {},
+        error: "",
+        lastUpdated: new Date(),
+      });
+    }
+
     // 1. Check if user is an invited candidate with pre-analyzed recruiter intake record
     const isInvited = req.user.origin === "recruiter_invited";
     const applicant = await RecruiterApplicant.findOne({
@@ -355,7 +377,7 @@ router.get("/profile/resume-analysis", protect, async (req, res) => {
     if (req.user.resumeUrl && req.user.resumeStatus === "Pending Evaluation") {
       return res.json({
         status: "Parsing",
-        progress: 25,
+        progress: 35,
         stage: "Parsing uploaded document...",
         estimatedRemainingStage: "Extracting skills",
         claims: { skills: [] },
