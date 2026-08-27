@@ -68,6 +68,10 @@ app.use(
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
+// Activity Tracking for Render Free-Tier Keep-Alive
+global.lastClientActivity = Date.now();
+const PYTHON_API_BASE = process.env.AI_ENGINE_URL || "https://python-engine-adw8.onrender.com";
+
 // Lightweight Render Health Check (Zero DB dependency)
 app.get("/health", (req, res) => {
   res.status(200).json({
@@ -92,13 +96,58 @@ app.get("/ready", (req, res) => {
   });
 });
 
+// Keep-Alive Ping endpoint (Pings backend & Python engine while active users exist)
+app.get(["/api/keep-alive", "/keep-alive"], async (req, res) => {
+  global.lastClientActivity = Date.now();
+
+  // Async warmup ping to Python AI Engine
+  axios.get(`${PYTHON_API_BASE}/health`, { timeout: 4000 }).catch(() => {});
+
+  res.status(200).json({
+    status: "active",
+    awake: true,
+    service: "veriproof-system",
+    pythonEngine: "warming",
+    lastActivity: global.lastClientActivity,
+  });
+});
+
+app.post("/api/keep-alive/release", (req, res) => {
+  // Candidate / User logged out or closed session
+  res.status(200).json({ status: "released" });
+});
+
 // Basic root route
 app.get("/", (req, res) => {
   res.send("VeriProof API is running...");
 });
 
+// Track activity across all incoming API calls
+app.use("/api", (req, res, next) => {
+  global.lastClientActivity = Date.now();
+  next();
+});
+
 // Apply a broad rate limit across all /api routes
 app.use("/api", generalLimiter);
+
+// ── Autonomous Background Keep-Alive Watchdog (Every 3.5 Minutes) ──
+setInterval(async () => {
+  const timeSinceLastActivity = Date.now() - (global.lastClientActivity || 0);
+  const IDLE_LIMIT = 14 * 60 * 1000; // 14 minutes
+
+  if (timeSinceLastActivity < IDLE_LIMIT) {
+    const elapsedMinutes = Math.round(timeSinceLastActivity / 60000);
+    console.log(`[KeepAlive Watchdog] Active user detected (${elapsedMinutes}m ago). Keeping Node.js backend & Python AI engine awake.`);
+    try {
+      await axios.get(`${PYTHON_API_BASE}/health`, { timeout: 5000 });
+    } catch (e) {
+      console.log(`[KeepAlive Watchdog] Python Engine warm ping sent.`);
+    }
+  } else {
+    // Gracefully idle when no sessions exist
+  }
+}, 3.5 * 60 * 1000);
 
 // Ensure upload directories exist
 const path = require("path");
