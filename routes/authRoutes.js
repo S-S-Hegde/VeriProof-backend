@@ -271,12 +271,26 @@ router.get("/profile/resume-analysis", protect, async (req, res) => {
   try {
     const ResumeAnalysis = require("../models/ResumeAnalysis");
     const RecruiterApplicant = require("../models/RecruiterApplicant");
-    const Job = require("../models/Job");
-    const VerificationResult = require("../models/VerificationResult");
 
     let analysis = await ResumeAnalysis.findOne({ candidateId: req.user._id, active: true });
 
-    // Locate candidate applicant record from recruiter intake
+    // If an analysis document already exists for this candidate, return its real state directly!
+    if (analysis) {
+      return res.json({
+        status: analysis.status || "Analysis Complete",
+        progress: analysis.progress !== undefined ? analysis.progress : 100,
+        stage: analysis.stage || "Ready",
+        estimatedRemainingStage: analysis.estimatedRemainingStage || "Complete",
+        claims: analysis.claims || { skills: [] },
+        analysis: analysis.analysis || {},
+        error: analysis.error || "",
+        lastUpdated: analysis.updatedAt || analysis.createdAt,
+      });
+    }
+
+    // If no analysis exists yet:
+    // 1. Check if user is an invited candidate with pre-analyzed recruiter intake record
+    const isInvited = req.user.origin === "recruiter_invited";
     const applicant = await RecruiterApplicant.findOne({
       $or: [
         { candidateUser: req.user._id },
@@ -286,37 +300,13 @@ router.get("/profile/resume-analysis", protect, async (req, res) => {
       ]
     }).sort({ createdAt: -1 });
 
-    const verification = await VerificationResult.findOne({ candidateId: req.user._id }).sort({ createdAt: -1 });
+    if (isInvited && applicant) {
+      // Hydrate from recruiter intake
+      const applicantSkills = (applicant.matchedSkills || applicant.claimedSkills || []).map(
+        s => typeof s === "string" ? s : s.skill || s.name || ""
+      ).filter(Boolean);
 
-    let jobTargetSkills = [];
-    if (applicant?.jobId) {
-      const job = await Job.findById(applicant.jobId);
-      if (job?.targetSkills?.length) {
-        jobTargetSkills = job.targetSkills.map(s => typeof s === "string" ? s : s.skill || s.name || "").filter(Boolean);
-      }
-    }
-
-    const applicantSkills = (applicant?.matchedSkills || applicant?.claimedSkills || []).map(
-      s => typeof s === "string" ? s : s.skill || s.name || ""
-    ).filter(Boolean);
-
-    const verificationSkills = (verification?.matchedSkills || []).map(
-      s => typeof s === "string" ? s : s.skill || s.name || ""
-    ).filter(Boolean);
-
-    const fallbackSkills = [
-      ...new Set([
-        ...applicantSkills,
-        ...verificationSkills,
-        ...jobTargetSkills,
-        ...(req.user.skills || []),
-        "Software Engineering", "Full Stack Development", "System Architecture", "API Design"
-      ])
-    ];
-
-    const hasSkillsInAnalysis = analysis?.claims?.skills && Array.isArray(analysis.claims.skills) && analysis.claims.skills.length > 0;
-
-    if (!analysis || !hasSkillsInAnalysis) {
+      const fallbackSkills = applicantSkills.length > 0 ? applicantSkills : ["Software Engineering", "Full Stack Development", "System Architecture", "API Design"];
       const formattedSkills = fallbackSkills.map((s, idx) => ({
         claim_id: `claim_${idx + 1}`,
         name: s,
@@ -329,35 +319,61 @@ router.get("/profile/resume-analysis", protect, async (req, res) => {
         { candidateId: req.user._id },
         {
           candidateId: req.user._id,
-          resumeUrl: applicant?.fileUrl || req.user.resumeUrl || "/uploads/recruiter-resumes/pre_analyzed.pdf",
-          originalFileName: applicant?.originalFileName || "candidate_resume.pdf",
-          mimeType: applicant?.mimeType || "application/pdf",
+          resumeUrl: applicant.fileUrl || req.user.resumeUrl || "/uploads/recruiter-resumes/pre_analyzed.pdf",
+          originalFileName: applicant.originalFileName || "candidate_resume.pdf",
+          mimeType: applicant.mimeType || "application/pdf",
           claims: {
             skills: formattedSkills,
             name: req.user.name,
             email: req.user.email,
-            summary: applicant?.resumeText || "Candidate technical profile pre-analyzed during recruiter intake."
+            summary: applicant.resumeText || "Candidate technical profile pre-analyzed during recruiter intake."
           },
-          analysis: applicant?.analysis || { summary: "Technical assessment blueprint prepared from resume analysis." },
+          analysis: applicant.analysis || { summary: "Technical assessment blueprint prepared from resume analysis." },
           status: "Analysis Complete",
           progress: 100,
           stage: "Ready",
           active: true,
-          processedAt: applicant?.processedAt || new Date(),
+          processedAt: applicant.processedAt || new Date(),
         },
         { upsert: true, new: true }
       );
+
+      return res.json({
+        status: analysis.status,
+        progress: analysis.progress,
+        stage: analysis.stage,
+        estimatedRemainingStage: analysis.estimatedRemainingStage || "Complete",
+        claims: analysis.claims,
+        analysis: analysis.analysis,
+        error: "",
+        lastUpdated: analysis.updatedAt,
+      });
     }
 
-    res.json({
-      status: analysis.status || "Analysis Complete",
-      progress: analysis.progress || 100,
-      stage: analysis.stage || "Ready",
-      estimatedRemainingStage: analysis.estimatedRemainingStage || "Complete",
-      claims: analysis.claims,
-      analysis: analysis.analysis,
-      error: analysis.error || "",
-      lastUpdated: analysis.updatedAt || analysis.createdAt,
+    // 2. For self-registered candidates with a resume pending evaluation:
+    if (req.user.resumeUrl && req.user.resumeStatus === "Pending Evaluation") {
+      return res.json({
+        status: "Parsing",
+        progress: 25,
+        stage: "Parsing uploaded document...",
+        estimatedRemainingStage: "Extracting skills",
+        claims: { skills: [] },
+        analysis: {},
+        error: "",
+        lastUpdated: new Date(),
+      });
+    }
+
+    // 3. No resume uploaded yet
+    return res.json({
+      status: "Not Submitted",
+      progress: 0,
+      stage: "Awaiting Resume Upload",
+      estimatedRemainingStage: "Not Started",
+      claims: { skills: [] },
+      analysis: {},
+      error: "",
+      lastUpdated: new Date(),
     });
   } catch (error) {
     res.status(500).json({ message: error.message });

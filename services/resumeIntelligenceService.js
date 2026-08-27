@@ -260,8 +260,8 @@ const { rebuildSkillProgression } = require("./skillProgressionService");
 const setProgress = async (userId, status, progress, stage) => {
   await ResumeAnalysis.findOneAndUpdate(
     { candidateId: userId },
-    { status, progress, stage },
-    { upsert: true }
+    { status, progress, stage, active: true, updatedAt: new Date() },
+    { upsert: true, new: true }
   );
 };
 
@@ -270,20 +270,21 @@ const setProgress = async (userId, status, progress, stage) => {
  * Triggered asynchronously after resume file upload.
  * Saves full claim objects and fires GitHub analysis on completion.
  */
-const runAnalysis = async (userId, fileUrl, options) => {
+const runAnalysis = async (userId, fileUrl, options = {}) => {
   try {
     // ── Stage 1: Parsing PDF ────────────────────────────────────────────────
     await setProgress(userId, "Parsing", 15, "Parsing PDF document...");
 
     let buffer;
     if (fileUrl.startsWith("http")) {
-      const response = await axios.get(fileUrl, { responseType: "arraybuffer" });
+      const response = await axios.get(fileUrl, { responseType: "arraybuffer", timeout: 15000 });
       buffer = Buffer.from(response.data);
     } else {
       const fs = require("fs");
       const path = require("path");
       const relativeUrl = fileUrl.startsWith('/') ? fileUrl.slice(1) : fileUrl;
-      buffer = fs.readFileSync(path.join(__dirname, "..", relativeUrl));
+      const fullPath = path.isAbsolute(fileUrl) ? fileUrl : path.join(__dirname, "..", relativeUrl);
+      buffer = fs.readFileSync(fullPath);
     }
 
     // ── Stage 2: Extracting Claims ──────────────────────────────────────────
@@ -296,14 +297,14 @@ const runAnalysis = async (userId, fileUrl, options) => {
 
     // Map full claim objects into the ResumeAnalysis schema
     // Python returns: { claim_id, skill, context, source_quote }
-    const mappedSkills = result.claims.skills.map((claim) => ({
-      id:                 claim.claim_id || claim.skill?.toLowerCase().replace(/[^a-z0-9]/g, "-") || `c_${Date.now()}`,
+    const mappedSkills = (result.claims?.skills || []).map((claim, idx) => ({
+      id:                 claim.claim_id || claim.skill?.toLowerCase().replace(/[^a-z0-9]/g, "-") || `claim_${idx + 1}`,
       name:               claim.skill || claim.name || "",
       source:             "Resume",
       verificationStatus: "Pending",
       evidenceCount:      0,
-      context:            claim.context || "",
-      sourceQuote:        claim.source_quote || "",
+      context:            claim.context || "Extracted from candidate resume",
+      sourceQuote:        claim.source_quote || claim.sourceQuote || "",
     }));
 
     // ── Stage 4: Updating Skill Tree ────────────────────────────────────────
@@ -315,8 +316,8 @@ const runAnalysis = async (userId, fileUrl, options) => {
       {
         candidateId:       userId,
         resumeUrl:         fileUrl,
-        originalFileName:  options.originalFileName,
-        mimeType:          options.mimeType,
+        originalFileName:  options.originalFileName || "resume.pdf",
+        mimeType:          options.mimeType || "application/pdf",
         status:            "Analysis Complete",
         progress:          100,
         stage:             "Ready",
@@ -325,9 +326,9 @@ const runAnalysis = async (userId, fileUrl, options) => {
         truncatedText:     result.normalizedText?.substring(0, 2000) || "",
         "claims.skills":   mappedSkills,
         analysis: {
-          extractionSource:    result.analysis.extractionSource,
+          extractionSource:    result.analysis?.extractionSource || "hybrid",
           parsingConfidence:   mappedSkills.length > 0 ? 85 : 50,
-          resumeCompleteness:  Math.min(100, mappedSkills.length * 5),
+          resumeCompleteness:  Math.min(100, Math.max(30, mappedSkills.length * 8)),
           parseErrors:         [],
           missingFields:       [],
         },
@@ -343,7 +344,7 @@ const runAnalysis = async (userId, fileUrl, options) => {
       user.resumeStatus = "Analyzed";
       
       // Advance pipeline stage for candidates
-      if (["resume_upload", "resume_analysis"].includes(user.pipelineStage)) {
+      if (["resume_upload", "resume_analysis", "registration"].includes(user.pipelineStage) || !user.pipelineStage) {
         user.pipelineStage = "repository_analysis";
       }
 
@@ -360,14 +361,15 @@ const runAnalysis = async (userId, fileUrl, options) => {
     console.log(`[Resume Intelligence] Analysis complete for user ${userId}. ${mappedSkills.length} claims saved.`);
 
     // ── Stage 6: Fire GitHub Analysis (non-blocking) ────────────────────────
-    if (user?.githubUsername) {
-      console.log(`[Resume Intelligence] Triggering GitHub analysis for @${user.githubUsername}`);
+    const freshUser = await User.findById(userId);
+    if (freshUser?.githubUsername) {
+      console.log(`[Resume Intelligence] Triggering GitHub analysis for @${freshUser.githubUsername}`);
       const { runGitHubAnalysis } = require("./githubIntelligenceService");
       runGitHubAnalysis(userId).catch((err) => {
         console.error("[GitHub Intelligence] Background analysis error:", err.message);
       });
     } else {
-      console.log(`[Resume Intelligence] No GitHub username — skipping repo analysis.`);
+      console.log(`[Resume Intelligence] No GitHub username for candidate ${userId} — waiting for handle.`);
     }
   } catch (err) {
     console.error("[Resume Intelligence] runAnalysis failed:", err);
@@ -378,8 +380,9 @@ const runAnalysis = async (userId, fileUrl, options) => {
         progress: 0,
         stage:   "Analysis Failed",
         error:   err.message || "Unknown error",
+        active:  true,
       },
-      { upsert: true }
+      { upsert: true, new: true }
     );
   }
 };

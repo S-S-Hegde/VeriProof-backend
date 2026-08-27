@@ -34,7 +34,16 @@ router.get("/status", protect, (req, res) => {
 router.post("/trigger", protect, async (req, res) => {
   try {
     const user = await User.findById(req.user._id);
-    if (!user?.githubUsername) {
+    if (!user) {
+      return res.status(404).json({ message: "User not found." });
+    }
+
+    if (req.body && req.body.githubUsername && typeof req.body.githubUsername === "string") {
+      user.githubUsername = req.body.githubUsername.trim();
+      await user.save();
+    }
+
+    if (!user.githubUsername) {
       return res.status(400).json({
         message: "No GitHub username on your profile. Please add one in Profile Settings.",
       });
@@ -56,6 +65,7 @@ router.post("/trigger", protect, async (req, res) => {
     res.json({
       message: "GitHub analysis started.",
       githubUsername: user.githubUsername,
+      status: "running",
     });
   } catch (err) {
     res.status(500).json({ message: err.message });
