@@ -58,8 +58,8 @@ const extractNameFromText = (text) => {
 };
 
 /** Branded invitation email HTML with 1-Click Google OAuth Access */
-const buildInviteEmail = ({ candidateName, recruiterName, jobTitle, loginUrl, email, githubUsername }) => ({
-  subject: `[VeriProof] You're Invited: Technical Assessment for ${jobTitle}`,
+const buildInviteEmail = ({ candidateName, recruiterName, jobTitle, loginUrl, email, githubUsername, questionCount = 40, durationMinutes = 45, jdRatio = 0.70 }) => ({
+  subject: `[VeriProof] Assessment Invite for ${jobTitle} (${questionCount} Qs • ${durationMinutes} Mins)`,
   html: `
 <!DOCTYPE html>
 <html>
@@ -87,6 +87,11 @@ const buildInviteEmail = ({ candidateName, recruiterName, jobTitle, loginUrl, em
         <tr>
           <td style="width:30%;color:#5a6478;padding:8px 0;font-family:monospace;font-size:11px;vertical-align:top;font-weight:bold;">INVITED ROLE</td>
           <td style="width:70%;color:#6b8aff;padding:8px 0;font-family:monospace;font-size:12px;font-weight:bold;">${jobTitle}</td>
+        </tr>
+        <tr><td colspan="2" style="border-top:1px dashed #1a2040;height:1px;padding:0;"></td></tr>
+        <tr>
+          <td style="width:30%;color:#5a6478;padding:8px 0;font-family:monospace;font-size:11px;vertical-align:top;font-weight:bold;">ASSESSMENT</td>
+          <td style="width:70%;color:#34d399;padding:8px 0;font-family:monospace;font-size:12px;font-weight:bold;">${questionCount} Questions &bull; ${durationMinutes} Minutes (${Math.round(jdRatio * 100)}% Role / ${Math.round((1 - jdRatio) * 100)}% Resume)</td>
         </tr>
         <tr><td colspan="2" style="border-top:1px dashed #1a2040;height:1px;padding:0;"></td></tr>
         <tr>
@@ -542,6 +547,22 @@ const uploadApplicantResumes = asyncHandler(async (req, res) => {
     throw new Error("Select at least one resume or ATS data file.");
   }
 
+  // ── Recruiter Assessment Customization / Defaults ──────────────────────────
+  const questionCount = parseInt(req.body.questionCount, 10) || 40;
+  const durationMinutes = parseInt(req.body.durationMinutes, 10) || 45;
+  const jdRatio = parseFloat(req.body.jdRatio) || 0.70;
+  const resumeRatio = parseFloat(req.body.resumeRatio) || 0.30;
+  const assessmentDifficulty = req.body.difficulty || "intermediate";
+
+  job.assessmentSettings = {
+    questionCount,
+    durationMinutes,
+    jdRatio,
+    resumeRatio,
+    difficulty: assessmentDifficulty,
+  };
+  await job.save();
+
   const uploadDir = path.join(__dirname, "..", "uploads", "recruiter-resumes");
   fs.mkdirSync(uploadDir, { recursive: true });
 
@@ -980,6 +1001,9 @@ ${candidateText}
             loginUrl: `${LOGIN_URL}?email=${encodeURIComponent(extractedEmail)}&role=student&jobId=${job._id}`,
             email: extractedEmail,
             githubUsername: extractedGithub || null,
+            questionCount,
+            durationMinutes,
+            jdRatio,
           });
           await sendEmail({ email: extractedEmail, subject, html });
           applicant.emailSentTo  = extractedEmail;

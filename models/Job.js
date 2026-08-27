@@ -24,6 +24,13 @@ const jobSchema = mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    assessmentSettings: {
+      questionCount: { type: Number, default: 40 },
+      durationMinutes: { type: Number, default: 45 },
+      jdRatio: { type: Number, default: 0.70 },
+      resumeRatio: { type: Number, default: 0.30 },
+      difficulty: { type: String, default: "intermediate" },
+    },
   },
   {
     timestamps: true,

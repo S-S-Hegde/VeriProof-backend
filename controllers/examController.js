@@ -265,9 +265,9 @@ const startExam = async (req, res) => {
       }
     }
 
-    // ── Resolve question count (Default to standard 20 questions: 65% JD / 35% Resume) ──
-    let targetQuestionCount = 20;
-    const allowedCounts = [10, 20, 30, 35, 50];
+    // ── Resolve question count (Job assessmentSettings > query count > default 40) ──
+    let targetQuestionCount = job?.assessmentSettings?.questionCount || 40;
+    const allowedCounts = [10, 20, 30, 35, 40, 50, 60];
     if (!isInvitedCandidate && req.query.count) {
       const parsedCount = parseInt(req.query.count, 10);
       if (allowedCounts.includes(parsedCount)) {
@@ -275,9 +275,10 @@ const startExam = async (req, res) => {
       }
     }
 
-    // Exactly 65% from the Job Description & 35% from the Candidate's Resume Skills
-    const coreQuota = Math.max(1, Math.round(targetQuestionCount * 0.65)); // 13 questions
-    const electiveQuota = Math.max(1, targetQuestionCount - coreQuota);    // 7 questions
+    const jdRatio = job?.assessmentSettings?.jdRatio || 0.70;
+    const coreQuota = Math.max(1, Math.round(targetQuestionCount * jdRatio)); // e.g. 28 questions for 40
+    const electiveQuota = Math.max(1, targetQuestionCount - coreQuota);       // e.g. 12 questions for 40
+    const durationMinutes = job?.assessmentSettings?.durationMinutes || Math.max(20, Math.round(targetQuestionCount * 1.15));
 
     if (jobTargetSkills.length === 0) {
       jobTargetSkills = isInvitedCandidate
@@ -306,8 +307,8 @@ Session Randomization Seed: ${sessionSalt}
 
 ── JOB CONTEXT & TECHNICAL STACK ──
 Job Description: "${jobDescription || "Design, develop, scale, and maintain high-performance software systems and APIs."}"
-Core Required Competencies (from Job Description - 65% weight): ${jobTargetSkills.join(", ")}
-Candidate Claimed Competencies (from Candidate Resume - 35% weight): ${claimedSkills.join(", ")}
+Core Required Competencies (from Job Description - ${Math.round(jdRatio * 100)}% weight): ${jobTargetSkills.join(", ")}
+Candidate Claimed Competencies (from Candidate Resume - ${Math.round((1 - jdRatio) * 100)}% weight): ${claimedSkills.join(", ")}
 Difficulty Calibration: Focus on practical, real-world Easy and Medium questions (conceptual clarity, syntax, debugging, and standard architectures) without overly complex or impossible trick questions.
 
 ── ABSOLUTE REQUIREMENT: ZERO OPTION LENGTH BIAS (EQUAL OPTION LENGTHS) ──
@@ -318,11 +319,11 @@ Difficulty Calibration: Focus on practical, real-world Easy and Medium questions
 ── ASSESSMENT STRUCTURE (EXACTLY ${targetQuestionCount} QUESTIONS TOTAL) ──
 You must strictly partition the ${targetQuestionCount} questions into two distinct sections:
 
-SECTION 1: CORE JOB DESCRIPTION COMPETENCIES (EXACTLY ${coreQuota} Questions — 65%)
+SECTION 1: CORE JOB DESCRIPTION COMPETENCIES (EXACTLY ${coreQuota} Questions — ${Math.round(jdRatio * 100)}%)
 - Generate exactly ${coreQuota} questions covering ONLY the Job Description competencies: ${jobTargetSkills.join(", ")}
 - Difficulty breakdown: ${coreEasy} Easy, ${coreMed} Medium.
 
-SECTION 2: CANDIDATE RESUME SKILLS (EXACTLY ${electiveQuota} Questions — 35%)
+SECTION 2: CANDIDATE RESUME SKILLS (EXACTLY ${electiveQuota} Questions — ${Math.round((1 - jdRatio) * 100)}%)
 - Generate exactly ${electiveQuota} questions covering ONLY the Candidate's Resume skills: ${claimedSkills.join(", ")}
 - Difficulty breakdown: ${electiveEasy} Easy, ${electiveMed} Medium.
 - If the Candidate Resume skills list is empty, generate from the Job Description competencies instead.
