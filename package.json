@@ -36,7 +36,9 @@
     "nodemailer": "^9.0.3",
     "pdf-lib": "^1.17.1",
     "pdf-parse": "^1.1.1",
+    "pdf2json": "^4.0.3",
     "pdfkit": "^0.18.0",
+    "unpdf": "^1.8.1",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {

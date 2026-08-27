@@ -418,6 +418,7 @@ const createJobFromFile = asyncHandler(async (req, res) => {
 
     // 2. Instant high-accuracy skill extraction (< 5ms)
     let targetSkills = extractSkillsLocally(text);
+    let extractedTitle = "";
 
     // 3. Fast AI enhancement (non-blocking fallback)
     try {
@@ -426,7 +427,7 @@ const createJobFromFile = asyncHandler(async (req, res) => {
         {
           mimeType: req.file.mimetype,
           fileName: req.file.originalname,
-          timeout: 3000,
+          timeout: 4000,
         }
       );
       const aiSkills = (parsedData.claims?.skills || [])
@@ -435,12 +436,22 @@ const createJobFromFile = asyncHandler(async (req, res) => {
       if (aiSkills.length > 0) {
         targetSkills = [...new Set([...targetSkills, ...aiSkills])];
       }
+      if (parsedData.claims?.title) {
+        extractedTitle = parsedData.claims.title;
+      }
     } catch (aiErr) {
       console.log("[CreateJobFromFile] Using fast local skill extraction");
     }
 
+    // Determine smart title: manual title > LLM extracted title > first line > file name
+    let cleanFirstLine = "";
+    const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    if (lines.length > 0 && lines[0].length < 80 && !lines[0].toLowerCase().includes("job description")) {
+      cleanFirstLine = lines[0];
+    }
+
     const title = String(
-      req.body.title || path.parse(req.file.originalname).name,
+      req.body.title || extractedTitle || cleanFirstLine || path.parse(req.file.originalname).name,
     ).trim();
 
     const job = await Job.create({

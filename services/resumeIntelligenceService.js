@@ -11,6 +11,8 @@ const pdfParse = require("pdf-parse");
 const path = require("path");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
+const { extractText: extractWithUnpdf } = require("unpdf");
+
 // ── Gemini setup ───────────────────────────────────────────────────────────────
 const geminiClient = process.env.GEMINI_API_KEY
   ? new GoogleGenerativeAI(process.env.GEMINI_API_KEY)
@@ -26,7 +28,7 @@ const getModel = () =>
     },
   });
 
-// ── Local text extraction (PDF / DOCX / TXT with robust fallbacks) ──────────────
+// ── Local text extraction (PDF / DOCX / TXT with robust modern engines) ─────────
 const extractTextLocally = async (buffer, mimeType = "", filename = "") => {
   if (!buffer || !Buffer.isBuffer(buffer)) return "";
 
@@ -34,8 +36,20 @@ const extractTextLocally = async (buffer, mimeType = "", filename = "") => {
   const isPdf = mimeType.includes("pdf") || ext === ".pdf" || buffer.subarray(0, 1024).toString("latin1").includes("%PDF-");
   const isDocx = mimeType.includes("wordprocessingml") || mimeType.includes("msword") || ext === ".docx" || ext === ".doc";
 
-  // 1. Try PDF parsing via pdf-parse
+  // 1. Try modern PDF parsing via unpdf (handles all PDF 1.4-1.7 specifications)
   if (isPdf) {
+    try {
+      const result = await extractWithUnpdf(new Uint8Array(buffer));
+      if (result && result.text) {
+        const fullText = Array.isArray(result.text) ? result.text.join("\n") : String(result.text);
+        if (fullText.trim().length > 10) {
+          return fullText.trim();
+        }
+      }
+    } catch (unpdfErr) {
+      console.warn(`[TextExtraction] unpdf notice for ${filename || 'file'}: ${unpdfErr.message}`);
+    }
+
     try {
       const pdfData = await pdfParse(buffer);
       if (pdfData && pdfData.text && pdfData.text.trim().length > 10) {
@@ -59,81 +73,91 @@ const extractTextLocally = async (buffer, mimeType = "", filename = "") => {
     }
   }
 
-  // 3. Fallback: UTF-8 string decoding
-  try {
-    const rawText = buffer.toString("utf8");
-    const cleanText = rawText.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, " ").trim();
-    if (cleanText.length > 10) return cleanText;
-  } catch (e) {}
+  // 3. Plain text documents only (NEVER return raw %PDF- binary streams)
+  if (!isPdf) {
+    try {
+      const rawText = buffer.toString("utf8");
+      const cleanText = rawText.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, " ").trim();
+      if (cleanText.length > 10 && !cleanText.startsWith("%PDF-")) return cleanText;
+    } catch (e) {}
 
-  return buffer.toString("latin1").replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, " ").trim();
+    const latin = buffer.toString("latin1").replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, " ").trim();
+    if (!latin.startsWith("%PDF-")) return latin;
+  }
+
+  return "";
 };
 
-// ── Local keyword dictionary (instant high-accuracy fallback) ─────────────────
+// ── Local keyword dictionary (exhaustive high-accuracy fallback) ──────────────
 const SKILL_DICT = [
-  ["JavaScript",       "javascript", "js", "ecmascript", "es6"],
-  ["TypeScript",       "typescript", "ts"],
-  ["Python",           "python"],
-  ["Java",             "java", "spring boot", "spring"],
-  ["C++",              "c++", "cpp"],
-  ["C#",               "c#", "csharp", ".net"],
-  ["Go",               "golang"],
-  ["Rust",             "rust"],
-  ["Ruby",             "ruby", "rails"],
-  ["PHP",              "php", "laravel"],
-  ["Swift",            "swift"],
-  ["Kotlin",           "kotlin"],
-  ["SQL",              "sql", "plsql"],
-  ["Dart",             "dart", "flutter"],
-  ["HTML/CSS",         "html", "css", "sass", "scss"],
-  ["React",            "react", "reactjs"],
-  ["Next.js",          "next.js", "nextjs"],
-  ["Vue.js",           "vue", "vuejs"],
-  ["Angular",          "angular"],
-  ["Svelte",           "svelte"],
-  ["Tailwind CSS",     "tailwind"],
-  ["Redux",            "redux", "zustand", "mobx"],
-  ["GraphQL",          "graphql", "apollo"],
-  ["WebSockets",       "websocket", "socket.io"],
-  ["Node.js",          "node.js", "nodejs"],
-  ["Express",          "express"],
-  ["FastAPI",          "fastapi"],
-  ["Django",           "django"],
-  ["Flask",            "flask"],
-  ["REST API",         "rest api", "restful", "crud"],
-  ["Microservices",    "microservices"],
-  ["MongoDB",          "mongodb", "mongo"],
-  ["PostgreSQL",       "postgresql", "postgres"],
-  ["MySQL",            "mysql"],
-  ["Redis",            "redis"],
-  ["Firebase",         "firebase", "firestore"],
-  ["Elasticsearch",    "elasticsearch"],
-  ["Git/GitHub",       "git", "github", "gitlab"],
-  ["Docker",           "docker", "dockerfile"],
-  ["Kubernetes",       "kubernetes", "k8s"],
-  ["CI/CD",            "ci/cd", "github actions", "jenkins"],
-  ["AWS",              "aws", "ec2", "s3", "lambda"],
-  ["GCP",              "gcp", "google cloud"],
-  ["Azure",            "azure"],
-  ["Linux",            "linux", "bash", "shell"],
-  ["Machine Learning", "machine learning", "ml"],
-  ["Deep Learning",    "deep learning", "neural network"],
-  ["TensorFlow",       "tensorflow", "keras"],
-  ["PyTorch",          "pytorch"],
-  ["scikit-learn",     "scikit-learn", "sklearn"],
-  ["Data Analysis",    "pandas", "numpy", "data analysis"],
-  ["LLMs",             "llm", "openai", "gemini", "hugging face"],
-  ["NLP",              "nlp", "natural language processing"],
-  ["Authentication",   "jwt", "oauth", "bcrypt"],
-  ["Security",         "cybersecurity", "owasp", "penetration testing"],
-  ["Testing",          "unit testing", "tdd", "jest", "pytest"],
-  ["Agile",            "agile", "scrum", "kanban"],
-  ["React Native",     "react native"],
-  ["Flutter",          "flutter"],
-  ["System Design",    "system design", "hld", "lld"],
-  ["Full Stack",       "full stack", "fullstack", "mern"],
-  ["Figma",            "figma"],
-  ["Stripe",           "stripe"],
+  ["Distributed Systems",    "distributed systems", "distributed computing", "high scalability", "scalable platforms", "massive-scale"],
+  ["Databases",              "database", "databases", "rdbms", "nosql", "sql", "plsql"],
+  ["Algorithms",             "algorithm", "algorithms", "data structures", "dsa"],
+  ["Low Latency",            "low latency", "low-latency", "high-throughput", "low latency infrastructure"],
+  ["Cloud Computing",        "cloud", "cloud solutions", "cloud engineers", "aws", "gcp", "azure", "cloud-based"],
+  ["Cyber Security",         "cyber security", "cybersecurity", "security by design", "cyber threats", "security experts", "penetration testing", "owasp"],
+  ["Big Data",               "big data", "big data platforms", "data engineering", "data scientists"],
+  ["Machine Learning",       "machine learning", "ml", "deep learning", "neural network", "ai"],
+  ["Enterprise Architecture","enterprise architecture", "software architecture", "enterprise-grade", "system design", "hld", "lld"],
+  ["Full Stack",             "full stack", "full-stack", "mern", "web development"],
+  ["Agile",                  "agile", "scrum", "kanban", "sprints"],
+  ["Financial Modeling",     "financial models", "finance", "financial services", "investment banking", "stochastic calculus", "trading"],
+  ["UI/UX",                  "ui/ux", "ui / ux", "user interface", "designers", "figma"],
+  ["Networking",             "networking", "network protocols", "tcp/ip", "sockets"],
+  ["Programming Languages",  "programming languages", "run-time systems", "runtime systems"],
+  ["Developer Tooling",      "developer tooling", "devops", "ci/cd", "tooling"],
+  ["JavaScript",             "javascript", "js", "ecmascript", "es6"],
+  ["TypeScript",             "typescript", "ts"],
+  ["Python",                 "python", "pandas", "numpy"],
+  ["Java",                   "java", "spring boot", "spring"],
+  ["C++",                    "c++", "cpp"],
+  ["C#",                     "c#", "csharp", ".net"],
+  ["Go",                     "golang", "go"],
+  ["Rust",                   "rust"],
+  ["Ruby",                   "ruby", "rails"],
+  ["PHP",                    "php", "laravel"],
+  ["Swift",                  "swift"],
+  ["Kotlin",                 "kotlin"],
+  ["Dart",                   "dart", "flutter"],
+  ["HTML/CSS",               "html", "css", "sass", "scss"],
+  ["React",                  "react", "reactjs"],
+  ["Next.js",                "next.js", "nextjs"],
+  ["Vue.js",                 "vue", "vuejs"],
+  ["Angular",                "angular"],
+  ["Svelte",                 "svelte"],
+  ["Tailwind CSS",           "tailwind"],
+  ["Redux",                  "redux", "zustand", "mobx"],
+  ["GraphQL",                "graphql", "apollo"],
+  ["WebSockets",             "websocket", "socket.io"],
+  ["Node.js",                "node.js", "nodejs"],
+  ["Express",                "express"],
+  ["FastAPI",                "fastapi"],
+  ["Django",                 "django"],
+  ["Flask",                  "flask"],
+  ["REST API",               "rest api", "restful", "crud"],
+  ["Microservices",          "microservices"],
+  ["MongoDB",                "mongodb", "mongo"],
+  ["PostgreSQL",             "postgresql", "postgres"],
+  ["MySQL",                  "mysql"],
+  ["Redis",                  "redis"],
+  ["Firebase",               "firebase", "firestore"],
+  ["Elasticsearch",          "elasticsearch"],
+  ["Git/GitHub",             "git", "github", "gitlab"],
+  ["Docker",                 "docker", "dockerfile"],
+  ["Kubernetes",             "kubernetes", "k8s"],
+  ["CI/CD",                  "ci/cd", "github actions", "jenkins"],
+  ["AWS",                    "aws", "ec2", "s3", "lambda"],
+  ["GCP",                    "gcp", "google cloud"],
+  ["Azure",                  "azure"],
+  ["Linux",                  "linux", "bash", "shell"],
+  ["TensorFlow",             "tensorflow", "keras"],
+  ["PyTorch",                "pytorch"],
+  ["scikit-learn",           "scikit-learn", "sklearn"],
+  ["LLMs",                   "llm", "openai", "gemini", "hugging face"],
+  ["NLP",                    "nlp", "natural language processing"],
+  ["Authentication",         "jwt", "oauth", "bcrypt"],
+  ["Testing",                "unit testing", "tdd", "jest", "pytest"],
+  ["Stripe",                 "stripe"],
 ];
 
 const extractSkillsLocally = (text) => {
@@ -182,63 +206,108 @@ const extractGithubFromText = (text) => {
   return null;
 };
 
-// ── LLM Direct Extraction via Gemini ──────────────────────────────────────────
+// ── Multi-LLM Direct Extraction (Gemini + Mistral Fallback) ───────────────────
 const extractClaimsWithGemini = async (text) => {
-  if (!geminiClient || !text || text.length < 30) return null;
-  try {
-    const model = getModel();
-    if (!model) return null;
-    const prompt = `Extract all verified technical skills AND candidate projects from this resume text:
+  if (!text || text.length < 30) return null;
+
+  const prompt = `Extract all verified technical skills, engineering disciplines, and candidate projects from this document:
 """
-${text.substring(0, 4500)}
+${text.substring(0, 5000)}
 """
 
 Return strict JSON format:
 {
+  "title": "Official Job Title or Candidate Name",
   "skills": [
-    { "skill": "React", "context": "Built modern UI with React and Vite", "source_quote": "React" }
+    { "skill": "Distributed Systems", "context": "Massively scalable software and distributed systems", "source_quote": "distributed systems" }
   ],
   "projects": [
     {
       "title": "Project Name",
-      "description": "Short 1-2 sentence description of what the project does",
+      "description": "Short description",
       "technologies": ["React", "Node.js"],
-      "liveDemoUrl": "https://...",
-      "githubUrl": "https://..."
+      "liveDemoUrl": "",
+      "githubUrl": ""
     }
   ]
 }`;
-    const result = await Promise.race([
-      model.generateContent(prompt),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("Gemini timeout")), 3000))
-    ]);
-    const responseText = result.response.text();
-    const parsed = JSON.parse(responseText);
-    
-    const mappedSkills = Array.isArray(parsed.skills) ? parsed.skills.map((s, idx) => ({
-      claim_id: `claim_${idx + 1}`,
-      skill: s.skill || s.name || "",
-      context: s.context || "Extracted from candidate resume",
-      source_quote: s.source_quote || s.skill || "",
-      category: "Skill",
-      confidence: 95
-    })).filter(s => Boolean(s.skill)) : [];
 
-    const mappedProjects = Array.isArray(parsed.projects) ? parsed.projects.map((p) => ({
-      title: p.title || "",
-      description: p.description || "",
-      technologies: Array.isArray(p.technologies) ? p.technologies : [],
-      liveDemoUrl: p.liveDemoUrl || "",
-      githubUrl: p.githubUrl || "",
-    })).filter(p => Boolean(p.title && p.title.length > 2)) : [];
-
-    return {
-      skills: mappedSkills,
-      projects: mappedProjects,
-    };
-  } catch (err) {
-    console.warn(`[Resume Intelligence] Gemini direct extraction note: ${err.message}`);
+  // 1. Try Gemini
+  if (geminiClient) {
+    try {
+      const model = getModel();
+      if (model) {
+        const result = await Promise.race([
+          model.generateContent(prompt),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("Gemini timeout")), 3000))
+        ]);
+        const responseText = result.response.text();
+        const parsed = JSON.parse(responseText.replace(/```json|```/g, "").trim());
+        if (parsed && (Array.isArray(parsed.skills) || Array.isArray(parsed.projects))) {
+          return {
+            title: parsed.title || "",
+            skills: Array.isArray(parsed.skills) ? parsed.skills.map((s, idx) => ({
+              claim_id: `claim_${idx + 1}`,
+              skill: s.skill || s.name || (typeof s === "string" ? s : ""),
+              context: s.context || "Extracted from document text",
+              source_quote: s.source_quote || s.skill || "",
+              category: "Skill",
+              confidence: 95
+            })).filter(s => Boolean(s.skill)) : [],
+            projects: Array.isArray(parsed.projects) ? parsed.projects.map((p) => ({
+              title: p.title || "",
+              description: p.description || "",
+              technologies: Array.isArray(p.technologies) ? p.technologies : [],
+              liveDemoUrl: p.liveDemoUrl || "",
+              githubUrl: p.githubUrl || "",
+            })).filter(p => Boolean(p.title && p.title.length > 2)) : [],
+          };
+        }
+      }
+    } catch (err) {
+      console.warn(`[Resume Intelligence] Gemini direct extraction note: ${err.message}`);
+    }
   }
+
+  // 2. Try Mistral
+  if (process.env.MISTRAL_API_KEY) {
+    try {
+      const res = await axios.post(
+        "https://api.mistral.ai/v1/chat/completions",
+        {
+          model: "mistral-small-latest",
+          messages: [{ role: "user", content: prompt }],
+          temperature: 0.1,
+          response_format: { type: "json_object" },
+        },
+        { headers: { Authorization: `Bearer ${process.env.MISTRAL_API_KEY}` }, timeout: 6000 }
+      );
+      const parsed = JSON.parse(res.data.choices[0].message.content);
+      if (parsed && (Array.isArray(parsed.skills) || Array.isArray(parsed.projects))) {
+        return {
+          title: parsed.title || "",
+          skills: Array.isArray(parsed.skills) ? parsed.skills.map((s, idx) => ({
+            claim_id: `claim_${idx + 1}`,
+            skill: s.skill || s.name || (typeof s === "string" ? s : ""),
+            context: s.context || "Extracted from document text",
+            source_quote: s.source_quote || s.skill || "",
+            category: "Skill",
+            confidence: 95
+          })).filter(s => Boolean(s.skill)) : [],
+          projects: Array.isArray(parsed.projects) ? parsed.projects.map((p) => ({
+            title: p.title || "",
+            description: p.description || "",
+            technologies: Array.isArray(p.technologies) ? p.technologies : [],
+            liveDemoUrl: p.liveDemoUrl || "",
+            githubUrl: p.githubUrl || "",
+          })).filter(p => Boolean(p.title && p.title.length > 2)) : [],
+        };
+      }
+    } catch (mistralErr) {
+      console.warn(`[Resume Intelligence] Mistral extraction note: ${mistralErr.message}`);
+    }
+  }
+
   return null;
 };
 
@@ -284,7 +353,7 @@ const analyzeResumeBuffer = async (buffer, options = {}) => {
 
   return {
     normalizedText: text,
-    claims: { skills, projects },
+    claims: { title: geminiData?.title || "", skills, projects },
     analysis: { ...meta, extractionSource: source, skillCount: skills.length },
   };
 };
