@@ -153,6 +153,15 @@ const userSchema = new mongoose.Schema(
       enum: ["Pending Evaluation", "Analyzed", "Verified", "Rejected", "Not_Uploaded", "Not Uploaded"],
       default: "Pending Evaluation",
     },
+    resumeHistory: [{
+      resumeUrl:        { type: String },
+      originalFileName: { type: String },
+      uploadedAt:       { type: Date, default: Date.now },
+      version:          { type: Number, default: 1 },
+      claimsCount:      { type: Number, default: 0 },
+      skills:           { type: [String], default: [] },
+      status:           { type: String, default: "Analyzed" },
+    }],
 
     // Notifications / privacy prefs
     notifications: {

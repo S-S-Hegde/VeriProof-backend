@@ -249,6 +249,13 @@ const analyzeResumeBuffer = async (buffer, options = {}) => {
   };
 };
 
+// ── GitHub handle extractor ───────────────────────────────────────────────────
+const extractGithubFromText = (text) => {
+  if (!text || typeof text !== "string") return null;
+  const match = text.match(/(?:github\.com\/|github:\s*|github\s+handle:\s*|github\s+username:\s*)([a-zA-Z0-9\-]+)/i);
+  return match ? match[1].toLowerCase().trim() : null;
+};
+
 // ── Models & services ─────────────────────────────────────────────────────────
 const ResumeAnalysis = require("../models/ResumeAnalysis");
 const User = require("../models/User");
@@ -268,7 +275,7 @@ const setProgress = async (userId, status, progress, stage) => {
 /**
  * runAnalysis — main orchestration function.
  * Triggered asynchronously after resume file upload.
- * Saves full claim objects and fires GitHub analysis on completion.
+ * Saves full claim objects, tracks resume version history, and auto-fires GitHub repository analysis.
  */
 const runAnalysis = async (userId, fileUrl, options = {}) => {
   try {
@@ -302,7 +309,6 @@ const runAnalysis = async (userId, fileUrl, options = {}) => {
     await setProgress(userId, "Parsing", 80, "Verifying extracted claims...");
 
     // Map full claim objects into the ResumeAnalysis schema
-    // Python returns: { claim_id, skill, context, source_quote }
     const mappedSkills = (result.claims?.skills || []).map((claim, idx) => ({
       id:                 claim.claim_id || claim.skill?.toLowerCase().replace(/[^a-z0-9]/g, "-") || `claim_${idx + 1}`,
       name:               claim.skill || claim.name || "",
@@ -314,7 +320,7 @@ const runAnalysis = async (userId, fileUrl, options = {}) => {
     }));
 
     // ── Stage 4: Updating Skill Tree ────────────────────────────────────────
-    await setProgress(userId, "Updating Skill Tree", 80, "Updating verified skill tree...");
+    await setProgress(userId, "Updating Skill Tree", 90, "Updating verified skill tree...");
 
     // Persist the complete analysis
     await ResumeAnalysis.findOneAndUpdate(
@@ -344,14 +350,37 @@ const runAnalysis = async (userId, fileUrl, options = {}) => {
       { upsert: true, new: true }
     );
 
-    // ── Stage 5: Mark user as Analyzed and advance pipelineStage ───────────
+    // ── Stage 5: Version History, GitHub Discovery, and Stage Progression ───
     const user = await User.findById(userId);
+    const extractedGithub = extractGithubFromText(result.normalizedText);
+
     if (user) {
+      // Archive previous resume version into history
+      if (user.resumeUrl && user.resumeUrl !== fileUrl) {
+        if (!user.resumeHistory) user.resumeHistory = [];
+        user.resumeHistory.push({
+          resumeUrl: user.resumeUrl,
+          originalFileName: options.previousFileName || "previous_resume.pdf",
+          uploadedAt: user.updatedAt || new Date(),
+          version: user.resumeHistory.length + 1,
+          claimsCount: mappedSkills.length,
+          skills: mappedSkills.map(s => s.name),
+          status: user.resumeStatus || "Analyzed",
+        });
+      }
+
       user.resumeStatus = "Analyzed";
-      
-      // Advance pipeline stage for candidates
+      user.resumeUrl = fileUrl;
+
+      // Auto-populate GitHub username if discovered in resume text
+      if (!user.githubUsername && extractedGithub) {
+        user.githubUsername = extractedGithub;
+        console.log(`[Resume Intelligence] Discovered GitHub handle @${extractedGithub} from candidate resume.`);
+      }
+
+      // Advance pipeline stage
       if (["resume_upload", "resume_analysis", "registration"].includes(user.pipelineStage) || !user.pipelineStage) {
-        user.pipelineStage = "repository_analysis";
+        user.pipelineStage = user.githubUsername ? "repository_analysis" : "technical_assessment";
       }
 
       await user.save();
@@ -366,16 +395,16 @@ const runAnalysis = async (userId, fileUrl, options = {}) => {
 
     console.log(`[Resume Intelligence] Analysis complete for user ${userId}. ${mappedSkills.length} claims saved.`);
 
-    // ── Stage 6: Fire GitHub Analysis (non-blocking) ────────────────────────
-    const freshUser = await User.findById(userId);
-    if (freshUser?.githubUsername) {
-      console.log(`[Resume Intelligence] Triggering GitHub analysis for @${freshUser.githubUsername}`);
+    // ── Stage 6: Auto-Fire GitHub Intelligence (Repository Analysis) ─────────
+    const targetGithub = user?.githubUsername || extractedGithub;
+    if (targetGithub) {
+      console.log(`[Resume Intelligence] Auto-triggering GitHub intelligence for @${targetGithub}`);
       const { runGitHubAnalysis } = require("./githubIntelligenceService");
       runGitHubAnalysis(userId).catch((err) => {
         console.error("[GitHub Intelligence] Background analysis error:", err.message);
       });
     } else {
-      console.log(`[Resume Intelligence] No GitHub username for candidate ${userId} — waiting for handle.`);
+      console.log(`[Resume Intelligence] No GitHub handle found for user ${userId}.`);
     }
   } catch (err) {
     console.error("[Resume Intelligence] runAnalysis failed:", err);
