@@ -417,11 +417,33 @@ const updateUserProfile = async (req, res) => {
 
     const textFields = [
       "name","bio","phone","location","website",
-      "linkedin","twitter","instagram","githubUsername",
+      "twitter","instagram","githubUsername",
       "college","branch","usn","batch","cgpa","profileVisibility",
       "profileImage",
     ];
     textFields.forEach((f) => { if (req.body[f] !== undefined) user[f] = req.body[f]; });
+
+    // Live Web Identity Audit for LinkedIn
+    if (req.body.linkedin !== undefined) {
+      const rawLinkedin = String(req.body.linkedin).trim();
+      if (rawLinkedin) {
+        const { verifyLinkedInProfile } = require("../services/socialVerificationService");
+        const check = await verifyLinkedInProfile(rawLinkedin, false);
+        if (!check.verified) {
+          return res.status(400).json({ message: check.reason });
+        }
+        user.linkedin = check.cleanUrl;
+        user.linkedinUrl = check.cleanUrl;
+        user.linkedinUsername = check.handle;
+        user.linkedinVerified = true;
+      } else {
+        user.linkedin = "";
+        user.linkedinUrl = "";
+        user.linkedinUsername = "";
+        user.linkedinVerified = false;
+      }
+    }
+
     if (req.body.skills !== undefined) user.skills = req.body.skills;
     if (req.body.notifications) {
       const currentNotifs = user.notifications && typeof user.notifications.toObject === 'function' 
@@ -1242,6 +1264,28 @@ const verifyCompanyEmail = async (req, res) => {
   });
 };
 
+// @desc    Live Audit LinkedIn or GitHub username/profile
+// @route   POST /api/users/verify-social-proof
+// @access  Public / Private
+const verifySocialIdentity = async (req, res) => {
+  try {
+    const { platform, handle, isCompany } = req.body;
+    const { verifyLinkedInProfile, verifyGitHubProfile } = require("../services/socialVerificationService");
+
+    if (platform === "linkedin") {
+      const result = await verifyLinkedInProfile(handle, Boolean(isCompany));
+      return res.json(result);
+    } else if (platform === "github") {
+      const result = await verifyGitHubProfile(handle);
+      return res.json(result);
+    }
+
+    return res.status(400).json({ message: "Supported platforms are 'linkedin' and 'github'." });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
 module.exports = {
   registerUser,
   authUser,
@@ -1259,4 +1303,5 @@ module.exports = {
   firebaseGoogleAuth,
   updateCompanyInfo,
   verifyCompanyEmail,
+  verifySocialIdentity,
 };

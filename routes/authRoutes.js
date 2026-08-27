@@ -18,6 +18,7 @@ const {
   firebaseGoogleAuth,
   updateCompanyInfo,
   verifyCompanyEmail,
+  verifySocialIdentity,
 } = require("../controllers/authController");
 
 const { protect, recruiterOnly } = require("../middleware/authMiddleware");
@@ -422,6 +423,7 @@ router.post("/firebase-auth", authLimiter, firebaseGoogleAuth);
 // Recruiter Onboarding & Verification Routes
 router.post("/recruiter/company-info", protect, recruiterOnly, updateCompanyInfo);
 router.post("/recruiter/verify-company-email", protect, recruiterOnly, verifyCompanyEmail);
+router.post("/verify-social-proof", verifySocialIdentity);
 
 router.post("/", authLimiter, registerValidator, validate, registerUser);
 router.post("/login", authLimiter, loginValidator, validate, authUser);
