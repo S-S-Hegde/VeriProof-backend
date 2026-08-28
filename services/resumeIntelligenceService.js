@@ -472,13 +472,26 @@ const runAnalysis = async (userId, fileUrl, options = {}) => {
     // ── Stage 2: Extracting Claims & Identity Forensic Check ─────────────────
     await setProgress(userId, "Extracting Information", 55, "Extracting skills and credentials...");
 
+    // ── Email Identity Validation (with Gmail dot & plus alias normalization) ──
+    const normalizeEmailAddress = (email) => {
+      if (!email || typeof email !== "string") return "";
+      let [u, domain] = email.toLowerCase().trim().split("@");
+      if (!domain) return email.toLowerCase().trim();
+      if (domain === "gmail.com" || domain === "googlemail.com") {
+        u = u.split("+")[0].replace(/\./g, "");
+        domain = "gmail.com";
+      }
+      return `${u}@${domain}`;
+    };
+
     const result = await analyzeResumeBuffer(buffer, options);
 
-    // ── Email Identity Validation ──────────────────────────────────────────
     const resumeEmail = extractEmailFromText(result.normalizedText);
     const registeredEmail = (user.email || "").toLowerCase().trim();
+    const normResumeEmail = normalizeEmailAddress(resumeEmail);
+    const normRegisteredEmail = normalizeEmailAddress(registeredEmail);
 
-    if (resumeEmail && registeredEmail && resumeEmail !== registeredEmail) {
+    if (normResumeEmail && normRegisteredEmail && normResumeEmail !== normRegisteredEmail) {
       const errorMsg = `Identity Mismatch: The email found in your resume (${resumeEmail}) does not match your registered VeriProof account email (${registeredEmail}). You cannot proceed with a mismatched resume. Please upload your own resume or update your account email.`;
       console.warn(`[Resume Intelligence] Email mismatch for user ${userId}: resume=${resumeEmail} vs registered=${registeredEmail}`);
       

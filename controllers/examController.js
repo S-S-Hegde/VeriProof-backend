@@ -181,24 +181,25 @@ const startExam = async (req, res) => {
     }
 
     // ── Resolve invitation + applicant record ──────────────────────────
-    const invitation = await InvitationRegistry.findOne({
+    const userEmail = req.user?.email || "";
+    const invitation = userEmail ? await InvitationRegistry.findOne({
       $or: [
-        { email: req.user.email },
-        { email: new RegExp(`^${req.user.email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") },
-        ...(req.user.githubUsername ? [{ githubUsername: req.user.githubUsername }] : [])
+        { email: userEmail },
+        { email: new RegExp(`^${userEmail.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") },
+        ...(req.user?.githubUsername ? [{ githubUsername: req.user.githubUsername }] : [])
       ]
-    });
+    }) : null;
 
     let applicant = null;
-    if (invitation) {
+    if (invitation && invitation.recruiterId && invitation.jobId) {
       applicant = await RecruiterApplicant.findOne({
         recruiterId: invitation.recruiterId,
         jobId: invitation.jobId,
         $or: [
           { candidateUser: req.user._id },
-          { extractedEmail: req.user.email },
-          { extractedEmail: new RegExp(`^${req.user.email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") },
-          ...(req.user.githubUsername ? [{ githubUsername: req.user.githubUsername }] : [])
+          { extractedEmail: userEmail },
+          { extractedEmail: new RegExp(`^${userEmail.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") },
+          ...(req.user?.githubUsername ? [{ githubUsername: req.user.githubUsername }] : [])
         ]
       });
     }
@@ -208,8 +209,8 @@ const startExam = async (req, res) => {
       applicant = await RecruiterApplicant.findOne({
         $or: [
           { candidateUser: req.user._id },
-          { extractedEmail: req.user.email },
-          { extractedEmail: new RegExp(`^${req.user.email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") }
+          { extractedEmail: userEmail },
+          { extractedEmail: new RegExp(`^${userEmail.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") }
         ]
       }).sort({ createdAt: -1 });
     }
@@ -220,9 +221,10 @@ const startExam = async (req, res) => {
     let jobTitle = "Senior Full Stack Software Engineer";
     let jobDescription = "Design, develop, and test scalable web applications and APIs.";
 
-    const jobId = req.query.jobId || req.body.jobId || invitation?.jobId || applicant?.jobId || null;
+    let job = null;
+    const jobId = (req.query && req.query.jobId) || (req.body && req.body.jobId) || (invitation && invitation.jobId) || (applicant && applicant.jobId) || null;
     if (jobId) {
-      const job = await Job.findById(jobId);
+      job = await Job.findById(jobId);
       if (job) {
         jobTargetSkills = (job.targetSkills || []).map(s => (typeof s === "string" ? s : s.skill || "")).filter(Boolean);
         jobDifficulty = job.difficulty || "intermediate";
