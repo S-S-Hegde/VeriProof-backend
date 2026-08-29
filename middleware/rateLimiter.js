@@ -35,11 +35,11 @@ const uploadLimiter = rateLimit({
 
 /**
  * General API limiter — broad protection for all API routes.
- * Max 200 requests per 15 minutes per IP.
+ * Generous limit to accommodate live polling dashboards without 429 blocks.
  */
 const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 200,
+  max: 3000,
   standardHeaders: true,
   legacyHeaders: false,
   message: {
