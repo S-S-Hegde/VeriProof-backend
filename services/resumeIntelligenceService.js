@@ -648,17 +648,24 @@ const runAnalysis = async (userId, fileUrl, options = {}) => {
     }
   } catch (err) {
     console.error("[Resume Intelligence] runAnalysis error:", err);
-    await ResumeAnalysis.findOneAndUpdate(
-      { candidateId: userId },
-      {
-        status:  "Analysis Failed",
-        progress: 0,
-        stage:   "Analysis Failed",
-        error:   err.message || "Unknown error during analysis",
-        active:  true,
-      },
-      { upsert: true, new: true }
-    );
+    try {
+      await ResumeAnalysis.findOneAndUpdate(
+        { candidateId: userId },
+        {
+          status:  "Analysis Failed",
+          progress: 0,
+          stage:   "Analysis Failed",
+          error:   err.message || "Unknown error during analysis",
+          active:  true,
+          updatedAt: new Date(),
+        },
+        { upsert: true, new: true }
+      );
+      const User = require("../models/User");
+      await User.findByIdAndUpdate(userId, { resumeStatus: "Rejected" });
+    } catch (dbErr) {
+      console.error("[Resume Intelligence] Failed to save error status:", dbErr.message);
+    }
   }
 };
 
