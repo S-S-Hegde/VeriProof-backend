@@ -26,45 +26,44 @@ connectDB();
 
 const app = express();
 
-// Refined Production CORS
-app.use(
-  cors({
-    origin: function (origin, callback) {
-      // Allow non-browser clients (curl, Postman, server-to-server)
-      if (!origin) return callback(null, true);
+// ── 1. Production CORS Configuration ──
+const allowedOrigins = [
+  "https://veriproof.vercel.app",
+  "http://localhost:5173",
+  "http://localhost:5174",
+  "http://localhost:3000",
+  "http://127.0.0.1:5173",
+];
 
-      const normalizedOrigin = origin.replace(/\/$/, "");
-      const frontendUrl = (process.env.FRONTEND_URL || "").replace(/\/$/, "");
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Allow non-browser requests (Postman, curl, server-to-server)
+    if (!origin) return callback(null, true);
 
-      const allowedOrigins = [
-        frontendUrl,
-        "http://localhost:5173",
-        "http://localhost:5174",
-        "http://localhost:3000",
-        "http://127.0.0.1:5173",
-      ].filter(Boolean);
+    const normalizedOrigin = origin.replace(/\/$/, "");
+    const frontendEnvUrl = (process.env.FRONTEND_URL || "").replace(/\/$/, "");
 
-      // Match explicit allowed origins
-      if (allowedOrigins.includes(normalizedOrigin)) {
-        return callback(null, true);
-      }
+    if (
+      allowedOrigins.includes(normalizedOrigin) ||
+      (frontendEnvUrl && frontendEnvUrl === normalizedOrigin) ||
+      /^https:\/\/([a-z0-9-]+\.)*vercel\.app$/i.test(normalizedOrigin) ||
+      (process.env.ADDITIONAL_ALLOWED_ORIGINS &&
+        process.env.ADDITIONAL_ALLOWED_ORIGINS.split(",").map((o) => o.trim().replace(/\/$/, "")).includes(normalizedOrigin))
+    ) {
+      return callback(null, true);
+    }
 
-      // Automatically support all Vercel deployments (*.vercel.app)
-      if (
-        /^https:\/\/([a-z0-9-]+\.)*vercel\.app$/i.test(normalizedOrigin) ||
-        (process.env.ADDITIONAL_ALLOWED_ORIGINS &&
-          process.env.ADDITIONAL_ALLOWED_ORIGINS.split(",").map((o) => o.trim().replace(/\/$/, "")).includes(normalizedOrigin))
-      ) {
-        return callback(null, true);
-      }
+    console.warn(`[CORS Blocked] Origin not allowed: ${origin}`);
+    return callback(null, false);
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept"],
+  optionsSuccessStatus: 200,
+};
 
-      console.warn(`[CORS Blocked] Origin not allowed: ${origin}`);
-      return callback(new Error("CORS: origin not allowed: " + origin));
-    },
-    credentials: true,
-    optionsSuccessStatus: 200,
-  })
-);
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
 
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
@@ -73,92 +72,45 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 global.lastClientActivity = Date.now();
 const PYTHON_API_BASE = process.env.AI_ENGINE_URL || "https://python-engine-adw8.onrender.com";
 
-// Lightweight Render Health Check (Zero DB dependency)
-app.get(["/health", "/api/health"], (req, res) => {
-  try {
-    const dbConnected = typeof isDBConnected === "function" ? isDBConnected() : false;
-    res.status(200).json({
-      status: "ok",
-      service: "veriproof-backend",
-      db: dbConnected,
-      timestamp: new Date().toISOString(),
-    });
-  } catch (_) {
-    res.status(200).json({
-      status: "ok",
-      service: "veriproof-backend",
-      timestamp: new Date().toISOString(),
-    });
-  }
-});
-
-// Dependency Readiness Check (Reports DB readiness)
-app.get(["/ready", "/api/ready"], (req, res) => {
-  try {
-    const dbConnected = typeof isDBConnected === "function" ? isDBConnected() : false;
-    if (dbConnected) {
-      return res.status(200).json({
-        status: "ready",
-        service: "veriproof-backend",
-        database: "connected",
-        timestamp: new Date().toISOString(),
-      });
-    }
-    return res.status(200).json({
-      status: "degraded",
-      service: "veriproof-backend",
-      database: "connecting",
-      timestamp: new Date().toISOString(),
-    });
-  } catch (_) {
-    return res.status(200).json({
-      status: "degraded",
-      service: "veriproof-backend",
-      database: "unknown",
-      timestamp: new Date().toISOString(),
-    });
-  }
-});
-
-// Keep-Alive Ping endpoint (Pings backend & Python engine while active users exist)
+// ── 2. Health & Keep-Alive Endpoints (Zero-Failure) ──
 app.get(["/api/keep-alive", "/keep-alive", "/api/ping", "/ping"], (req, res) => {
   try {
     global.lastClientActivity = Date.now();
-
-    // Check database state non-blockingly without throwing
-    let dbConnected = false;
-    try {
-      dbConnected = typeof isDBConnected === "function" ? isDBConnected() : false;
-    } catch (_) {
-      dbConnected = false;
-    }
-
-    // Async warmup ping to Python AI Engine (fire-and-forget, non-blocking)
-    try {
-      axios.get(`${PYTHON_API_BASE}/health`, { timeout: 4000 }).catch(() => {});
-    } catch (_) {}
-
     return res.status(200).json({
-      status: dbConnected ? "alive" : "degraded",
-      db: dbConnected,
+      status: "ok",
+      uptime: process.uptime(),
       timestamp: new Date().toISOString(),
       service: "veriproof-backend",
       awake: true,
-      pythonEngine: "warming",
-      lastActivity: global.lastClientActivity,
     });
-  } catch (err) {
-    // Ultra-safe fallback for uptime monitors (always returns 200)
-    return res.status(200).json({
-      status: "alive",
-      timestamp: new Date().toISOString(),
-    });
+  } catch (_) {
+    return res.status(200).json({ status: "ok", uptime: process.uptime() });
   }
 });
 
 app.post(["/api/keep-alive/release", "/keep-alive/release"], (req, res) => {
-  // Candidate / User logged out or closed session
   res.status(200).json({ status: "released", timestamp: new Date().toISOString() });
+});
+
+// Lightweight Render Health Check
+app.get(["/health", "/api/health"], (req, res) => {
+  res.status(200).json({
+    status: "ok",
+    service: "veriproof-backend",
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// Dependency Readiness Check
+app.get(["/ready", "/api/ready"], (req, res) => {
+  const dbConnected = typeof isDBConnected === "function" ? isDBConnected() : false;
+  res.status(200).json({
+    status: dbConnected ? "ready" : "degraded",
+    database: dbConnected ? "connected" : "connecting",
+    service: "veriproof-backend",
+    timestamp: new Date().toISOString(),
+  });
 });
 
 // Basic root route
@@ -359,8 +311,16 @@ app.use("/api/exams", examRoutes);
 app.use("/api/skill-tree", skillTreeRoutes);
 app.use("/api/github", githubRoutes);
 
-// Global Error Handler — never leak internals in production
+// Global Error Handler — ensures CORS headers are always sent even on uncaught errors
 app.use((err, req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, Accept");
+  }
+
   const statusCode = res.statusCode === 200 ? 500 : res.statusCode;
   const isDev = process.env.NODE_ENV !== "production";
   res.status(statusCode).json({
