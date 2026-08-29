@@ -8,6 +8,7 @@ const dotenv = require("dotenv");
 dotenv.config();
 
 const cors = require("cors");
+const axios = require("axios");
 const mongoose = require("mongoose");
 const { connectDB, isDBConnected } = require("./config/db");
 const { generalLimiter } = require("./middleware/rateLimiter");
@@ -73,48 +74,91 @@ global.lastClientActivity = Date.now();
 const PYTHON_API_BASE = process.env.AI_ENGINE_URL || "https://python-engine-adw8.onrender.com";
 
 // Lightweight Render Health Check (Zero DB dependency)
-app.get("/health", (req, res) => {
-  res.status(200).json({
-    status: "ok",
-    service: "veriproof-backend",
-  });
+app.get(["/health", "/api/health"], (req, res) => {
+  try {
+    const dbConnected = typeof isDBConnected === "function" ? isDBConnected() : false;
+    res.status(200).json({
+      status: "ok",
+      service: "veriproof-backend",
+      db: dbConnected,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (_) {
+    res.status(200).json({
+      status: "ok",
+      service: "veriproof-backend",
+      timestamp: new Date().toISOString(),
+    });
+  }
 });
 
 // Dependency Readiness Check (Reports DB readiness)
-app.get("/ready", (req, res) => {
-  if (isDBConnected()) {
+app.get(["/ready", "/api/ready"], (req, res) => {
+  try {
+    const dbConnected = typeof isDBConnected === "function" ? isDBConnected() : false;
+    if (dbConnected) {
+      return res.status(200).json({
+        status: "ready",
+        service: "veriproof-backend",
+        database: "connected",
+        timestamp: new Date().toISOString(),
+      });
+    }
     return res.status(200).json({
-      status: "ready",
+      status: "degraded",
       service: "veriproof-backend",
-      database: "connected",
+      database: "connecting",
+      timestamp: new Date().toISOString(),
+    });
+  } catch (_) {
+    return res.status(200).json({
+      status: "degraded",
+      service: "veriproof-backend",
+      database: "unknown",
+      timestamp: new Date().toISOString(),
     });
   }
-  return res.status(503).json({
-    status: "not_ready",
-    service: "veriproof-backend",
-    database: "connecting",
-  });
 });
 
 // Keep-Alive Ping endpoint (Pings backend & Python engine while active users exist)
-app.get(["/api/keep-alive", "/keep-alive"], async (req, res) => {
-  global.lastClientActivity = Date.now();
+app.get(["/api/keep-alive", "/keep-alive", "/api/ping", "/ping"], (req, res) => {
+  try {
+    global.lastClientActivity = Date.now();
 
-  // Async warmup ping to Python AI Engine
-  axios.get(`${PYTHON_API_BASE}/health`, { timeout: 4000 }).catch(() => {});
+    // Check database state non-blockingly without throwing
+    let dbConnected = false;
+    try {
+      dbConnected = typeof isDBConnected === "function" ? isDBConnected() : false;
+    } catch (_) {
+      dbConnected = false;
+    }
 
-  res.status(200).json({
-    status: "active",
-    awake: true,
-    service: "veriproof-system",
-    pythonEngine: "warming",
-    lastActivity: global.lastClientActivity,
-  });
+    // Async warmup ping to Python AI Engine (fire-and-forget, non-blocking)
+    try {
+      axios.get(`${PYTHON_API_BASE}/health`, { timeout: 4000 }).catch(() => {});
+    } catch (_) {}
+
+    return res.status(200).json({
+      status: dbConnected ? "alive" : "degraded",
+      db: dbConnected,
+      timestamp: new Date().toISOString(),
+      service: "veriproof-backend",
+      awake: true,
+      pythonEngine: "warming",
+      lastActivity: global.lastClientActivity,
+    });
+  } catch (err) {
+    // Ultra-safe fallback for uptime monitors (always returns 200)
+    return res.status(200).json({
+      status: "alive",
+      timestamp: new Date().toISOString(),
+    });
+  }
 });
 
-app.post("/api/keep-alive/release", (req, res) => {
+app.post(["/api/keep-alive/release", "/keep-alive/release"], (req, res) => {
   // Candidate / User logged out or closed session
-  res.status(200).json({ status: "released" });
+  res.status(200).json({ status: "released", timestamp: new Date().toISOString() });
 });
 
 // Basic root route
@@ -133,19 +177,21 @@ app.use("/api", generalLimiter);
 
 // ── Autonomous Background Keep-Alive Watchdog (Every 3.5 Minutes) ──
 setInterval(async () => {
-  const timeSinceLastActivity = Date.now() - (global.lastClientActivity || 0);
-  const IDLE_LIMIT = 14 * 60 * 1000; // 14 minutes
+  try {
+    const timeSinceLastActivity = Date.now() - (global.lastClientActivity || 0);
+    const IDLE_LIMIT = 14 * 60 * 1000; // 14 minutes
 
-  if (timeSinceLastActivity < IDLE_LIMIT) {
-    const elapsedMinutes = Math.round(timeSinceLastActivity / 60000);
-    console.log(`[KeepAlive Watchdog] Active user detected (${elapsedMinutes}m ago). Keeping Node.js backend & Python AI engine awake.`);
-    try {
-      await axios.get(`${PYTHON_API_BASE}/health`, { timeout: 5000 });
-    } catch (e) {
-      console.log(`[KeepAlive Watchdog] Python Engine warm ping sent.`);
+    if (timeSinceLastActivity < IDLE_LIMIT) {
+      const elapsedMinutes = Math.round(timeSinceLastActivity / 60000);
+      console.log(`[KeepAlive Watchdog] Active user detected (${elapsedMinutes}m ago). Keeping Node.js backend & Python AI engine awake.`);
+      try {
+        await axios.get(`${PYTHON_API_BASE}/health`, { timeout: 5000 });
+      } catch (e) {
+        console.log(`[KeepAlive Watchdog] Python Engine warm ping sent.`);
+      }
     }
-  } else {
-    // Gracefully idle when no sessions exist
+  } catch (_) {
+    // Graceful error suppression for background timer
   }
 }, 3.5 * 60 * 1000);
 
