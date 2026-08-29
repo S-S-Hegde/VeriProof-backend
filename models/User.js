@@ -147,7 +147,9 @@ const userSchema = new mongoose.Schema(
     }],
 
     // Resume
-    resumeUrl:      { type: String, default: "" },
+    resumeUrl:          { type: String, default: "" },
+    resumeFileBase64:   { type: String, default: "" },
+    originalFileName:   { type: String, default: "" },
     resumeStatus:   {
       type: String,
       enum: ["Pending Evaluation", "Analyzed", "Verified", "Rejected", "Not_Uploaded", "Not Uploaded"],
@@ -161,6 +163,7 @@ const userSchema = new mongoose.Schema(
       claimsCount:      { type: Number, default: 0 },
       skills:           { type: [String], default: [] },
       status:           { type: String, default: "Analyzed" },
+      truncatedText:    { type: String, default: "" },
     }],
 
     // Notifications / privacy prefs

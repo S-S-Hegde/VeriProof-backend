@@ -11,6 +11,7 @@ const resumeAnalysisSchema = new mongoose.Schema(
     resumeUrl: { type: String, default: "" },
     originalFileName: { type: String, default: "" },
     mimeType: { type: String, default: "" },
+    fileBufferBase64: { type: String, default: "" },
     status: {
       type: String,
       enum: [

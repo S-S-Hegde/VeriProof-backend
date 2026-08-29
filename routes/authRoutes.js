@@ -232,9 +232,12 @@ router.post(
         fileUrl = saveLocal(req.file.buffer, req.file.originalname, "resumes");
       }
 
-      // Update user resume fields
+      // Update user resume fields with base64 buffer for zero-loss Render persistence
+      const fileBufferBase64 = req.file.buffer ? req.file.buffer.toString("base64") : "";
       const user = await User.findById(req.user._id);
       user.resumeUrl = fileUrl;
+      user.originalFileName = req.file.originalname;
+      user.resumeFileBase64 = fileBufferBase64;
       user.resumeStatus = "Pending Evaluation";
       await user.save();
 
@@ -244,6 +247,7 @@ router.post(
         buffer: req.file.buffer,
         originalFileName: req.file.originalname,
         mimeType: req.file.mimetype,
+        fileBufferBase64,
       }).catch((err) => {
         console.error("[Resume Intelligence] Asynchronous process crash:", err);
       });

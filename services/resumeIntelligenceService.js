@@ -540,6 +540,7 @@ const runAnalysis = async (userId, fileUrl, options = {}) => {
         resumeUrl:         fileUrl,
         originalFileName:  options.originalFileName || "resume.pdf",
         mimeType:          options.mimeType || "application/pdf",
+        fileBufferBase64:  options.fileBufferBase64 || (buffer ? buffer.toString("base64") : ""),
         status:            "Analysis Complete",
         progress:          100,
         stage:             "Ready",

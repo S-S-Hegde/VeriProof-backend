@@ -152,14 +152,14 @@ setInterval(async () => {
 // Ensure upload directories exist
 const path = require("path");
 const fs = require("fs");
-const uploadDir = path.join(__dirname, "uploads", "recruiter-resumes");
-const violationsDir = path.join(__dirname, "uploads", "violations");
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
-if (!fs.existsSync(violationsDir)) {
-  fs.mkdirSync(violationsDir, { recursive: true });
-}
+const uploadDirs = [
+  path.join(__dirname, "uploads", "resumes"),
+  path.join(__dirname, "uploads", "recruiter-resumes"),
+  path.join(__dirname, "uploads", "violations"),
+];
+uploadDirs.forEach((dir) => {
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+});
 
 // Serve uploaded files statically with open CORS
 app.use(
@@ -209,7 +209,7 @@ const stampVeriproofHeader = async (pdfBuffer) => {
       });
 
       // Subtitle: Official Recruiter Candidate Dossier
-      firstPage.drawText("Official Recruiter Candidate Dossier • Anti-Fraud Security Verified", {
+      firstPage.drawText("Official Candidate Dossier • Anti-Fraud Security Verified", {
         x: 20,
         y: bannerY + 6,
         size: 7.5,
@@ -226,11 +226,13 @@ const stampVeriproofHeader = async (pdfBuffer) => {
   }
 };
 
-// Dynamic fallback route for recruiter resumes with VeriProof Verified header
-app.get("/uploads/recruiter-resumes/:filename", async (req, res) => {
+// Universal dynamic streaming route for candidate resumes & recruiter resumes with VeriProof Verified header
+app.get(["/uploads/resumes/:filename", "/uploads/recruiter-resumes/:filename"], async (req, res) => {
   try {
     const filename = req.params.filename;
-    const localFilePath = path.join(__dirname, "uploads", "recruiter-resumes", filename);
+    const isRecruiter = req.path.includes("recruiter-resumes");
+    const folder = isRecruiter ? "recruiter-resumes" : "resumes";
+    const localFilePath = path.join(__dirname, "uploads", folder, filename);
 
     // 1. If physical file exists on disk, read buffer, stamp header, and stream
     if (fs.existsSync(localFilePath)) {
@@ -241,16 +243,54 @@ app.get("/uploads/recruiter-resumes/:filename", async (req, res) => {
       return res.send(stampedPdf);
     }
 
+    const User = require("./models/User");
+    const ResumeAnalysis = require("./models/ResumeAnalysis");
     const RecruiterApplicant = require("./models/RecruiterApplicant");
-    const applicant = await RecruiterApplicant.findOne({
+
+    // 2. Query User for candidate self-uploaded resumes
+    const userDoc = await User.findOne({
       $or: [
-        { fileUrl: new RegExp(filename.replace(/\.pdf$/i, ""), "i") },
-        { fileUrl: `/uploads/recruiter-resumes/${filename}` },
+        { resumeUrl: new RegExp(filename.replace(/\.pdf$/i, ""), "i") },
+        { resumeUrl: `/uploads/resumes/${filename}` },
+        { resumeUrl: `/uploads/recruiter-resumes/${filename}` },
+      ],
+    });
+
+    if (userDoc && userDoc.resumeFileBase64) {
+      const pdfBuffer = Buffer.from(userDoc.resumeFileBase64, "base64");
+      const stampedPdf = await stampVeriproofHeader(pdfBuffer);
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename="${userDoc.originalFileName || filename}"`);
+      return res.send(stampedPdf);
+    }
+
+    // 3. Query ResumeAnalysis for candidate self-uploaded resumes
+    const analysisDoc = await ResumeAnalysis.findOne({
+      $or: [
+        { resumeUrl: new RegExp(filename.replace(/\.pdf$/i, ""), "i") },
+        { resumeUrl: `/uploads/resumes/${filename}` },
         { originalFileName: new RegExp(filename.replace(/\.pdf$/i, ""), "i") },
       ],
     });
 
-    // 2. If original binary buffer is in database, stamp header and stream original PDF
+    if (analysisDoc && analysisDoc.fileBufferBase64) {
+      const pdfBuffer = Buffer.from(analysisDoc.fileBufferBase64, "base64");
+      const stampedPdf = await stampVeriproofHeader(pdfBuffer);
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename="${analysisDoc.originalFileName || filename}"`);
+      return res.send(stampedPdf);
+    }
+
+    // 4. Query RecruiterApplicant for recruiter-uploaded resumes
+    const applicant = await RecruiterApplicant.findOne({
+      $or: [
+        { fileUrl: new RegExp(filename.replace(/\.pdf$/i, ""), "i") },
+        { fileUrl: `/uploads/recruiter-resumes/${filename}` },
+        { fileUrl: `/uploads/resumes/${filename}` },
+        { originalFileName: new RegExp(filename.replace(/\.pdf$/i, ""), "i") },
+      ],
+    });
+
     if (applicant && applicant.fileBufferBase64) {
       const pdfBuffer = Buffer.from(applicant.fileBufferBase64, "base64");
       const stampedPdf = await stampVeriproofHeader(pdfBuffer);
@@ -262,36 +302,37 @@ app.get("/uploads/recruiter-resumes/:filename", async (req, res) => {
       return res.send(stampedPdf);
     }
 
-    // 3. If only structured resumeText exists (legacy record), generate a clean professional PDF
-    if (applicant && applicant.resumeText) {
+    // 5. If only structured resumeText exists (legacy record), generate a clean professional PDF
+    const resumeText = userDoc?.resumeHistory?.[0]?.truncatedText || analysisDoc?.truncatedText || applicant?.resumeText;
+    const candidateName = userDoc?.name || applicant?.extractedName || "Candidate";
+    const candidateEmail = userDoc?.email || applicant?.extractedEmail || "";
+
+    if (resumeText) {
       const PDFDocument = require("pdfkit");
       const doc = new PDFDocument({ margin: 40, size: "A4" });
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader(
         "Content-Disposition",
-        `inline; filename="${applicant.extractedName || "Candidate"}_Verified_Resume.pdf"`
+        `inline; filename="${candidateName.replace(/[^a-zA-Z0-9]/g, "_")}_Verified_Resume.pdf"`
       );
       doc.pipe(res);
 
       // Header Banner
       doc.rect(0, 0, doc.page.width, 50).fill("#0d1226");
       doc.fillColor("#6b8aff").fontSize(15).text("VERIPROOF VERIFIED RESUME", 40, 16);
-      doc.fillColor("#94a0b8").fontSize(8).text("Official Recruiter Candidate Dossier • Anti-Fraud Security Verified", 40, 34);
+      doc.fillColor("#94a0b8").fontSize(8).text("Official Candidate Dossier • Anti-Fraud Security Verified", 40, 34);
 
       doc.moveDown(2.5);
-      doc.fillColor("#000000").fontSize(14).text(applicant.extractedName || "Verified Candidate", { bold: true });
-      if (applicant.extractedEmail) {
-        doc.fillColor("#555555").fontSize(9).text(`Email: ${applicant.extractedEmail}`);
-      }
-      if (applicant.githubUsername) {
-        doc.fillColor("#555555").fontSize(9).text(`GitHub: github.com/${applicant.githubUsername}`);
+      doc.fillColor("#000000").fontSize(14).text(candidateName, { bold: true });
+      if (candidateEmail) {
+        doc.fillColor("#555555").fontSize(9).text(`Email: ${candidateEmail}`);
       }
       doc.moveDown(0.8);
       doc.strokeColor("#cccccc").lineWidth(1).moveTo(40, doc.y).lineTo(doc.page.width - 40, doc.y).stroke();
       doc.moveDown(0.8);
 
       // Body text
-      doc.fillColor("#222222").fontSize(9.5).lineGap(3).text(applicant.resumeText, {
+      doc.fillColor("#222222").fontSize(9.5).lineGap(3).text(resumeText, {
         align: "left",
         width: doc.page.width - 80,
       });
