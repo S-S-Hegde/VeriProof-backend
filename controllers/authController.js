@@ -695,7 +695,8 @@ const resetPassword = async (req, res) => {
 // @access  Private
 const deleteUserAccount = async (req, res) => {
   try {
-    const password = req.body?.password || req.headers["x-confirm-password"] || req.query?.password || "DELETE";
+    const password = req.body?.password || req.headers["x-confirm-password"] || req.query?.password || "";
+    const confirmText = req.body?.confirmText || "";
 
     if (!req.user || !req.user._id) {
       return res.status(401).json({ message: "Authentication required. User session is invalid." });
@@ -708,17 +709,22 @@ const deleteUserAccount = async (req, res) => {
     }
 
     // Verify Password or Deletion Confirmation keyword ("DELETE")
-    let isMatch = false;
-    if (password && (password.toUpperCase() === "DELETE" || password.trim() === "DELETE")) {
-      isMatch = true;
-    } else if (user.password && password) {
-      isMatch = await user.matchPassword(password);
-    } else {
-      isMatch = true;
+    let isAuthorized = false;
+    const isDeleteText = 
+      (confirmText && confirmText.trim().toUpperCase() === "DELETE") ||
+      (password && password.trim().toUpperCase() === "DELETE");
+
+    if (isDeleteText) {
+      isAuthorized = true;
+    } else if (!user.password || user.authProvider === "google") {
+      // Google OAuth or token-authenticated user without local password
+      isAuthorized = true;
+    } else if (password) {
+      isAuthorized = await user.matchPassword(password);
     }
 
-    if (!isMatch) {
-      return res.status(401).json({ message: "Incorrect password. Unable to verify identity." });
+    if (!isAuthorized) {
+      return res.status(401).json({ message: "Incorrect password. Authorization failed." });
     }
 
     // Save references to local files before database deletion
