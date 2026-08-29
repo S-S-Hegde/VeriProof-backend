@@ -226,7 +226,7 @@ const stampVeriproofHeader = async (pdfBuffer) => {
   }
 };
 
-// Universal dynamic streaming route for candidate resumes & recruiter resumes with VeriProof Verified header
+// Universal dynamic streaming route for candidate resumes & recruiter resumes (Exact Original Uploaded Format)
 app.get(["/uploads/resumes/:filename", "/uploads/recruiter-resumes/:filename"], async (req, res) => {
   try {
     const filename = req.params.filename;
@@ -234,13 +234,12 @@ app.get(["/uploads/resumes/:filename", "/uploads/recruiter-resumes/:filename"], 
     const folder = isRecruiter ? "recruiter-resumes" : "resumes";
     const localFilePath = path.join(__dirname, "uploads", folder, filename);
 
-    // 1. If physical file exists on disk, read buffer, stamp header, and stream
+    // 1. If physical file exists on disk, stream original exact binary PDF bytes
     if (fs.existsSync(localFilePath)) {
       const fileBytes = fs.readFileSync(localFilePath);
-      const stampedPdf = await stampVeriproofHeader(fileBytes);
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
-      return res.send(stampedPdf);
+      return res.send(fileBytes);
     }
 
     const User = require("./models/User");
@@ -258,10 +257,9 @@ app.get(["/uploads/resumes/:filename", "/uploads/recruiter-resumes/:filename"], 
 
     if (userDoc && userDoc.resumeFileBase64) {
       const pdfBuffer = Buffer.from(userDoc.resumeFileBase64, "base64");
-      const stampedPdf = await stampVeriproofHeader(pdfBuffer);
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader("Content-Disposition", `inline; filename="${userDoc.originalFileName || filename}"`);
-      return res.send(stampedPdf);
+      return res.send(pdfBuffer);
     }
 
     // 3. Query ResumeAnalysis for candidate self-uploaded resumes
@@ -275,10 +273,9 @@ app.get(["/uploads/resumes/:filename", "/uploads/recruiter-resumes/:filename"], 
 
     if (analysisDoc && analysisDoc.fileBufferBase64) {
       const pdfBuffer = Buffer.from(analysisDoc.fileBufferBase64, "base64");
-      const stampedPdf = await stampVeriproofHeader(pdfBuffer);
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader("Content-Disposition", `inline; filename="${analysisDoc.originalFileName || filename}"`);
-      return res.send(stampedPdf);
+      return res.send(pdfBuffer);
     }
 
     // 4. Query RecruiterApplicant for recruiter-uploaded resumes
@@ -293,52 +290,12 @@ app.get(["/uploads/resumes/:filename", "/uploads/recruiter-resumes/:filename"], 
 
     if (applicant && applicant.fileBufferBase64) {
       const pdfBuffer = Buffer.from(applicant.fileBufferBase64, "base64");
-      const stampedPdf = await stampVeriproofHeader(pdfBuffer);
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader(
         "Content-Disposition",
         `inline; filename="${applicant.originalFileName || filename}"`
       );
-      return res.send(stampedPdf);
-    }
-
-    // 5. If only structured resumeText exists (legacy record), generate a clean professional PDF
-    const resumeText = userDoc?.resumeHistory?.[0]?.truncatedText || analysisDoc?.truncatedText || applicant?.resumeText;
-    const candidateName = userDoc?.name || applicant?.extractedName || "Candidate";
-    const candidateEmail = userDoc?.email || applicant?.extractedEmail || "";
-
-    if (resumeText) {
-      const PDFDocument = require("pdfkit");
-      const doc = new PDFDocument({ margin: 40, size: "A4" });
-      res.setHeader("Content-Type", "application/pdf");
-      res.setHeader(
-        "Content-Disposition",
-        `inline; filename="${candidateName.replace(/[^a-zA-Z0-9]/g, "_")}_Verified_Resume.pdf"`
-      );
-      doc.pipe(res);
-
-      // Header Banner
-      doc.rect(0, 0, doc.page.width, 50).fill("#0d1226");
-      doc.fillColor("#6b8aff").fontSize(15).text("VERIPROOF VERIFIED RESUME", 40, 16);
-      doc.fillColor("#94a0b8").fontSize(8).text("Official Candidate Dossier • Anti-Fraud Security Verified", 40, 34);
-
-      doc.moveDown(2.5);
-      doc.fillColor("#000000").fontSize(14).text(candidateName, { bold: true });
-      if (candidateEmail) {
-        doc.fillColor("#555555").fontSize(9).text(`Email: ${candidateEmail}`);
-      }
-      doc.moveDown(0.8);
-      doc.strokeColor("#cccccc").lineWidth(1).moveTo(40, doc.y).lineTo(doc.page.width - 40, doc.y).stroke();
-      doc.moveDown(0.8);
-
-      // Body text
-      doc.fillColor("#222222").fontSize(9.5).lineGap(3).text(resumeText, {
-        align: "left",
-        width: doc.page.width - 80,
-      });
-
-      doc.end();
-      return;
+      return res.send(pdfBuffer);
     }
 
     return res.status(404).send("Document not available on server.");
