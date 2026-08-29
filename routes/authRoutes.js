@@ -278,19 +278,19 @@ router.get("/profile/resume-analysis", protect, async (req, res) => {
       $or: [
         { candidateId: req.user._id },
         { candidateId: String(req.user._id) }
-      ],
-      active: true 
-    });
+      ]
+    }).sort({ updatedAt: -1, createdAt: -1 });
 
     const isUserAnalyzed = req.user.resumeStatus === "Analyzed" || ["repository_analysis", "technical_assessment", "verification_complete"].includes(req.user.pipelineStage);
 
     // If an analysis document already exists for this candidate
     if (analysis) {
-      const isComplete = analysis.status === "Analysis Complete" || analysis.status === "Completed" || isUserAnalyzed;
+      const isFailed = analysis.status === "Email Mismatch" || analysis.status === "Analysis Failed" || analysis.status === "Failed";
+      const isComplete = !isFailed && (analysis.status === "Analysis Complete" || analysis.status === "Completed" || isUserAnalyzed);
       return res.json({
-        status: isComplete ? "Analysis Complete" : (analysis.status || "Parsing"),
-        progress: isComplete ? 100 : (analysis.progress !== undefined ? analysis.progress : 100),
-        stage: isComplete ? "Ready" : (analysis.stage || "Ready"),
+        status: isFailed ? analysis.status : (isComplete ? "Analysis Complete" : (analysis.status || "Parsing")),
+        progress: isFailed ? 0 : (isComplete ? 100 : (analysis.progress !== undefined ? analysis.progress : 50)),
+        stage: isFailed ? (analysis.stage || "Verification Blocked") : (isComplete ? "Ready" : (analysis.stage || "Analyzing...")),
         estimatedRemainingStage: isComplete ? "Complete" : (analysis.estimatedRemainingStage || "Complete"),
         claims: analysis.claims || { skills: [] },
         analysis: analysis.analysis || {},
