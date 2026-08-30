@@ -16,9 +16,9 @@ const User = require("../models/User");
  * Returns current GitHub analysis status for the logged-in candidate.
  * Used by the frontend to poll and update the Verification Journey live.
  */
-router.get("/status", protect, (req, res) => {
+router.get("/status", protect, async (req, res) => {
   try {
-    const status = getStatus(req.user._id);
+    const status = await getStatus(req.user._id);
     res.json(status);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -49,7 +49,7 @@ router.post("/trigger", protect, async (req, res) => {
       });
     }
 
-    const current = getStatus(req.user._id);
+    const current = await getStatus(req.user._id);
     if (current.status === "running") {
       return res.json({
         message: "GitHub analysis is already running.",

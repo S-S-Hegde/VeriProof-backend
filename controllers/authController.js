@@ -389,12 +389,18 @@ const getUserProfile = async (req, res) => {
       }
     }
 
+    const hasProjects = await Project.exists({ user: user._id });
+    if (hasProjects && user.pipelineStage === "repository_analysis") {
+      user.pipelineStage = "technical_assessment";
+      await user.save();
+    }
+
     const p = user.pipelineStage || "resume_upload";
 
     const workflowState = {
       hasResume: isInvited || !!user.resumeUrl || ["resume_analysis", "repository_analysis", "project_intelligence", "technical_assessment", "candidate_complete", "waiting_for_recruiter", "verification_complete"].includes(p),
       isResumeAnalyzed: isInvited || ["repository_analysis", "project_intelligence", "technical_assessment", "candidate_complete", "waiting_for_recruiter", "verification_complete"].includes(p),
-      hasRepoAnalysis: isInvited || ["project_intelligence", "technical_assessment", "candidate_complete", "waiting_for_recruiter", "verification_complete"].includes(p),
+      hasRepoAnalysis: isInvited || Boolean(hasProjects) || ["project_intelligence", "technical_assessment", "candidate_complete", "waiting_for_recruiter", "verification_complete"].includes(p),
       hasExamPassed: ["candidate_complete", "waiting_for_recruiter", "verification_complete"].includes(p),
       hasVerificationRequest: isInvited,
     };
