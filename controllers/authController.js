@@ -1,5 +1,6 @@
 const User = require("../models/User");
 const Project = require("../models/Project");
+const Certificate = require("../models/Certificate");
 const VerificationResult = require("../models/VerificationResult");
 const InvitationRegistry = require("../models/InvitationRegistry");
 const ResumeAnalysis = require("../models/ResumeAnalysis");
@@ -416,10 +417,12 @@ const getUserProfile = async (req, res) => {
       await user.save();
     }
 
+    const certificates = await Certificate.find({ user: user._id }).sort({ createdAt: -1 });
+
     const p = user.pipelineStage || "resume_upload";
 
     const hasExamPassed =
-      Boolean(user.certificates && user.certificates.length > 0) ||
+      Boolean(certificates && certificates.length > 0) ||
       user.examStatus === "Attended" ||
       user.examStatus === "Completed" ||
       ["candidate_complete", "waiting_for_recruiter", "verification_complete"].includes(p);
@@ -439,6 +442,7 @@ const getUserProfile = async (req, res) => {
 
     const userObj = user.toObject();
     userObj.workflowState = workflowState;
+    userObj.certificates = certificates;
 
     res.json(userObj);
   } catch (error) {

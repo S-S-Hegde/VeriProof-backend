@@ -20,6 +20,7 @@ const verifyRoutes  = require("./routes/verifyRoutes");
 const examRoutes    = require("./routes/examRoutes");
 const skillTreeRoutes = require("./routes/skillTreeRoutes");
 const githubRoutes  = require("./routes/githubRoutes");
+const certificateRoutes = require("./routes/certificateRoutes");
 
 // Initialize DB connection asynchronously (non-blocking)
 connectDB();
@@ -160,6 +161,7 @@ const uploadDirs = [
   path.join(__dirname, "uploads", "resumes"),
   path.join(__dirname, "uploads", "recruiter-resumes"),
   path.join(__dirname, "uploads", "violations"),
+  path.join(__dirname, "uploads", "certificates"),
 ];
 uploadDirs.forEach((dir) => {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -316,6 +318,7 @@ app.use("/api/verify", verifyRoutes);
 app.use("/api/exams", examRoutes);
 app.use("/api/skill-tree", skillTreeRoutes);
 app.use("/api/github", githubRoutes);
+app.use("/api/certificates", certificateRoutes);
 
 // Global Error Handler — ensures CORS headers are always sent even on uncaught errors
 app.use((err, req, res, next) => {
