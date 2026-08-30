@@ -389,6 +389,27 @@ const getUserProfile = async (req, res) => {
       }
     }
 
+    // Auto-hydrate candidate resume if on file in ResumeAnalysis or history
+    if (!user.resumeUrl || !user.resumeStatus || user.resumeStatus === "Not Uploaded" || user.resumeStatus === "Not Submitted") {
+      const latestAnalysis = await ResumeAnalysis.findOne({ candidateId: user._id }).sort({ createdAt: -1 });
+      if (latestAnalysis && latestAnalysis.resumeUrl) {
+        user.resumeUrl = latestAnalysis.resumeUrl;
+        user.resumeStatus = latestAnalysis.status === "Analysis Complete" ? "Analyzed" : (latestAnalysis.status || "Analyzed");
+        if (!user.originalFileName && latestAnalysis.originalFileName) {
+          user.originalFileName = latestAnalysis.originalFileName;
+        }
+        await user.save();
+      } else if (user.resumeHistory && user.resumeHistory.length > 0) {
+        const latestHistory = user.resumeHistory[user.resumeHistory.length - 1];
+        if (latestHistory && latestHistory.resumeUrl) {
+          user.resumeUrl = latestHistory.resumeUrl;
+          user.resumeStatus = latestHistory.status || "Analyzed";
+          user.originalFileName = latestHistory.originalFileName || user.originalFileName;
+          await user.save();
+        }
+      }
+    }
+
     const hasProjects = await Project.exists({ user: user._id });
     if (hasProjects && user.pipelineStage === "repository_analysis") {
       user.pipelineStage = "technical_assessment";
