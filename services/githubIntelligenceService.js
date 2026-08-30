@@ -249,7 +249,8 @@ const upsertProject = async (userId, repo, repoDetails, repoIntelligence, docRes
       "githubStats.forks":     repo.forks_count || 0,
       aiGenerated: aiData,
       sourceType:  "github_auto",
-      status:      "Published",
+      status:      "Verified",
+      isVerified:  true,
     },
   };
 

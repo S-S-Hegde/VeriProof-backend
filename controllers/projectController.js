@@ -274,7 +274,8 @@ const getMyAnalytics = async (req, res) => {
     // 2. Project status distribution
     const statusTally = { Published: 0, Verified: 0, Pending: 0, Draft: 0 };
     projects.forEach((p) => {
-      const s = p.isVerified ? "Verified" : p.status || "Published";
+      const isV = p.isVerified || p.status === "Verified" || Boolean(p.githubStats?.commitsCount > 0) || Boolean(p.aiGenerated?.analyzedAt);
+      const s = isV ? "Verified" : (p.status || "Published");
       statusTally[s] = (statusTally[s] || 0) + 1;
     });
     const statusData = Object.entries(statusTally)
@@ -304,14 +305,17 @@ const getMyAnalytics = async (req, res) => {
     // 5. Timeline: project creation dates
     const timeline = projects
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-      .map((p) => ({
-        _id: p._id,
-        title: p.title,
-        isVerified: p.isVerified,
-        status: p.status,
-        createdAt: p.createdAt,
-        technologies: p.technologies,
-      }));
+      .map((p) => {
+        const isV = p.isVerified || p.status === "Verified" || Boolean(p.githubStats?.commitsCount > 0) || Boolean(p.aiGenerated?.analyzedAt);
+        return {
+          _id: p._id,
+          title: p.title,
+          isVerified: isV,
+          status: isV ? "Verified" : (p.status || "Published"),
+          createdAt: p.createdAt,
+          technologies: p.technologies,
+        };
+      });
 
     // 6. GitHub stars summary from githubStats languages
     const allLanguages = {};
