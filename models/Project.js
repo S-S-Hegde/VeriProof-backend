@@ -25,6 +25,15 @@ const attachmentSchema = new mongoose.Schema({
   uploadedAt:   { type: Date, default: Date.now }
 }, { _id: true });
 
+const linkedRepoSchema = new mongoose.Schema({
+  name:          { type: String, required: true },
+  role:          { type: String, default: "Service" }, // "Frontend", "Backend", "AI / Python Engine", "Microservice"
+  repositoryUrl: { type: String, required: true },
+  technologies:  { type: [String], default: [] },
+  isVerified:    { type: Boolean, default: true },
+  commitsCount:  { type: Number, default: 0 },
+}, { _id: true });
+
 const projectSchema = new mongoose.Schema(
   {
     user: {
@@ -40,6 +49,8 @@ const projectSchema = new mongoose.Schema(
     images:       { type: [String] },
     featuredSnippets: [snippetSchema],
     attachments:  [attachmentSchema],
+    isComposite:  { type: Boolean, default: false },
+    linkedRepositories: [linkedRepoSchema],
     cgpa:         { type: String, default: "" },
     rankings:     { type: rankingSchema, default: () => ({}) },
     githubStats: {

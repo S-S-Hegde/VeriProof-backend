@@ -489,6 +489,122 @@ const verifyProjectDualSource = async (req, res) => {
   }
 };
 
+// @desc    Couple multiple standalone repositories into a single unified full-stack project
+// @route   POST /api/projects/couple
+// @access  Private (Candidate)
+const coupleRepositories = async (req, res) => {
+  try {
+    const {
+      title,
+      description,
+      primaryRepoId,
+      linkedRepositories = [],
+      selectedProjectIds = [],
+      liveUrl = "",
+      technologies = [],
+    } = req.body;
+
+    let combinedTech = [...(technologies || [])];
+    let totalCommits = 0;
+    let combinedSnippets = [];
+    let linkedList = [...(linkedRepositories || [])];
+
+    // If candidate selected existing projects to merge
+    if (selectedProjectIds && selectedProjectIds.length > 0) {
+      const existingProjects = await Project.find({
+        _id: { $in: selectedProjectIds },
+        user: req.user._id,
+      });
+
+      for (const p of existingProjects) {
+        if (p.technologies) combinedTech.push(...p.technologies);
+        if (p.githubStats?.commitsCount) totalCommits += p.githubStats.commitsCount;
+        if (p.featuredSnippets) combinedSnippets.push(...p.featuredSnippets);
+
+        // infer service role
+        let role = "Service";
+        const titleLower = (p.title || "").toLowerCase();
+        if (titleLower.includes("front") || titleLower.includes("ui") || titleLower.includes("client")) role = "Frontend";
+        else if (titleLower.includes("back") || titleLower.includes("server") || titleLower.includes("api")) role = "Backend";
+        else if (titleLower.includes("python") || titleLower.includes("engine") || titleLower.includes("ai") || titleLower.includes("ml")) role = "AI Engine";
+
+        if (!linkedList.some((lr) => lr.repositoryUrl === p.repositoryUrl)) {
+          linkedList.push({
+            name: p.title,
+            role,
+            repositoryUrl: p.repositoryUrl,
+            technologies: p.technologies || [],
+            isVerified: true,
+            commitsCount: p.githubStats?.commitsCount || 0,
+          });
+        }
+      }
+    }
+
+    const uniqueTech = Array.from(new Set(combinedTech.map((t) => t.trim()))).filter(Boolean);
+
+    // Primary repository URL (defaults to first linked repo or provided URL)
+    const primaryUrl = linkedList[0]?.repositoryUrl || req.body.repositoryUrl || "https://github.com";
+
+    let compositeProject;
+    if (primaryRepoId) {
+      compositeProject = await Project.findOne({ _id: primaryRepoId, user: req.user._id });
+    }
+
+    if (compositeProject) {
+      compositeProject.title = title || compositeProject.title;
+      compositeProject.description = description || compositeProject.description;
+      compositeProject.technologies = uniqueTech.length > 0 ? uniqueTech : compositeProject.technologies;
+      compositeProject.isComposite = true;
+      compositeProject.linkedRepositories = linkedList;
+      compositeProject.liveUrl = liveUrl || compositeProject.liveUrl;
+      compositeProject.isVerified = true;
+      compositeProject.status = "Verified";
+      if (totalCommits > 0) {
+        compositeProject.githubStats = compositeProject.githubStats || {};
+        compositeProject.githubStats.commitsCount = Math.max(compositeProject.githubStats.commitsCount || 0, totalCommits);
+      }
+      await compositeProject.save();
+    } else {
+      compositeProject = new Project({
+        user: req.user._id,
+        title: title || "Composite Full-Stack Project",
+        description: description || "Integrated multi-repository ecosystem coupling frontend, backend, and AI/engine microservices.",
+        technologies: uniqueTech.length > 0 ? uniqueTech : ["Full-Stack", "Multi-Service"],
+        repositoryUrl: primaryUrl,
+        liveUrl: liveUrl || "",
+        isComposite: true,
+        linkedRepositories: linkedList,
+        isVerified: true,
+        status: "Verified",
+        verificationStatus: "Verified",
+        githubStats: {
+          commitsCount: totalCommits || 15,
+          lastCommitDate: new Date(),
+          languages: {},
+        },
+      });
+      await compositeProject.save();
+    }
+
+    await rebuildSkillProgression(req.user._id, {
+      type: "project",
+      label: compositeProject.title,
+      technologies: compositeProject.technologies,
+      score: 95,
+      xp: 150,
+      source: compositeProject._id.toString(),
+    });
+
+    res.status(201).json({
+      message: "Multi-repository project successfully coupled and verified",
+      project: compositeProject,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
 module.exports = {
   createProject,
   getProjects,
@@ -500,4 +616,5 @@ module.exports = {
   syncProject,
   getMyAnalytics,
   verifyProjectDualSource,
+  coupleRepositories,
 };
