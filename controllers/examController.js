@@ -12,6 +12,11 @@ const {
   rebuildSkillProgression,
 } = require("../services/skillProgressionService");
 const { assembleExam } = require("../services/questionBankService");
+const { parseJobDescription } = require("../services/jdParsingService");
+const {
+  generateProjectDefense,
+  evaluateDefenseAnswers,
+} = require("../services/projectDefenseService");
 
 const PYTHON_API_BASE = process.env.AI_ENGINE_URL || "https://python-engine-adw8.onrender.com";
 
@@ -101,6 +106,8 @@ const startExam = async (req, res) => {
     let jobDifficulty = "intermediate";
     let jobTitle = "Senior Full Stack Software Engineer";
     let jobDescription = "Design, develop, and test scalable web applications and APIs.";
+    let extractedCoreSkills = [];
+    let extractedProjectContext = [];
 
     let job = null;
     const jobId = (req.query && req.query.jobId) || (req.body && req.body.jobId) || (invitation && invitation.jobId) || (applicant && applicant.jobId) || null;
@@ -111,6 +118,21 @@ const startExam = async (req, res) => {
         jobDifficulty = job.difficulty || "intermediate";
         if (job.title) jobTitle = job.title;
         if (job.description) jobDescription = job.description;
+      }
+    }
+
+    // ── Phase 1: JD Ingestion & Semantic Splitting ─────────────────────
+    if (jobDescription) {
+      try {
+        const parsedJD = await parseJobDescription(jobDescription);
+        if (parsedJD.core_skills && parsedJD.core_skills.length > 0) {
+          extractedCoreSkills = parsedJD.core_skills;
+        }
+        if (parsedJD.project_context && parsedJD.project_context.length > 0) {
+          extractedProjectContext = parsedJD.project_context;
+        }
+      } catch (jdErr) {
+        console.warn("[startExam] JD semantic parsing note:", jdErr.message);
       }
     }
 
@@ -148,9 +170,9 @@ const startExam = async (req, res) => {
       }
     }
 
-    // ── Resolve question count (Job assessmentSettings > query count > default 40) ──
-    let targetQuestionCount = job?.assessmentSettings?.questionCount || 40;
-    const allowedCounts = [10, 20, 30, 35, 40, 50, 60];
+    // ── Resolve question count (Defaults to 20 for Stage 1 Token-Free Baseline Filter) ──
+    let targetQuestionCount = job?.assessmentSettings?.questionCount || 20;
+    const allowedCounts = [10, 15, 20, 25, 30, 35, 40, 50, 60];
     if (!isInvitedCandidate && req.query.count) {
       const parsedCount = parseInt(req.query.count, 10);
       if (allowedCounts.includes(parsedCount)) {
@@ -159,24 +181,21 @@ const startExam = async (req, res) => {
     }
 
     const jdRatio = job?.assessmentSettings?.jdRatio || 0.70;
-    const coreQuota = Math.max(1, Math.round(targetQuestionCount * jdRatio)); // e.g. 28 questions for 40
-    const electiveQuota = Math.max(1, targetQuestionCount - coreQuota);       // e.g. 12 questions for 40
-    const durationMinutes = job?.assessmentSettings?.durationMinutes || Math.max(20, Math.round(targetQuestionCount * 1.15));
+    const durationMinutes = job?.assessmentSettings?.durationMinutes || Math.max(15, Math.round(targetQuestionCount * 1.15));
 
     if (jobTargetSkills.length === 0) {
-      jobTargetSkills = isInvitedCandidate
-        ? ["Software Engineering", "Full Stack Development", "API Design", "Databases"]
-        : (analysisSkills.slice(0, 4).length > 0 ? analysisSkills.slice(0, 4) : ["JavaScript", "Node.js", "SQL", "React", "Python"]);
+      jobTargetSkills = extractedCoreSkills.length > 0
+        ? extractedCoreSkills
+        : (isInvitedCandidate
+          ? ["Software Engineering", "Full Stack Development", "API Design", "Databases"]
+          : (analysisSkills.slice(0, 4).length > 0 ? analysisSkills.slice(0, 4) : ["JavaScript", "Node.js", "SQL", "React", "Python"]));
+    } else if (extractedCoreSkills.length > 0) {
+      jobTargetSkills = [...new Set([...jobTargetSkills, ...extractedCoreSkills])];
     }
 
     const claimedSkills = rawClaimedSkills.length > 0 ? rawClaimedSkills : jobTargetSkills;
 
-    const formattedClaims = [...new Set([...jobTargetSkills, ...claimedSkills])].map((skill) => ({
-      skill,
-      context: (invitation || applicant || jobId) ? `Job Alignment Assessment (${jobTitle})` : "Practice Assessment",
-    }));
-
-    // ── Token-Free Dynamic Question Assembly from QuestionBank ────────
+    // ── Phase 2: Stage 1 (Token-Free Baseline Filter Assembly) ─────────
     const requiredSkills = [...new Set([...jobTargetSkills, ...claimedSkills])];
     const finalQuestions = await assembleExam(requiredSkills, targetQuestionCount, jdRatio);
 
@@ -188,6 +207,7 @@ const startExam = async (req, res) => {
       recruiterId: job?.recruiterId || invitation?.recruiterId || applicant?.recruiterId || null,
       topic: jobTitle || ((invitation || applicant) ? "Job Alignment Assessment" : "Dynamic Practice Exam"),
       skills: requiredSkills,
+      projectContext: extractedProjectContext.length > 0 ? extractedProjectContext : [jobDescription],
       passingScore: 70,
       status: "In Progress",
       questions: finalQuestions.map((q) => ({
@@ -520,6 +540,62 @@ const submitExam = async (req, res) => {
     const job = targetJobId ? await Job.findById(targetJobId) : null;
     const jobTitle = job?.title || exam?.jobTitle || exam?.topic || "Technical Assessment";
 
+    // ── Phase 4: Multidimensional Triangulation & Discrepancy Engine ──
+    const stage1Score = score;
+    let stage2Score = stage1Score;
+    let defenseBreakdown = [];
+    let defenseFeedback = "";
+
+    const defenseInput = req.body.defenseSubmissions || req.body.stage2Answers || null;
+    if (Array.isArray(defenseInput) && defenseInput.length > 0) {
+      try {
+        const defenseEval = await evaluateDefenseAnswers(
+          defenseInput,
+          exam?.projectContext ? exam.projectContext.join("; ") : (job?.description || "")
+        );
+        stage2Score = defenseEval.examDefenseScore;
+        defenseBreakdown = defenseEval.breakdown || [];
+        defenseFeedback = defenseEval.overallFeedback || "";
+      } catch (defErr) {
+        console.warn("[submitExam] Stage 2 defense evaluation warning:", defErr.message);
+      }
+    }
+
+    // Combine Stage 1 syntax filter and Stage 2 adaptive project defense
+    const examDefenseScore = Array.isArray(defenseInput) && defenseInput.length > 0
+      ? Math.round((stage1Score * 0.5) + (stage2Score * 0.5))
+      : stage1Score;
+
+    // 1. Calculate claimScore (0-100): Skills declared on resume vs JD alignment
+    const candidateSkills = (user?.skills || []).map(s => String(s).toLowerCase());
+    const requiredSkillsList = (exam?.skills || ["Software Engineering"]).map(s => String(s).toLowerCase());
+    let matchedSkillsCount = 0;
+    requiredSkillsList.forEach(reqSkill => {
+      if (candidateSkills.some(cs => cs.includes(reqSkill) || reqSkill.includes(cs))) {
+        matchedSkillsCount++;
+      }
+    });
+    const claimScore = Math.min(100, Math.max(30, Math.round((matchedSkillsCount / Math.max(1, requiredSkillsList.length)) * 100)));
+
+    // 2. Calculate repoEvidenceScore (0-100): AST complexity, commit health, and originality
+    const userProjects = await Project.find({ user: req.user._id }).lean();
+    let repoEvidenceScore = 40;
+    if (userProjects && userProjects.length > 0) {
+      const totalCommits = userProjects.reduce((acc, p) => acc + (p.githubStats?.commitsCount || 0), 0);
+      const hasVerifiedProj = userProjects.some(p => p.isVerified || p.verificationStatus === "Verified");
+      const hasAst = userProjects.some(p => p.astAnalysis && p.astAnalysis.complexityScore);
+      repoEvidenceScore = Math.min(100, Math.max(45, (totalCommits > 15 ? 75 : 60) + (hasVerifiedProj ? 15 : 0) + (hasAst ? 10 : 0)));
+    } else if (req.user.githubUsername) {
+      repoEvidenceScore = 65;
+    }
+
+    // 3. Triangulation Divergence Formula: |repoEvidenceScore - examDefenseScore|
+    const { divergence, classification, summary: triangulationSummary } = VerificationResult.calculateClassification(
+      claimScore,
+      repoEvidenceScore,
+      examDefenseScore
+    );
+
     let vResult = await VerificationResult.findOne({
       candidateId: req.user._id,
       ...(targetJobId ? { jobId: targetJobId } : {}),
@@ -529,14 +605,31 @@ const submitExam = async (req, res) => {
       vResult = await VerificationResult.findOne({ candidateId: req.user._id }).sort({ createdAt: -1 });
     }
 
-    const alignScore = vResult?.alignmentScore || 85;
-    const compositeTrustScore = Math.min(100, Math.max(0, Math.round((alignScore * 0.4) + (score * 0.4) + 20)));
+    const alignScore = vResult?.alignmentScore || claimScore || 85;
+    const compositeTrustScore = Math.min(100, Math.max(0, Math.round((alignScore * 0.3) + (repoEvidenceScore * 0.3) + (examDefenseScore * 0.4))));
 
     if (isFirstOfficialAttempt) {
       if (vResult) {
-        vResult.examScore = score;
+        vResult.examScore = examDefenseScore;
         vResult.trustScore = compositeTrustScore;
         vResult.status = isPassed ? "Verified" : "Failed";
+        vResult.claimScore = claimScore;
+        vResult.repoEvidenceScore = repoEvidenceScore;
+        vResult.examDefenseScore = examDefenseScore;
+        vResult.stage1Score = stage1Score;
+        vResult.stage2Score = stage2Score;
+        vResult.divergence = divergence;
+        vResult.classification = classification;
+        vResult.triangulationSummary = triangulationSummary;
+        if (Array.isArray(defenseInput) && defenseInput.length > 0) {
+          vResult.defenseQuestions = defenseInput.map((d, i) => ({
+            scenario_question: d.scenario_question,
+            candidate_answer: d.candidate_answer,
+            score: defenseBreakdown[i]?.score || stage2Score,
+            feedback: defenseBreakdown[i]?.feedback || defenseFeedback,
+            gradedAt: new Date(),
+          }));
+        }
         if (!vResult.alignmentScore) vResult.alignmentScore = alignScore;
         if (targetJobId && !vResult.jobId) vResult.jobId = targetJobId;
         await vResult.save();
@@ -544,9 +637,18 @@ const submitExam = async (req, res) => {
         vResult = await VerificationResult.create({
           candidateId: req.user._id,
           jobId: targetJobId,
-          examScore: score,
+          examScore: examDefenseScore,
           alignmentScore: alignScore,
           trustScore: compositeTrustScore,
+          claimScore,
+          repoEvidenceScore,
+          examDefenseScore,
+          stage1Score,
+          stage2Score,
+          divergence,
+          classification,
+          triangulationSummary,
+          defenseQuestions: Array.isArray(defenseInput) ? defenseInput : [],
           status: isPassed ? "Verified" : "Failed",
           matchedSkills: exam?.skills || ["Software Engineering"],
           missingSkills: [],
@@ -556,9 +658,26 @@ const submitExam = async (req, res) => {
       // Update ResumeAnalysis with verification & trust score
       await ResumeAnalysis.findOneAndUpdate(
         { candidateId: req.user._id },
-        { status: "Analysis Complete", verificationScore: score, trustScore: compositeTrustScore },
+        {
+          status: "Analysis Complete",
+          verificationScore: examDefenseScore,
+          trustScore: compositeTrustScore,
+          classification,
+          divergence,
+        },
         { upsert: true, new: true }
       );
+    }
+
+    if (exam) {
+      exam.stage1Score = stage1Score;
+      exam.stage2Score = stage2Score;
+      exam.claimScore = claimScore;
+      exam.repoEvidenceScore = repoEvidenceScore;
+      exam.examDefenseScore = examDefenseScore;
+      exam.divergence = divergence;
+      exam.classification = classification;
+      await exam.save();
     }
 
     // Update User model trustScore & verificationScore
@@ -566,7 +685,7 @@ const submitExam = async (req, res) => {
       if (!user.skillProgress) user.skillProgress = {};
       if (isFirstOfficialAttempt) {
         user.skillProgress.trustScore = compositeTrustScore;
-        user.skillProgress.verificationScore = score;
+        user.skillProgress.verificationScore = examDefenseScore;
       }
       user.skillProgress.completedAssessments = (user.skillProgress.completedAssessments || 0) + 1;
       user.pipelineStage = "verification_complete";
@@ -591,9 +710,11 @@ const submitExam = async (req, res) => {
       {
         status: "Completed",
         candidateUser: req.user._id,
-        examScore: score,
+        examScore: examDefenseScore,
         examStatus: "Attended",
-        reasoning: `Assessment completed for ${jobTitle}. Score: ${score}%. Verification Verdict: ${isPassed ? 'VERIFIED' : 'NEEDS IMPROVEMENT'}. Composite Trust Score: ${compositeTrustScore}%.`
+        classification,
+        divergence,
+        reasoning: `Assessment completed for ${jobTitle}. Defense Score: ${examDefenseScore}%. Classification: ${classification} (Divergence Index: ${divergence.toFixed(1)}). Summary: ${triangulationSummary}`
       }
     );
 
@@ -1363,6 +1484,62 @@ const recordViolationSnapshot = async (req, res) => {
   }
 };
 
+// @desc    Generate Stage 2 Adaptive Project Defense scenario questions
+// @route   POST /api/exams/project-defense
+// @access  Private
+const getProjectDefenseQuestions = async (req, res) => {
+  try {
+    const candidateId = req.user._id;
+    const { jobId, jdContext } = req.body;
+
+    let context = jdContext || "";
+    if (!context && jobId) {
+      const Job = require("../models/Job");
+      const job = await Job.findById(jobId);
+      if (job && job.description) {
+        const parsed = await parseJobDescription(job.description);
+        context = parsed.project_context;
+      }
+    }
+
+    if (!context) {
+      const activeExam = await Exam.findOne({ candidateId, status: "In Progress" }).sort({ createdAt: -1 });
+      if (activeExam && activeExam.projectContext && activeExam.projectContext.length > 0) {
+        context = activeExam.projectContext;
+      }
+    }
+
+    const questions = await generateProjectDefense(candidateId, context);
+    return res.json({
+      success: true,
+      questions,
+    });
+  } catch (err) {
+    console.error("[getProjectDefenseQuestions Error]:", err.message);
+    res.status(500).json({ success: false, message: "Failed to generate project defense questions." });
+  }
+};
+
+// @desc    Zero-shot grading endpoint for Stage 2 defense answers
+// @route   POST /api/exams/project-defense/evaluate
+// @access  Private
+const evaluateDefenseSubmission = async (req, res) => {
+  try {
+    const { answers = [], jdContext = "" } = req.body;
+    if (!Array.isArray(answers) || answers.length === 0) {
+      return res.status(400).json({ success: false, message: "Answers array required." });
+    }
+    const result = await evaluateDefenseAnswers(answers, jdContext);
+    return res.json({
+      success: true,
+      ...result,
+    });
+  } catch (err) {
+    console.error("[evaluateDefenseSubmission Error]:", err.message);
+    res.status(500).json({ success: false, message: "Failed to evaluate defense answers." });
+  }
+};
+
 module.exports = {
   startExam,
   submitExam,
@@ -1370,5 +1547,8 @@ module.exports = {
   analyzeProctorSnapshot,
   recordProctorViolation,
   recordViolationSnapshot,
+  getProjectDefenseQuestions,
+  evaluateDefenseSubmission,
 };
+
 

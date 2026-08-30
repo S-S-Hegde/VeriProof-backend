@@ -9,6 +9,13 @@ const questionSchema = mongoose.Schema({
   section: { type: String, default: "Core" }, // "Core" or "Elective"
 });
 
+const defenseSubmissionSchema = mongoose.Schema({
+  scenario_question: { type: String, required: true },
+  candidate_answer: { type: String, required: true },
+  score: { type: Number, default: 0 },
+  feedback: { type: String, default: "" },
+}, { _id: false });
+
 const examSchema = mongoose.Schema(
   {
     verificationResultId: { type: mongoose.Schema.Types.ObjectId, ref: "VerificationResult", index: true },
@@ -17,6 +24,7 @@ const examSchema = mongoose.Schema(
     jobTitle: { type: String, default: "" },
     recruiterId: { type: mongoose.Schema.Types.ObjectId, ref: "User", index: true },
     skills: { type: [String], default: [] },
+    projectContext: { type: [String], default: [] },
     topic: {
       type: String, // E.g., "MERN Stack Application", "React Fundamentals"
       required: true,
@@ -30,6 +38,30 @@ const examSchema = mongoose.Schema(
     candidateId: { type: mongoose.Schema.Types.ObjectId, ref: "User", index: true },
     status: { type: String, default: "Pending" },
     score: { type: Number, default: 0 },
+    
+    // Two-Stage Hybrid Assessment Pipeline Metrics
+    stage1Score: { type: Number, default: 0 },
+    stage2Score: { type: Number, default: 0 },
+    defenseSubmissions: [defenseSubmissionSchema],
+
+    // Triangulation & Discrepancy Index
+    claimScore: { type: Number, default: 0 },
+    repoEvidenceScore: { type: Number, default: 0 },
+    examDefenseScore: { type: Number, default: 0 },
+    divergence: { type: Number, default: 0 },
+    classification: {
+      type: String,
+      enum: [
+        "VERIFIED_TALENT",
+        "HIDDEN_GEM",
+        "OVERSTATED_PROFILE",
+        "ANOMALOUS_EVIDENCE",
+        "STANDARD_CANDIDATE",
+        "IN_REVIEW",
+      ],
+      default: "IN_REVIEW",
+    },
+
     timeTaken: { type: Number, default: 0 },
     codeQuality: { type: Number, default: 0 },
     answers: { type: Array, default: [] },
