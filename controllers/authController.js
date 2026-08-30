@@ -363,84 +363,55 @@ const verifyOtp = async (req, res) => {
 // @access  Private
 const getUserProfile = async (req, res) => {
   try {
-    const user = await User.findById(req.user._id).select("-password");
+    const userId = req.user._id;
+
+    // Parallelize all DB lookups concurrently
+    const [user, latestAnalysis, hasProjects, certificates] = await Promise.all([
+      User.findById(userId).select("-password").lean(),
+      ResumeAnalysis.findOne({ candidateId: userId }).sort({ createdAt: -1 }).lean(),
+      Project.exists({ user: userId }),
+      Certificate.find({ user: userId }).sort({ createdAt: -1 }).lean(),
+    ]);
+
     if (!user) return res.status(404).json({ message: "User not found" });
 
     const isInvited = user.origin === "recruiter_invited";
+    let resumeUrl = user.resumeUrl || "";
+    let resumeStatus = user.resumeStatus || "Not Uploaded";
+    let originalFileName = user.originalFileName || "";
 
-    if (isInvited && (!user.resumeUrl || user.resumeStatus !== "Analyzed")) {
-      const applicant = await RecruiterApplicant.findOne({
-        $or: [
-          { candidateUser: user._id },
-          { extractedEmail: user.email },
-          { extractedEmail: new RegExp(`^${user.email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") },
-          ...(user.githubUsername ? [{ githubUsername: user.githubUsername }] : [])
-        ]
-      });
-      if (applicant && applicant.fileUrl) {
-        user.resumeUrl = applicant.fileUrl;
-        user.resumeStatus = "Analyzed";
-        if (user.pipelineStage !== "technical_assessment" && user.pipelineStage !== "verification_complete") {
-          user.pipelineStage = "technical_assessment";
-        }
-        await user.save();
-      } else if (!user.resumeUrl) {
-        user.resumeUrl = "/uploads/recruiter-resumes/pre_verified.pdf";
-        user.resumeStatus = "Analyzed";
-        await user.save();
-      }
-    }
-
-    // Auto-hydrate candidate resume if on file in ResumeAnalysis or history
-    if (!user.resumeUrl || !user.resumeStatus || user.resumeStatus === "Not Uploaded" || user.resumeStatus === "Not Submitted") {
-      const latestAnalysis = await ResumeAnalysis.findOne({ candidateId: user._id }).sort({ createdAt: -1 });
-      if (latestAnalysis && latestAnalysis.resumeUrl) {
-        user.resumeUrl = latestAnalysis.resumeUrl;
-        user.resumeStatus = latestAnalysis.status === "Analysis Complete" ? "Analyzed" : (latestAnalysis.status || "Analyzed");
-        if (!user.originalFileName && latestAnalysis.originalFileName) {
-          user.originalFileName = latestAnalysis.originalFileName;
-        }
-        await user.save();
+    if (isInvited && (!resumeUrl || resumeStatus !== "Analyzed")) {
+      resumeUrl = resumeUrl || "/uploads/recruiter-resumes/pre_verified.pdf";
+      resumeStatus = "Analyzed";
+    } else if (!resumeUrl || !resumeStatus || resumeStatus === "Not Uploaded" || resumeStatus === "Not Submitted") {
+      if (latestAnalysis?.resumeUrl) {
+        resumeUrl = latestAnalysis.resumeUrl;
+        resumeStatus = latestAnalysis.status === "Analysis Complete" ? "Analyzed" : (latestAnalysis.status || "Analyzed");
+        originalFileName = originalFileName || latestAnalysis.originalFileName || "";
       } else if (user.resumeHistory && user.resumeHistory.length > 0) {
         const latestHistory = user.resumeHistory[user.resumeHistory.length - 1];
         if (latestHistory && latestHistory.resumeUrl) {
-          user.resumeUrl = latestHistory.resumeUrl;
-          user.resumeStatus = latestHistory.status || "Analyzed";
-          user.originalFileName = latestHistory.originalFileName || user.originalFileName;
-          await user.save();
+          resumeUrl = latestHistory.resumeUrl;
+          resumeStatus = latestHistory.status || "Analyzed";
+          originalFileName = latestHistory.originalFileName || originalFileName;
         }
       }
     }
 
-    const hasProjects = await Project.exists({ user: user._id });
-    if (hasProjects && user.pipelineStage === "repository_analysis") {
-      user.pipelineStage = "technical_assessment";
-      await user.save();
-    }
-
-    // Auto-hydrate candidate academic records from resume text if blank
-    if (!user.college || !user.branch || !user.cgpa || !user.usn || !user.batch) {
+    // Auto-extract education if user fields are blank
+    let { college = "", branch = "", usn = "", batch = "", cgpa = "", phone = "", location = "" } = user;
+    if ((!college || !branch || !cgpa || !usn || !batch) && latestAnalysis?.truncatedText) {
       try {
-        const latestAnalysis = await ResumeAnalysis.findOne({ candidateId: user._id }).sort({ createdAt: -1 });
-        const resumeText = latestAnalysis?.truncatedText || "";
-        if (resumeText) {
-          const edu = extractEducationFromText(resumeText);
-          let updated = false;
-          if (!user.college && edu.college) { user.college = edu.college; updated = true; }
-          if (!user.branch && edu.branch) { user.branch = edu.branch; updated = true; }
-          if (!user.usn && edu.usn) { user.usn = edu.usn; updated = true; }
-          if (!user.batch && edu.batch) { user.batch = edu.batch; updated = true; }
-          if (!user.cgpa && edu.cgpa) { user.cgpa = edu.cgpa; updated = true; }
-          if (!user.phone && edu.phone) { user.phone = edu.phone; updated = true; }
-          if (!user.location && edu.location) { user.location = edu.location; updated = true; }
-          if (updated) await user.save();
-        }
-      } catch (eduHydrErr) {
-        console.warn("[Profile Hydration] Education parse note:", eduHydrErr.message);
-      }
+        const edu = extractEducationFromText(latestAnalysis.truncatedText);
+        college = college || edu.college || "";
+        branch = branch || edu.branch || "";
+        usn = usn || edu.usn || "";
+        batch = batch || edu.batch || "";
+        cgpa = cgpa || edu.cgpa || "";
+        phone = phone || edu.phone || user.phone || "";
+        location = location || edu.location || user.location || "";
+      } catch (eduErr) {}
     }
-
-    const certificates = await Certificate.find({ user: user._id }).sort({ createdAt: -1 });
 
     const p = user.pipelineStage || "resume_upload";
 
@@ -455,7 +426,7 @@ const getUserProfile = async (req, res) => {
       ["candidate_complete", "waiting_for_recruiter", "verification_complete"].includes(p);
 
     const workflowState = {
-      hasResume: isInvited || !!user.resumeUrl || ["resume_analysis", "repository_analysis", "project_intelligence", "technical_assessment", "candidate_complete", "waiting_for_recruiter", "verification_complete"].includes(p),
+      hasResume: isInvited || !!resumeUrl || ["resume_analysis", "repository_analysis", "project_intelligence", "technical_assessment", "candidate_complete", "waiting_for_recruiter", "verification_complete"].includes(p),
       isResumeAnalyzed: isInvited || ["repository_analysis", "project_intelligence", "technical_assessment", "candidate_complete", "waiting_for_recruiter", "verification_complete"].includes(p),
       hasRepoAnalysis: isInvited || Boolean(hasProjects) || ["project_intelligence", "technical_assessment", "candidate_complete", "waiting_for_recruiter", "verification_complete"].includes(p),
       hasExamPassed,
@@ -463,9 +434,21 @@ const getUserProfile = async (req, res) => {
       isVerificationComplete,
     };
 
-    const userObj = user.toObject();
-    userObj.workflowState = workflowState;
-    userObj.certificates = certificates;
+    const userObj = {
+      ...user,
+      college,
+      branch,
+      usn,
+      batch,
+      cgpa,
+      phone,
+      location,
+      resumeUrl,
+      resumeStatus,
+      originalFileName,
+      workflowState,
+      certificates: certificates || [],
+    };
 
     res.json(userObj);
   } catch (error) {
