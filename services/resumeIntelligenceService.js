@@ -587,6 +587,21 @@ const runAnalysis = async (userId, fileUrl, options = {}) => {
       console.log(`[Resume Intelligence] Discovered GitHub handle @${extractedGithub} from candidate resume.`);
     }
 
+    // Auto-populate Education / Academic records from extracted resume
+    try {
+      const { extractEducationFromText } = require("../utils/educationParser");
+      const edu = extractEducationFromText(result.normalizedText || "");
+      if (!user.college && edu.college) user.college = edu.college;
+      if (!user.branch && edu.branch) user.branch = edu.branch;
+      if (!user.usn && edu.usn) user.usn = edu.usn;
+      if (!user.batch && edu.batch) user.batch = edu.batch;
+      if (!user.cgpa && edu.cgpa) user.cgpa = edu.cgpa;
+      if (!user.phone && edu.phone) user.phone = edu.phone;
+      if (!user.location && edu.location) user.location = edu.location;
+    } catch (e) {
+      console.warn("[Resume Intelligence] Education auto-populate note:", e.message);
+    }
+
     // Advance pipeline stage
     if (["resume_upload", "resume_analysis", "registration"].includes(user.pipelineStage) || !user.pipelineStage) {
       user.pipelineStage = user.githubUsername ? "repository_analysis" : "technical_assessment";

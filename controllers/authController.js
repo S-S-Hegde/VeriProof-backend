@@ -9,6 +9,7 @@ const { rebuildSkillProgression } = require("../services/skillProgressionService
 const generateToken = require("../utils/generateToken");
 const crypto = require("crypto");
 const sendEmail = require("../utils/sendEmail");
+const { extractEducationFromText } = require("../utils/educationParser");
 
 // @desc    Register a new user
 // @route   POST /api/users
@@ -415,6 +416,28 @@ const getUserProfile = async (req, res) => {
     if (hasProjects && user.pipelineStage === "repository_analysis") {
       user.pipelineStage = "technical_assessment";
       await user.save();
+    }
+
+    // Auto-hydrate candidate academic records from resume text if blank
+    if (!user.college || !user.branch || !user.cgpa || !user.usn || !user.batch) {
+      try {
+        const latestAnalysis = await ResumeAnalysis.findOne({ candidateId: user._id }).sort({ createdAt: -1 });
+        const resumeText = latestAnalysis?.truncatedText || "";
+        if (resumeText) {
+          const edu = extractEducationFromText(resumeText);
+          let updated = false;
+          if (!user.college && edu.college) { user.college = edu.college; updated = true; }
+          if (!user.branch && edu.branch) { user.branch = edu.branch; updated = true; }
+          if (!user.usn && edu.usn) { user.usn = edu.usn; updated = true; }
+          if (!user.batch && edu.batch) { user.batch = edu.batch; updated = true; }
+          if (!user.cgpa && edu.cgpa) { user.cgpa = edu.cgpa; updated = true; }
+          if (!user.phone && edu.phone) { user.phone = edu.phone; updated = true; }
+          if (!user.location && edu.location) { user.location = edu.location; updated = true; }
+          if (updated) await user.save();
+        }
+      } catch (eduHydrErr) {
+        console.warn("[Profile Hydration] Education parse note:", eduHydrErr.message);
+      }
     }
 
     const certificates = await Certificate.find({ user: user._id }).sort({ createdAt: -1 });
