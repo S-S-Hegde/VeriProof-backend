@@ -398,18 +398,42 @@ const getUserProfile = async (req, res) => {
       }
     }
 
-    // Auto-extract education if user fields are blank
-    let { college = "", branch = "", usn = "", batch = "", cgpa = "", phone = "", location = "" } = user;
-    if ((!college || !branch || !cgpa || !usn || !batch) && latestAnalysis?.truncatedText) {
+    // Auto-extract education and network nodes from resume text if blank or malformed
+    let {
+      college = "",
+      branch = "",
+      usn = "",
+      batch = "",
+      cgpa = "",
+      phone = "",
+      location = "",
+      linkedin = "",
+      website = "",
+      twitter = "",
+      githubUsername = user.githubUsername || "",
+    } = user;
+
+    // Clean any prior malformed prefix in college name
+    if (college && (college.includes("third-party") || college.includes("EDUCATION") || college.includes("services."))) {
+      college = college.replace(/.*(?:EDUCATION|services\.)\s*/i, "").trim();
+    }
+
+    if (latestAnalysis?.truncatedText) {
       try {
         const edu = extractEducationFromText(latestAnalysis.truncatedText);
-        college = college || edu.college || "";
-        branch = branch || edu.branch || "";
-        usn = usn || edu.usn || "";
-        batch = batch || edu.batch || "";
-        cgpa = cgpa || edu.cgpa || "";
-        phone = phone || edu.phone || user.phone || "";
-        location = location || edu.location || user.location || "";
+        if (!college || college.length < 3 || college.includes("third-party") || college.includes("EDUCATION")) {
+          college = edu.college || college || "";
+        }
+        if (!branch) branch = edu.branch || "";
+        if (!usn) usn = edu.usn || "";
+        if (!batch) batch = edu.batch || "";
+        if (!cgpa) cgpa = edu.cgpa || "";
+        if (!phone) phone = edu.phone || user.phone || "";
+        if (!location) location = edu.location || user.location || "";
+        if (!linkedin) linkedin = edu.linkedin || user.linkedin || "";
+        if (!website) website = edu.website || user.website || "";
+        if (!twitter) twitter = edu.twitter || user.twitter || "";
+        if (!githubUsername && edu.githubUsername) githubUsername = edu.githubUsername;
       } catch (eduErr) {}
     }
 
@@ -443,6 +467,10 @@ const getUserProfile = async (req, res) => {
       cgpa,
       phone,
       location,
+      linkedin,
+      website,
+      twitter,
+      githubUsername,
       resumeUrl,
       resumeStatus,
       originalFileName,
