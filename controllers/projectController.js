@@ -137,7 +137,14 @@ const getProjects = async (req, res) => {
 const getMyProjects = async (req, res) => {
   try {
     const projects = await Project.find({ user: req.user._id });
-    res.json(projects);
+    const formatted = projects.map((p) => {
+      const isV = p.isVerified || p.status === "Verified" || Boolean(p.githubStats?.commitsCount > 0) || Boolean(p.aiGenerated?.analyzedAt);
+      const obj = p.toObject ? p.toObject() : { ...p };
+      obj.isVerified = isV;
+      obj.status = isV ? "Verified" : (obj.status || "Published");
+      return obj;
+    });
+    res.json(formatted);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -154,6 +161,11 @@ const getProjectById = async (req, res) => {
     );
 
     if (project) {
+      if (!project.isVerified && (project.githubStats?.commitsCount > 0 || project.aiGenerated?.analyzedAt || project.status === "Verified")) {
+        project.isVerified = true;
+        project.status = "Verified";
+        await project.save();
+      }
       res.json(project);
     } else {
       res.status(404).json({ message: "Project not found" });
