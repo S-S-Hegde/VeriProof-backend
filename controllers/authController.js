@@ -418,12 +418,23 @@ const getUserProfile = async (req, res) => {
 
     const p = user.pipelineStage || "resume_upload";
 
+    const hasExamPassed =
+      Boolean(user.certificates && user.certificates.length > 0) ||
+      user.examStatus === "Attended" ||
+      user.examStatus === "Completed" ||
+      ["candidate_complete", "waiting_for_recruiter", "verification_complete"].includes(p);
+
+    const isVerificationComplete =
+      hasExamPassed ||
+      ["candidate_complete", "waiting_for_recruiter", "verification_complete"].includes(p);
+
     const workflowState = {
       hasResume: isInvited || !!user.resumeUrl || ["resume_analysis", "repository_analysis", "project_intelligence", "technical_assessment", "candidate_complete", "waiting_for_recruiter", "verification_complete"].includes(p),
       isResumeAnalyzed: isInvited || ["repository_analysis", "project_intelligence", "technical_assessment", "candidate_complete", "waiting_for_recruiter", "verification_complete"].includes(p),
       hasRepoAnalysis: isInvited || Boolean(hasProjects) || ["project_intelligence", "technical_assessment", "candidate_complete", "waiting_for_recruiter", "verification_complete"].includes(p),
-      hasExamPassed: ["candidate_complete", "waiting_for_recruiter", "verification_complete"].includes(p),
-      hasVerificationRequest: isInvited,
+      hasExamPassed,
+      hasVerificationRequest: isVerificationComplete,
+      isVerificationComplete,
     };
 
     const userObj = user.toObject();

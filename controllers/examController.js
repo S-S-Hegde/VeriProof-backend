@@ -597,6 +597,12 @@ const submitExam = async (req, res) => {
       }
     );
 
+    // Update logged-in candidate profile state
+    await User.findByIdAndUpdate(req.user._id, {
+      pipelineStage: "verification_complete",
+      examStatus: "Completed",
+    });
+
     // ── Build failed questions analysis ─────────────────────────────────
     const failedQuestions = [];
     if (exam) {
