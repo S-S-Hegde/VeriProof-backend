@@ -1,5 +1,6 @@
 const QuestionBank = require("../models/QuestionBank");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
+const { shuffleArray: qpShuffle } = require("./questionQualityPipeline");
 
 const ARCHETYPES = [
   "Code Tracing",
@@ -18,7 +19,10 @@ const shuffleArray = (arr) => {
   return copy;
 };
 
-// Initial Seed Questions (High-quality baseline across common skills)
+// ══════════════════════════════════════════════════════════════════════
+// SEED QUESTIONS — High-quality baseline across common skills
+// ══════════════════════════════════════════════════════════════════════
+
 const SEED_QUESTIONS = [
   // JavaScript
   {
@@ -32,6 +36,9 @@ const SEED_QUESTIONS = [
       "It returns 'NaN' because JavaScript implements a dedicated primitive data type for numeric errors."
     ],
     difficulty: "Medium",
+    difficultyTier: 3,
+    category: "calibration",
+    scenarioType: "conceptual",
   },
   {
     skillName: "JavaScript",
@@ -44,6 +51,9 @@ const SEED_QUESTIONS = [
       "NaN because performing addition with mismatched data types causes an implicit evaluation fault."
     ],
     difficulty: "Easy",
+    difficultyTier: 2,
+    category: "calibration",
+    scenarioType: "conceptual",
   },
   {
     skillName: "JavaScript",
@@ -56,6 +66,9 @@ const SEED_QUESTIONS = [
       "Promise callbacks run on a separate background worker thread to prevent blocking the Event Loop."
     ],
     difficulty: "Medium",
+    difficultyTier: 3,
+    category: "calibration",
+    scenarioType: "conceptual",
   },
   {
     skillName: "JavaScript",
@@ -68,6 +81,9 @@ const SEED_QUESTIONS = [
       "It restricts arrays from holding primitive types and forces all subsequent arrays to store objects."
     ],
     difficulty: "Medium",
+    difficultyTier: 3,
+    category: "calibration",
+    scenarioType: "conceptual",
   },
   {
     skillName: "JavaScript",
@@ -80,6 +96,9 @@ const SEED_QUESTIONS = [
       "Object.seal() deletes all prototype methods, whereas Object.freeze() retains existing inheritance chains."
     ],
     difficulty: "Hard",
+    difficultyTier: 4,
+    category: "calibration",
+    scenarioType: "conceptual",
   },
 
   // TypeScript
@@ -94,6 +113,9 @@ const SEED_QUESTIONS = [
       "Values of type `unknown` are automatically converted to `null` if no type guard is evaluated at runtime."
     ],
     difficulty: "Medium",
+    difficultyTier: 3,
+    category: "calibration",
+    scenarioType: "conceptual",
   },
   {
     skillName: "TypeScript",
@@ -106,6 +128,9 @@ const SEED_QUESTIONS = [
       "When you need strict immutability because interfaces make all nested fields readonly by default."
     ],
     difficulty: "Medium",
+    difficultyTier: 3,
+    category: "calibration",
+    scenarioType: "conceptual",
   },
   {
     skillName: "TypeScript",
@@ -118,6 +143,9 @@ const SEED_QUESTIONS = [
       "It invalidates the TypeScript abstract syntax tree and causes the build process to run single-threaded."
     ],
     difficulty: "Easy",
+    difficultyTier: 2,
+    category: "calibration",
+    scenarioType: "conceptual",
   },
 
   // React
@@ -132,6 +160,9 @@ const SEED_QUESTIONS = [
       "React queues the updates in the microtask queue, causing infinite loop warnings in the console."
     ],
     difficulty: "Medium",
+    difficultyTier: 3,
+    category: "calibration",
+    scenarioType: "conceptual",
   },
   {
     skillName: "React",
@@ -144,6 +175,9 @@ const SEED_QUESTIONS = [
       "The effect automatically converts all local useState variables into immutable useRef references."
     ],
     difficulty: "Easy",
+    difficultyTier: 2,
+    category: "calibration",
+    scenarioType: "conceptual",
   },
   {
     skillName: "React",
@@ -156,6 +190,9 @@ const SEED_QUESTIONS = [
       "To persist the function state in the browser's localStorage across user page refreshes."
     ],
     difficulty: "Medium",
+    difficultyTier: 3,
+    category: "calibration",
+    scenarioType: "conceptual",
   },
   {
     skillName: "React",
@@ -168,6 +205,9 @@ const SEED_QUESTIONS = [
       "It forces the entire list container to recalculate layout geometry on every CSS hover transition."
     ],
     difficulty: "Medium",
+    difficultyTier: 3,
+    category: "calibration",
+    scenarioType: "conceptual",
   },
 
   // Node.js
@@ -182,6 +222,9 @@ const SEED_QUESTIONS = [
       "By converting the JavaScript bytecode into WebAssembly modules on the fly during execution."
     ],
     difficulty: "Medium",
+    difficultyTier: 3,
+    category: "calibration",
+    scenarioType: "conceptual",
   },
   {
     skillName: "Node.js",
@@ -194,6 +237,9 @@ const SEED_QUESTIONS = [
       "It restarts the operating system network stack to clear pending socket descriptors."
     ],
     difficulty: "Easy",
+    difficultyTier: 2,
+    category: "calibration",
+    scenarioType: "conceptual",
   },
   {
     skillName: "Node.js",
@@ -206,6 +252,9 @@ const SEED_QUESTIONS = [
       "All three run concurrently in parallel threads managed by the libuv default thread pool."
     ],
     difficulty: "Hard",
+    difficultyTier: 4,
+    category: "calibration",
+    scenarioType: "conceptual",
   },
 
   // Python
@@ -220,6 +269,9 @@ const SEED_QUESTIONS = [
       "The mutable object becomes a read-only frozen set that prevents any in-place item assignments."
     ],
     difficulty: "Medium",
+    difficultyTier: 3,
+    category: "calibration",
+    scenarioType: "conceptual",
   },
   {
     skillName: "Python",
@@ -232,6 +284,9 @@ const SEED_QUESTIONS = [
       "It compiles Python source code into native machine assembly ahead of script execution."
     ],
     difficulty: "Medium",
+    difficultyTier: 3,
+    category: "calibration",
+    scenarioType: "conceptual",
   },
   {
     skillName: "Python",
@@ -244,6 +299,9 @@ const SEED_QUESTIONS = [
       "CPython offloads cyclic reference resolution to operating system virtual memory paging."
     ],
     difficulty: "Hard",
+    difficultyTier: 4,
+    category: "calibration",
+    scenarioType: "conceptual",
   },
 
   // SQL & Databases
@@ -258,6 +316,9 @@ const SEED_QUESTIONS = [
       "A clustered index can be created multiple times per table, while a non-clustered index is limited to one."
     ],
     difficulty: "Medium",
+    difficultyTier: 3,
+    category: "calibration",
+    scenarioType: "conceptual",
   },
   {
     skillName: "SQL",
@@ -270,6 +331,9 @@ const SEED_QUESTIONS = [
       "It forces the database engine to convert all text columns into base64 strings before returning."
     ],
     difficulty: "Easy",
+    difficultyTier: 2,
+    category: "calibration",
+    scenarioType: "conceptual",
   },
 
   // MongoDB
@@ -284,6 +348,9 @@ const SEED_QUESTIONS = [
       "When you want to avoid using MongoDB indexes and rely exclusively on in-memory linear collection scans."
     ],
     difficulty: "Medium",
+    difficultyTier: 3,
+    category: "calibration",
+    scenarioType: "conceptual",
   },
   {
     skillName: "MongoDB",
@@ -296,6 +363,9 @@ const SEED_QUESTIONS = [
       "It exports the matched aggregation documents into an external CSV backup file on disk."
     ],
     difficulty: "Easy",
+    difficultyTier: 2,
+    category: "calibration",
+    scenarioType: "conceptual",
   },
 
   // Git & DevOps
@@ -310,6 +380,9 @@ const SEED_QUESTIONS = [
       "`git merge` preserves only the latest commit, whereas `git rebase` discards all uncommitted working changes."
     ],
     difficulty: "Medium",
+    difficultyTier: 3,
+    category: "calibration",
+    scenarioType: "conceptual",
   },
   {
     skillName: "DevOps",
@@ -322,6 +395,191 @@ const SEED_QUESTIONS = [
       "They encrypt container file systems at rest using hardware-backed cryptographic keys."
     ],
     difficulty: "Medium",
+    difficultyTier: 3,
+    category: "calibration",
+    scenarioType: "conceptual",
+  },
+];
+
+// ══════════════════════════════════════════════════════════════════════
+// TRAP QUESTION SEED BANK — Handcrafted Anti-Memorization Questions
+// ══════════════════════════════════════════════════════════════════════
+// These questions have a "textbook" answer (the trap bait) and a
+// "production-safe" correct answer. Memorizers pick the textbook answer.
+
+const TRAP_QUESTIONS = [
+  // React Traps
+  {
+    skillName: "React",
+    archetype: "Anti-patterns",
+    question: "A React component fetches data in useEffect and stores it in state. During code review, a colleague suggests adding the API URL to the dependency array since it's referenced inside the effect. What should you do?",
+    correct_answer: "Evaluate whether the URL actually changes. If it's a static constant, adding it creates zero behavior difference but misleads future developers.",
+    distractors: [
+      "Always add every referenced variable to the dependency array to satisfy the exhaustive-deps ESLint rule without exceptions.",
+      "Remove the dependency array entirely so the effect synchronizes with every external reference automatically.",
+      "Wrap the URL in a useRef to bypass the dependency array requirement and prevent unnecessary re-fetches."
+    ],
+    difficulty: "Hard",
+    difficultyTier: 4,
+    category: "trap",
+    scenarioType: "conceptual",
+    isTrapQuestion: true,
+    trapBaitIndex: 0, // The "textbook" answer that memorizers pick (always add to dep array)
+    trapExplanation: "The textbook answer is 'always add every dependency.' But in production, a static URL never changes, so adding it is meaningless. Real engineers evaluate context rather than blindly following lint rules.",
+  },
+  {
+    skillName: "React",
+    archetype: "Debugging",
+    question: "Your React app renders a list of 10,000 items. Performance is sluggish. A junior developer suggests using React.memo on every list item component. Is this the right approach?",
+    correct_answer: "React.memo helps only if props actually change infrequently. For 10K items, virtualization (react-window) is the correct primary optimization.",
+    distractors: [
+      "Yes, wrapping every component with React.memo is the standard best practice for any list performance issue in React applications.",
+      "No, React.memo is deprecated in React 18 and should be replaced with the useDeferredValue hook for all list scenarios.",
+      "No, use shouldComponentUpdate instead because React.memo is only designed for class-based components in legacy codebases."
+    ],
+    difficulty: "Hard",
+    difficultyTier: 4,
+    category: "trap",
+    scenarioType: "conceptual",
+    isTrapQuestion: true,
+    trapBaitIndex: 0, // Memorizers pick "yes, React.memo is best practice"
+    trapExplanation: "Textbook says React.memo optimizes performance. Production reality: for 10K items, memo's shallow comparison on 10K components is itself expensive. Virtualization solves the root cause.",
+  },
+
+  // Node.js Traps
+  {
+    skillName: "Node.js",
+    archetype: "System Design",
+    question: "Your Node.js Express API occasionally returns 502 errors under load. A team member suggests increasing the server's timeout value. What's your assessment?",
+    correct_answer: "Increasing timeout masks the root cause. Profile the slow endpoints first — likely a blocking operation, unoptimized query, or missing connection pooling.",
+    distractors: [
+      "Increasing the timeout is the correct first step because 502 errors are caused by premature connection termination from short timeouts.",
+      "Replace Express entirely with Fastify because Express cannot handle concurrent requests due to its synchronous middleware pipeline.",
+      "Add a load balancer in front of the server because single Node.js instances are limited to 100 concurrent TCP connections by design."
+    ],
+    difficulty: "Hard",
+    difficultyTier: 4,
+    category: "trap",
+    scenarioType: "conceptual",
+    isTrapQuestion: true,
+    trapBaitIndex: 0, // Memorizers pick "increase timeout"
+    trapExplanation: "Textbook fix: increase timeout. Production reality: timeout increases mask slow code, accumulate connection backpressure, and eventually cause cascading failures.",
+  },
+  {
+    skillName: "Node.js",
+    archetype: "Debugging",
+    question: "A Node.js microservice has a memory leak. The heap grows by ~50MB per hour. A developer suggests calling `global.gc()` periodically to fix it. Is this viable?",
+    correct_answer: "No. Forcing GC treats the symptom, not the cause. Use heap snapshots via --inspect to find the retained objects and fix the reference leak.",
+    distractors: [
+      "Yes, calling global.gc() periodically is a standard production technique to manage heap pressure in long-running Node.js services.",
+      "No, global.gc() only works on the old generation heap and cannot affect new generation allocations where most leaks occur.",
+      "Yes, but only if combined with --max-old-space-size=4096 to give the garbage collector sufficient room to operate efficiently."
+    ],
+    difficulty: "Hard",
+    difficultyTier: 4,
+    category: "trap",
+    scenarioType: "conceptual",
+    isTrapQuestion: true,
+    trapBaitIndex: 0,
+    trapExplanation: "Forcing GC is a bandaid. Production engineers trace the leak source using heap snapshots rather than periodically cleaning up symptoms.",
+  },
+
+  // SQL Traps
+  {
+    skillName: "SQL",
+    archetype: "System Design",
+    question: "A production PostgreSQL query that joins 3 tables is slow (~4 seconds). A DBA suggests adding an index on every column used in WHERE and JOIN clauses. Is this the right approach?",
+    correct_answer: "No. Analyze the query plan with EXPLAIN ANALYZE first. Over-indexing degrades write performance and increases storage. Target only the bottleneck columns.",
+    distractors: [
+      "Yes, indexing every column referenced in WHERE and JOIN conditions is the standard PostgreSQL optimization practice for multi-table joins.",
+      "No, indexes don't help joins in PostgreSQL. Use materialized views instead because they pre-compute join results for instant retrieval.",
+      "Yes, but only B-tree indexes. Hash and GIN indexes are incompatible with multi-column join operations in PostgreSQL versions below 16."
+    ],
+    difficulty: "Hard",
+    difficultyTier: 4,
+    category: "trap",
+    scenarioType: "conceptual",
+    isTrapQuestion: true,
+    trapBaitIndex: 0,
+    trapExplanation: "Textbook: add indexes everywhere. Production: over-indexing hammers write performance (INSERT/UPDATE) and wastes disk. EXPLAIN ANALYZE reveals which specific scan is the bottleneck.",
+  },
+  {
+    skillName: "SQL",
+    archetype: "Debugging",
+    question: "A query returns correct results in development but wrong results in production. The tables are identical. A developer suspects index corruption. What should you check first?",
+    correct_answer: "Check for implicit type coercion, collation differences, or timezone settings between dev and prod database configurations.",
+    distractors: [
+      "Run REINDEX on all tables because index corruption is the most common cause of result discrepancies between identical databases.",
+      "Enable query logging and compare exact query plans because different PostgreSQL versions generate different join strategies.",
+      "Check if production is using read replicas with replication lag causing stale data to be returned from secondary nodes."
+    ],
+    difficulty: "Hard",
+    difficultyTier: 4,
+    category: "trap",
+    scenarioType: "conceptual",
+    isTrapQuestion: true,
+    trapBaitIndex: 0,
+    trapExplanation: "Index corruption is extremely rare. The vastly more common cause: different collation, timezone, or implicit type coercion settings between environments.",
+  },
+
+  // Python Traps
+  {
+    skillName: "Python",
+    archetype: "System Design",
+    question: "Your Python web API handles 200 req/s but needs to scale to 2000 req/s. A developer suggests rewriting the synchronous Flask app to async using asyncio. Is this the right path?",
+    correct_answer: "Only if the bottleneck is I/O-bound. If it's CPU-bound (data processing, ML inference), asyncio won't help — use multiprocessing or offload to a task queue.",
+    distractors: [
+      "Yes, converting to asyncio is the correct approach because async Python always handles 10x more concurrent requests than synchronous frameworks.",
+      "No, Python's GIL makes async completely useless for web servers. Use Golang or Rust for any application exceeding 500 requests per second.",
+      "Yes, but only by switching to FastAPI because Flask is architecturally incompatible with Python's asyncio event loop implementation."
+    ],
+    difficulty: "Hard",
+    difficultyTier: 4,
+    category: "trap",
+    scenarioType: "conceptual",
+    isTrapQuestion: true,
+    trapBaitIndex: 0,
+    trapExplanation: "Textbook: async = faster. Production: async only helps I/O-bound workloads. If your bottleneck is CPU (which is common in data-heavy APIs), asyncio changes nothing.",
+  },
+
+  // JavaScript Traps
+  {
+    skillName: "JavaScript",
+    archetype: "Debugging",
+    question: "A JavaScript application has intermittent 'Maximum call stack size exceeded' errors. A developer suggests increasing the Node.js stack size with --stack-size. Is this a valid fix?",
+    correct_answer: "No. Increasing stack size delays the crash but doesn't fix the unbounded recursion. Rewrite the recursive logic to use iteration or trampolining.",
+    distractors: [
+      "Yes, increasing the stack size is the standard solution for deep recursion in production Node.js applications handling complex data structures.",
+      "No, use tail call optimization instead because V8 automatically optimizes recursive functions marked with 'use strict' at the module level.",
+      "Yes, but only in combination with worker threads because the main thread has a hardcoded stack limit that the flag cannot override."
+    ],
+    difficulty: "Hard",
+    difficultyTier: 4,
+    category: "trap",
+    scenarioType: "conceptual",
+    isTrapQuestion: true,
+    trapBaitIndex: 0,
+    trapExplanation: "Textbook: increase the limit. Production: this masks infinite/unbounded recursion. V8 does NOT implement TCO despite spec support. Fix the algorithm.",
+  },
+
+  // MongoDB Traps
+  {
+    skillName: "MongoDB",
+    archetype: "System Design",
+    question: "Your MongoDB collection has 50M documents. Queries filtering by `status` field are slow. A developer suggests adding a single-field index on `status`. The field has only 3 possible values. Is this effective?",
+    correct_answer: "Low-cardinality indexes (3 values across 50M docs) are largely ineffective. Use a compound index with a high-cardinality field or restructure the query pattern.",
+    distractors: [
+      "Yes, any field used in query filters should be indexed regardless of cardinality to eliminate full collection scans in MongoDB.",
+      "No, MongoDB automatically indexes all fields with fewer than 10 distinct values using its internal bloom filter optimization.",
+      "Yes, but only if you use a hashed index type because standard B-tree indexes cannot efficiently handle low-cardinality string fields."
+    ],
+    difficulty: "Hard",
+    difficultyTier: 4,
+    category: "trap",
+    scenarioType: "conceptual",
+    isTrapQuestion: true,
+    trapBaitIndex: 0,
+    trapExplanation: "Textbook: index everything you query. Production: a 3-value index on 50M docs means each index entry points to ~17M documents — the index scan is nearly as slow as a collection scan.",
   },
 ];
 
@@ -332,9 +590,18 @@ const seedInitialQuestionBankIfEmpty = async () => {
   try {
     const count = await QuestionBank.countDocuments();
     if (count === 0) {
-      console.log(`[QuestionBank] Seeding ${SEED_QUESTIONS.length} foundational questions...`);
-      await QuestionBank.insertMany(SEED_QUESTIONS);
+      const allSeeds = [...SEED_QUESTIONS, ...TRAP_QUESTIONS];
+      console.log(`[QuestionBank] Seeding ${allSeeds.length} foundational + trap questions...`);
+      await QuestionBank.insertMany(allSeeds);
       console.log("[QuestionBank] Initial seed completed successfully.");
+    } else {
+      // Ensure trap questions are seeded even if regular seeds exist
+      const trapCount = await QuestionBank.countDocuments({ isTrapQuestion: true });
+      if (trapCount === 0 && TRAP_QUESTIONS.length > 0) {
+        console.log(`[QuestionBank] Seeding ${TRAP_QUESTIONS.length} trap questions...`);
+        await QuestionBank.insertMany(TRAP_QUESTIONS);
+        console.log("[QuestionBank] Trap question seed completed.");
+      }
     }
   } catch (err) {
     console.warn("[QuestionBank] Seeding note:", err.message);
@@ -345,7 +612,7 @@ const seedInitialQuestionBankIfEmpty = async () => {
  * Phase 3: Cache Miss Handler using Gemini LLM.
  * Generates 5 unique questions for a skill and caches them to MongoDB.
  */
-const generateAndCacheQuestions = async (skillName) => {
+const generateAndCacheQuestions = async (skillName, targetDifficulty = "Medium") => {
   if (!skillName || typeof skillName !== "string") {
     return [];
   }
@@ -359,12 +626,23 @@ const generateAndCacheQuestions = async (skillName) => {
     return [];
   }
 
-  const prompt = `You are an expert technical interviewer. Generate 5 unique multiple-choice questions for the skill: ${cleanSkill}. Use the ${selectedArchetype} format. The correct answer MUST be roughly the same character length as the distractors. Output ONLY a raw JSON array matching this schema: [{"question": "...", "correct_answer": "...", "distractors": ["...", "...", "..."]}]`;
+  const tierMap = { "Easy": 2, "Medium": 3, "Hard": 4 };
+  const difficultyTier = tierMap[targetDifficulty] || 3;
+
+  const prompt = `You are an expert technical interviewer. Generate 5 unique multiple-choice questions for the skill: ${cleanSkill} at ${targetDifficulty} difficulty level. Use the ${selectedArchetype} format.
+
+CRITICAL RULES FOR OPTION LENGTH:
+1. The correct answer MUST be roughly the same character length as the distractors (within ±20%).
+2. ALL options must use the same level of technical jargon.
+3. ALL options must sound equally confident — no hedging in only one option.
+4. Distractors must be PLAUSIBLE wrong answers, not obviously absurd.
+
+Output ONLY a raw JSON array matching this schema: [{"question": "...", "correct_answer": "...", "distractors": ["...", "...", "..."]}]`;
 
   try {
     const genAI = new GoogleGenerativeAI(geminiKey);
     const model = genAI.getGenerativeModel({
-      model: "gemini-1.5-flash",
+      model: "gemini-2.0-flash",
       generationConfig: {
         temperature: 0.3,
         responseMimeType: "application/json",
@@ -401,14 +679,18 @@ const generateAndCacheQuestions = async (skillName) => {
           question: q.question.trim(),
           correct_answer: q.correct_answer.trim(),
           distractors: q.distractors.map((d) => String(d).trim()),
-          difficulty: "Medium",
+          difficulty: targetDifficulty,
+          difficultyTier,
+          category: "calibration",
+          scenarioType: "conceptual",
+          source: "llm",
         });
       }
     }
 
     if (validQuestionsToSave.length > 0) {
       const inserted = await QuestionBank.insertMany(validQuestionsToSave);
-      console.log(`[QuestionBank CACHE SAVE] Cached ${inserted.length} questions for skill: "${cleanSkill}" (Archetype: ${selectedArchetype})`);
+      console.log(`[QuestionBank CACHE SAVE] Cached ${inserted.length} questions for skill: "${cleanSkill}" (Archetype: ${selectedArchetype}, Difficulty: ${targetDifficulty})`);
       return inserted;
     }
 
@@ -422,7 +704,7 @@ const generateAndCacheQuestions = async (skillName) => {
 /**
  * Phase 4: Shuffles options with Fisher-Yates and calculates correct index.
  */
-const formatAndRandomizeQuestion = (qDoc, section = "Core") => {
+const formatAndRandomizeQuestion = (qDoc, section = "Core", phase = "calibration") => {
   const distractors = Array.isArray(qDoc.distractors) ? qDoc.distractors : [];
   const correctAnswer = qDoc.correct_answer || "Option A";
 
@@ -433,21 +715,172 @@ const formatAndRandomizeQuestion = (qDoc, section = "Core") => {
   const shuffledOptions = shuffleArray(combinedOptions);
   const correctOptionIndex = shuffledOptions.indexOf(correctAnswer);
 
+  // For trap questions, find the trap bait index in shuffled array
+  let trapBaitIndex = -1;
+  if (qDoc.isTrapQuestion && qDoc.trapBaitIndex !== undefined && qDoc.trapBaitIndex >= 0) {
+    // Original trapBaitIndex refers to the original distractors array
+    // Distractor at index trapBaitIndex is the bait
+    const baitText = qDoc.trapBaitIndex === 0
+      ? distractors[0]
+      : qDoc.trapBaitIndex <= distractors.length
+        ? distractors[qDoc.trapBaitIndex - 1]  // offset since correct_answer was at index 0
+        : distractors[0];
+    // Actually, trapBaitIndex in our seed data refers to the distractor index (0-indexed in distractors array)
+    const baitDistractor = distractors[qDoc.trapBaitIndex] || distractors[0];
+    trapBaitIndex = shuffledOptions.indexOf(baitDistractor);
+  }
+
   return {
     questionText: qDoc.question,
     options: shuffledOptions,
     correctOption: correctOptionIndex !== -1 ? correctOptionIndex : 0,
     skill: qDoc.skillName || "Technical",
     difficulty: qDoc.difficulty || "Medium",
+    difficultyTier: qDoc.difficultyTier || 3,
     archetype: qDoc.archetype || "Core Concepts",
     section,
+    phase,
+    scenarioType: qDoc.scenarioType || "conceptual",
+    codeSnippet: qDoc.codeSnippet || "",
+    codeLanguage: qDoc.codeLanguage || "",
+    isTrapQuestion: qDoc.isTrapQuestion || false,
+    trapBaitIndex: trapBaitIndex,
   };
 };
 
 /**
- * Phase 2 & 3 & 4: Dynamic Question Assembly with Skill-Bank Caching Strategy.
- * Assembles questionCount questions for requiredSkills from MongoDB QuestionBank.
- * Triggers LLM cache miss if fewer questions than needed exist.
+ * Assemble a CALIBRATION ROUND (Part 1) with stratified difficulty sampling.
+ *
+ * Includes:
+ * - Mix of Easy (30%), Medium (50%), Hard (20%) per skill
+ * - 1-2 trap questions per skill (if enabled)
+ * - Questions tagged with phase: "calibration"
+ *
+ * @param {string[]} requiredSkills - Skills to test
+ * @param {number} questionCount - Total Part 1 questions
+ * @param {boolean} includeTrapQuestions - Whether to include trap questions
+ * @returns {Promise<Array>} Assembled calibration questions
+ */
+const assembleCalibrationRound = async (requiredSkills = [], questionCount = 10, includeTrapQuestions = true) => {
+  await seedInitialQuestionBankIfEmpty();
+
+  const cleanSkills = [...new Set(
+    (Array.isArray(requiredSkills) ? requiredSkills : [])
+      .map((s) => (typeof s === "string" ? s.trim() : s?.name || s?.skill || ""))
+      .filter((s) => s && s.length > 1)
+  )];
+
+  const effectiveSkills = cleanSkills.length > 0
+    ? cleanSkills
+    : ["JavaScript", "Node.js", "React", "Python", "SQL"];
+
+  const perSkillCount = Math.max(1, Math.ceil(questionCount / effectiveSkills.length));
+  const assembled = [];
+  const usedQuestionTexts = new Set();
+
+  for (const skill of effectiveSkills) {
+    if (assembled.length >= questionCount) break;
+
+    const needed = Math.min(perSkillCount, questionCount - assembled.length);
+    const skillRegex = new RegExp(`^${skill.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i");
+
+    // ── Stratified difficulty sampling: 30% Easy, 50% Medium, 20% Hard ──
+    const easyCount = Math.max(1, Math.round(needed * 0.30));
+    const hardCount = Math.max(0, Math.round(needed * 0.20));
+    const mediumCount = needed - easyCount - hardCount;
+
+    const pullByDifficulty = async (diffLevel, count) => {
+      const results = [];
+      const tierRange = diffLevel === "Easy" ? { $lte: 2 } : diffLevel === "Hard" ? { $gte: 4 } : { $gte: 2, $lte: 4 };
+
+      let matched = await QuestionBank.aggregate([
+        {
+          $match: {
+            skillName: { $regex: skillRegex },
+            category: { $in: ["calibration", "any"] },
+            isTrapQuestion: { $ne: true },
+            difficultyTier: tierRange,
+          },
+        },
+        { $sample: { size: count * 2 } },
+      ]);
+
+      // Cache miss: generate if not enough
+      if (matched.length < count) {
+        await generateAndCacheQuestions(skill, diffLevel);
+        matched = await QuestionBank.aggregate([
+          {
+            $match: {
+              skillName: { $regex: skillRegex },
+              category: { $in: ["calibration", "any"] },
+              isTrapQuestion: { $ne: true },
+              difficultyTier: tierRange,
+            },
+          },
+          { $sample: { size: count * 2 } },
+        ]);
+      }
+
+      for (const doc of matched) {
+        if (results.length >= count) break;
+        if (!usedQuestionTexts.has(doc.question)) {
+          usedQuestionTexts.add(doc.question);
+          results.push(formatAndRandomizeQuestion(doc, "Core", "calibration"));
+        }
+      }
+
+      return results;
+    };
+
+    const easyQ = await pullByDifficulty("Easy", easyCount);
+    const medQ = await pullByDifficulty("Medium", mediumCount);
+    const hardQ = await pullByDifficulty("Hard", hardCount);
+
+    assembled.push(...easyQ, ...medQ, ...hardQ);
+
+    // ── Include 1 trap question per skill (if enabled and available) ──
+    if (includeTrapQuestions && assembled.length < questionCount) {
+      const trapDocs = await QuestionBank.aggregate([
+        {
+          $match: {
+            skillName: { $regex: skillRegex },
+            isTrapQuestion: true,
+          },
+        },
+        { $sample: { size: 1 } },
+      ]);
+
+      for (const doc of trapDocs) {
+        if (assembled.length >= questionCount) break;
+        if (!usedQuestionTexts.has(doc.question)) {
+          usedQuestionTexts.add(doc.question);
+          assembled.push(formatAndRandomizeQuestion(doc, "Core", "calibration"));
+        }
+      }
+    }
+  }
+
+  // Fallback if still short
+  if (assembled.length < questionCount) {
+    const backupFormatted = SEED_QUESTIONS.map((q) => formatAndRandomizeQuestion(q, "Core", "calibration"));
+    for (const bq of backupFormatted) {
+      if (assembled.length >= questionCount) break;
+      if (!assembled.some((a) => a.questionText === bq.questionText)) {
+        assembled.push(bq);
+      }
+    }
+  }
+
+  // Shuffle the assembled questions so easy/medium/hard aren't in order
+  const shuffled = shuffleArray(assembled.slice(0, questionCount));
+
+  console.log(`[QuestionBank] Assembled ${shuffled.length} calibration questions (stratified difficulty) across ${effectiveSkills.length} skills.`);
+  return shuffled;
+};
+
+/**
+ * Legacy assembleExam function — still used for standard (non-adaptive) exams.
+ * Preserved for backward compatibility.
  */
 const assembleExam = async (requiredSkills = [], questionCount = 35, jdRatio = 0.70) => {
   await seedInitialQuestionBankIfEmpty();
@@ -480,19 +913,16 @@ const assembleExam = async (requiredSkills = [], questionCount = 35, jdRatio = 0
 
       const needed = Math.min(perSkillTarget, quota - selectedQuestionDocs.length);
 
-      // Query QuestionBank using $match and $sample
       const skillRegex = new RegExp(`^${skill.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i");
       let matched = await QuestionBank.aggregate([
         { $match: { skillName: { $regex: skillRegex } } },
         { $sample: { size: needed * 2 } },
       ]);
 
-      // Cache Miss: If not enough questions in DB, trigger Gemini generation
       if (matched.length < needed) {
         console.log(`[QuestionBank CACHE MISS] Skill: "${skill}". Found ${matched.length}/${needed}. Triggering Gemini LLM...`);
         const newlyGenerated = await generateAndCacheQuestions(skill);
         if (newlyGenerated.length > 0) {
-          // Re-fetch sample after caching
           matched = await QuestionBank.aggregate([
             { $match: { skillName: { $regex: skillRegex } } },
             { $sample: { size: needed * 2 } },
@@ -508,7 +938,6 @@ const assembleExam = async (requiredSkills = [], questionCount = 35, jdRatio = 0
       }
     }
 
-    // If quota still not met, sample from general pool in QuestionBank
     if (selectedQuestionDocs.length < quota) {
       const remainingNeeded = quota - selectedQuestionDocs.length;
       const fallbackDocs = await QuestionBank.aggregate([
@@ -534,7 +963,6 @@ const assembleExam = async (requiredSkills = [], questionCount = 35, jdRatio = 0
 
   const assembled = [...coreQuestions, ...electiveQuestions].slice(0, questionCount);
 
-  // If assembled is still short due to empty collection, fallback to seed
   if (assembled.length < questionCount) {
     const backupFormatted = SEED_QUESTIONS.map((q) => formatAndRandomizeQuestion(q, "Core"));
     for (const bq of backupFormatted) {
@@ -551,8 +979,10 @@ const assembleExam = async (requiredSkills = [], questionCount = 35, jdRatio = 0
 
 module.exports = {
   ARCHETYPES,
+  TRAP_QUESTIONS,
   seedInitialQuestionBankIfEmpty,
   generateAndCacheQuestions,
   assembleExam,
+  assembleCalibrationRound,
   formatAndRandomizeQuestion,
 };

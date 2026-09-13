@@ -9,6 +9,10 @@ const {
   recordViolationSnapshot,
   getProjectDefenseQuestions,
   evaluateDefenseSubmission,
+  submitCalibration,
+  startPart2,
+  purgatoryTimeout,
+  getRankings,
 } = require("../controllers/examController");
 const { protect } = require("../middleware/authMiddleware");
 const {
@@ -20,6 +24,14 @@ const {
 router.get("/start", protect, examActionRateLimit, startExam);
 router.post("/submit", protect, examActionRateLimit, validateExamSubmission, submitExam);
 router.get("/history", protect, getExamHistory);
+
+// Adaptive CAT Engine Endpoints
+router.post("/submit-calibration", protect, examActionRateLimit, submitCalibration);
+router.post("/start-part2", protect, examActionRateLimit, startPart2);
+router.post("/purgatory-timeout", protect, examActionRateLimit, purgatoryTimeout);
+
+// Recruiter Endpoints
+router.get("/rankings", protect, getRankings);
 
 // Stage 2: Adaptive Project Defense Endpoints
 router.post("/project-defense", protect, examActionRateLimit, getProjectDefenseQuestions);

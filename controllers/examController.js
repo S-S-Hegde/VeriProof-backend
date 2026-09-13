@@ -11,12 +11,18 @@ const sendEmail = require("../utils/sendEmail");
 const {
   rebuildSkillProgression,
 } = require("../services/skillProgressionService");
-const { assembleExam } = require("../services/questionBankService");
+const { assembleExam, assembleCalibrationRound } = require("../services/questionBankService");
 const { parseJobDescription } = require("../services/jdParsingService");
 const {
   generateProjectDefense,
   evaluateDefenseAnswers,
 } = require("../services/projectDefenseService");
+const {
+  profileCandidateFromCalibration,
+  generateAdaptiveRound,
+  calculateCompositeRank,
+  calculateDifficultyWeightedScore,
+} = require("../services/adaptiveExamService");
 
 const PYTHON_API_BASE = process.env.AI_ENGINE_URL || "https://python-engine-adw8.onrender.com";
 
@@ -195,9 +201,18 @@ const startExam = async (req, res) => {
 
     const claimedSkills = rawClaimedSkills.length > 0 ? rawClaimedSkills : jobTargetSkills;
 
-    // ── Phase 2: Stage 1 (Token-Free Baseline Filter Assembly) ─────────
+    // ── Phase 2: Assembly (Adaptive Calibration vs Legacy) ─────────
     const requiredSkills = [...new Set([...jobTargetSkills, ...claimedSkills])];
-    const finalQuestions = await assembleExam(requiredSkills, targetQuestionCount, jdRatio);
+    
+    let finalQuestions = [];
+    let isAdaptive = job?.assessmentSettings?.adaptiveMode === true;
+    let calibrationQuestionCount = Math.round(targetQuestionCount * (job?.assessmentSettings?.calibrationRatio || 0.5));
+    
+    if (isAdaptive) {
+      finalQuestions = await assembleCalibrationRound(requiredSkills, calibrationQuestionCount, job?.assessmentSettings?.includeTrapQuestions !== false);
+    } else {
+      finalQuestions = await assembleExam(requiredSkills, targetQuestionCount, jdRatio);
+    }
 
     // ── Save exam to DB ────────────────────────────────────────────────
     const exam = await Exam.create({
@@ -216,8 +231,15 @@ const startExam = async (req, res) => {
         correctOption: q.correctOption !== undefined ? q.correctOption : 0,
         skill: q.skill || "Technical",
         difficulty: q.difficulty || "Medium",
+        difficultyTier: q.difficultyTier || 3,
         section: q.section || "Core",
+        phase: isAdaptive ? "calibration" : (q.phase || "core"),
+        isTrapQuestion: q.isTrapQuestion || false,
+        trapBaitIndex: q.trapBaitIndex,
+        scenarioType: q.scenarioType || "conceptual",
       })),
+      isAdaptive,
+      currentPhase: isAdaptive ? "calibration" : "legacy_active",
     });
 
     // Mark exam status as In Progress for this specific job role
@@ -242,9 +264,15 @@ const startExam = async (req, res) => {
       section: q.section || (idx < Math.round(targetQuestionCount * jdRatio) ? "Core" : "Elective"),
       text: q.questionText,
       options: q.options,
+      phase: q.phase,
     }));
 
-    res.json(frontendQuestions);
+    res.json({
+      examId: exam._id,
+      isAdaptive,
+      currentPhase: exam.currentPhase,
+      questions: frontendQuestions
+    });
   } catch (error) {
     console.error("Start Exam Error:", error.stack || error.message);
     res.status(500).json({ message: "Failed to generate exam questions." });
@@ -368,20 +396,51 @@ const submitExam = async (req, res) => {
     }
 
     // ── 3. Tamper-Proof Question Scoring (Fixed Denominator Defense) ────
-    const totalQuestions = exam.questions && exam.questions.length > 0 ? exam.questions.length : (answers.length || 1);
-    const questionMap = new Map(
-      exam.questions.map((q) => [q._id.toString(), q.correctOption])
-    );
+    let score = 0;
+    let adaptiveRankScore = 0;
+    
+    if (exam && exam.isAdaptive) {
+      // ── ADAPTIVE ENGINE FINALIZATION ──
+      const adaptiveQuestions = exam.questions.filter(q => q.phase === "adaptive");
+      const adaptiveScore = calculateDifficultyWeightedScore(answers, adaptiveQuestions);
+      
+      const rankResult = calculateCompositeRank({
+        calibrationScore: exam.calibrationScore || 0,
+        adaptiveScore,
+        skillDNA: exam.candidateDNA || [],
+        trustScore: req.user?.skillProgress?.trustScore || 50,
+        integrityScore: calculatedIntegrityScore,
+        responseTimings: answers.map(a => ({ durationMs: a.responseTimeMs || 0 })),
+        rankPenalties: exam.rankPenalties || [],
+        partialFinalization: false,
+      });
+      
+      adaptiveRankScore = rankResult.adaptiveRankScore;
+      score = rankResult.rawComposite; // Maps to standard score for compatibility
+      
+      exam.adaptiveRankScore = adaptiveRankScore;
+      exam.adaptiveScore = adaptiveScore;
+      exam.consistencyIndex = rankResult.consistencyIndex;
+      // Merge answers (Part 1 + Part 2)
+      exam.answers = [...(exam.answers || []), ...answers];
+    } else {
+      // ── LEGACY SCORING ──
+      const totalQuestions = exam.questions && exam.questions.length > 0 ? exam.questions.length : (answers.length || 1);
+      const questionMap = new Map(
+        exam.questions.map((q) => [q._id.toString(), q.correctOption])
+      );
 
-    let correctCount = 0;
-    answers.forEach(({ questionId, answerIndex }) => {
-      if (questionMap.has(String(questionId)) && questionMap.get(String(questionId)) === answerIndex) {
-        correctCount += 1;
-      }
-    });
+      let correctCount = 0;
+      answers.forEach(({ questionId, answerIndex }) => {
+        if (questionMap.has(String(questionId)) && questionMap.get(String(questionId)) === answerIndex) {
+          correctCount += 1;
+        }
+      });
 
-    // Score is strictly calculated against ALL exam questions (unanswered questions score 0)
-    let score = Math.min(100, Math.max(0, Math.round((correctCount / totalQuestions) * 100)));
+      // Score is strictly calculated against ALL exam questions (unanswered questions score 0)
+      score = Math.min(100, Math.max(0, Math.round((correctCount / totalQuestions) * 100)));
+      if (exam) exam.answers = answers;
+    }
 
     // --- PROXY TO PYTHON: Grade Code Snippets ---
     if (code_snippet) {
@@ -460,7 +519,7 @@ const submitExam = async (req, res) => {
       exam.score = score;
       exam.timeTaken = 30;
       exam.codeQuality = score;
-      exam.answers = answers;
+      // exam.answers is already set above
       exam.isTerminated = false;
       exam.violationCount = effectiveViolationCount;
       exam.serverViolationCount = serverCount;
@@ -562,9 +621,13 @@ const submitExam = async (req, res) => {
     }
 
     // Combine Stage 1 syntax filter and Stage 2 adaptive project defense
-    const examDefenseScore = Array.isArray(defenseInput) && defenseInput.length > 0
+    let examDefenseScore = Array.isArray(defenseInput) && defenseInput.length > 0
       ? Math.round((stage1Score * 0.5) + (stage2Score * 0.5))
       : stage1Score;
+
+    if (exam && exam.isAdaptive) {
+      examDefenseScore = adaptiveRankScore;
+    }
 
     // 1. Calculate claimScore (0-100): Skills declared on resume vs JD alignment
     const candidateSkills = (user?.skills || []).map(s => String(s).toLowerCase());
@@ -730,7 +793,8 @@ const submitExam = async (req, res) => {
       const questionMap = new Map(
         exam.questions.map((q) => [q._id.toString(), q])
       );
-      answers.forEach(({ questionId, answerIndex }) => {
+      const allAnswersToEvaluate = exam.isAdaptive ? (exam.answers || answers) : answers;
+      allAnswersToEvaluate.forEach(({ questionId, answerIndex }) => {
         const q = questionMap.get(String(questionId));
         if (q && q.correctOption !== answerIndex) {
           failedQuestions.push({
@@ -893,6 +957,15 @@ const submitExam = async (req, res) => {
       status: isPassed ? "Passed" : "Needs Improvement",
       certificate,
       pipelineStage: "verification_complete",
+      // Adaptive fields
+      isAdaptive: exam?.isAdaptive || false,
+      adaptiveRankScore: exam?.adaptiveRankScore || score,
+      calibrationScore: exam?.calibrationScore || 0,
+      adaptiveScore: exam?.adaptiveScore || 0,
+      consistencyIndex: exam?.consistencyIndex || 0,
+      candidateDNA: exam?.candidateDNA || [],
+      trustScore: compositeTrustScore || user?.skillProgress?.trustScore || 50,
+      integrityScore: calculatedIntegrityScore,
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -1540,6 +1613,253 @@ const evaluateDefenseSubmission = async (req, res) => {
   }
 };
 
+// @desc    Submit Part 1 (Calibration) answers & build candidate DNA
+// @route   POST /api/exams/submit-calibration
+// @access  Private
+const submitCalibration = async (req, res) => {
+  try {
+    const { answers = [], proctoringLogs = [] } = req.body;
+    if (!Array.isArray(answers) || answers.length === 0) {
+      return res.status(400).json({ message: "Calibration answers are required." });
+    }
+
+    const exam = await Exam.findOne({
+      candidateId: req.user._id,
+      status: "In Progress",
+      currentPhase: "calibration",
+    }).sort({ createdAt: -1 });
+
+    if (!exam) {
+      return res.status(404).json({ message: "No active calibration phase found." });
+    }
+
+    // Append proctoring logs if provided
+    if (proctoringLogs.length > 0) {
+      exam.proctoringLogs = [...(exam.proctoringLogs || []), ...proctoringLogs];
+    }
+
+    // ── Build Skill DNA from Part 1 answers ──
+    const calibrationQuestions = exam.questions.filter((q) => q.phase === "calibration");
+    const { skillDNA, guessDetection, trapResults } = profileCandidateFromCalibration(answers, calibrationQuestions);
+
+    // Calculate flat score for Part 1
+    const questionMap = new Map(calibrationQuestions.map((q) => [q._id.toString(), q.correctOption]));
+    let correctCount = 0;
+    answers.forEach(({ questionId, answerIndex }) => {
+      if (questionMap.has(String(questionId)) && questionMap.get(String(questionId)) === answerIndex) {
+        correctCount += 1;
+      }
+    });
+    const calibrationScore = Math.round((correctCount / Math.max(1, calibrationQuestions.length)) * 100);
+
+    // Update Exam document
+    exam.candidateDNA = skillDNA;
+    exam.calibrationScore = calibrationScore;
+    exam.adaptiveMetrics = {
+      ...(exam.adaptiveMetrics || {}),
+      guessDetected: guessDetection.isGuessing,
+      guessPenalty: guessDetection.isGuessing ? 0.8 : 1.0,
+      trapResults,
+    };
+    
+    // Move to Purgatory
+    exam.currentPhase = "purgatory";
+    exam.purgatoryStartTime = new Date();
+    
+    // Save the Part 1 answers for final composite calculation later
+    exam.answers = answers;
+    
+    await exam.save();
+
+    res.json({
+      success: true,
+      phase: "purgatory",
+      calibrationScore,
+      candidateDNA: skillDNA, // Returned so UI can show the DNA breakdown
+    });
+  } catch (error) {
+    console.error("Submit Calibration Error:", error.stack || error.message);
+    res.status(500).json({ message: "Failed to process calibration answers." });
+  }
+};
+
+// @desc    Start Part 2 (Adaptive Phase) & generate scenario questions
+// @route   POST /api/exams/start-part2
+// @access  Private
+const startPart2 = async (req, res) => {
+  try {
+    const exam = await Exam.findOne({
+      candidateId: req.user._id,
+      status: "In Progress",
+      currentPhase: "purgatory",
+    }).sort({ createdAt: -1 });
+
+    if (!exam) {
+      return res.status(404).json({ message: "No active purgatory phase found." });
+    }
+
+    // Check Purgatory Timeout
+    const job = exam.jobId ? await Project.model('Job').findById(exam.jobId).catch(()=>null) : null;
+    const maxDurationMins = job?.assessmentSettings?.purgatoryDuration || 15;
+    
+    const now = new Date();
+    const elapsedMins = (now.getTime() - exam.purgatoryStartTime.getTime()) / (1000 * 60);
+
+    if (elapsedMins > maxDurationMins) {
+      // Timeout violated - force finalize early
+      return res.status(403).json({
+        success: false,
+        timeout: true,
+        message: "Purgatory timeout exceeded. Your exam will be finalized with partial results."
+      });
+    }
+
+    // ── Generate Part 2 Adaptive Questions ──
+    const targetCount = job?.assessmentSettings?.questionCount || 20;
+    const calibrationCount = exam.questions.filter((q) => q.phase === "calibration").length;
+    const adaptiveCount = Math.max(5, targetCount - calibrationCount);
+
+    const part2Questions = await generateAdaptiveRound(
+      exam.candidateDNA,
+      exam.skills,
+      adaptiveCount,
+      exam.projectContext?.join("; ") || ""
+    );
+
+    // Append to existing questions
+    exam.questions.push(...part2Questions);
+    exam.currentPhase = "adaptive";
+    await exam.save();
+
+    // Format for frontend
+    const frontendQuestions = part2Questions.map((q) => ({
+      _id: q._id,
+      category: q.skill,
+      difficulty: q.difficulty,
+      section: "Adaptive",
+      text: q.questionText,
+      options: q.options,
+      phase: "adaptive",
+      scenarioType: q.scenarioType,
+      codeSnippet: q.codeSnippet,
+      codeLanguage: q.codeLanguage,
+    }));
+
+    res.json({
+      success: true,
+      phase: "adaptive",
+      questions: frontendQuestions,
+    });
+  } catch (error) {
+    console.error("Start Part 2 Error:", error.stack || error.message);
+    res.status(500).json({ message: "Failed to generate Part 2 questions." });
+  }
+};
+
+// @desc    Force timeout for Purgatory Phase (Candidate didn't return)
+// @route   POST /api/exams/purgatory-timeout
+// @access  Private
+const purgatoryTimeout = async (req, res) => {
+  try {
+    const exam = await Exam.findOne({
+      candidateId: req.user._id,
+      status: "In Progress",
+      currentPhase: "purgatory",
+    }).sort({ createdAt: -1 });
+
+    if (!exam) {
+      return res.status(404).json({ message: "No active purgatory phase found." });
+    }
+
+    // Finalize exam with massive penalty for bailing
+    const { adaptiveRankScore, rawComposite } = calculateCompositeRank({
+      calibrationScore: exam.calibrationScore,
+      adaptiveScore: 0,
+      skillDNA: exam.candidateDNA,
+      trustScore: req.user?.skillProgress?.trustScore || 50,
+      integrityScore: exam.integrityScore,
+      responseTimings: [],
+      rankPenalties: [{ reason: "Purgatory Timeout", penaltyMultiplier: 0.3 }],
+      partialFinalization: true, // Only part 1
+    });
+
+    exam.currentPhase = "legacy_completed";
+    exam.status = "Completed";
+    exam.score = Math.floor(exam.calibrationScore * 0.3); // Severe penalty
+    exam.adaptiveRankScore = adaptiveRankScore;
+    
+    // Add penalty violation
+    if (!Array.isArray(exam.rankPenalties)) exam.rankPenalties = [];
+    exam.rankPenalties.push({
+      reason: "Purgatory Timeout Violation",
+      penaltyMultiplier: 0.3,
+      appliedAt: new Date()
+    });
+
+    await exam.save();
+
+    res.json({
+      success: true,
+      message: "Exam finalized with penalty due to purgatory timeout.",
+      score: exam.score,
+      adaptiveRankScore,
+    });
+  } catch (error) {
+    console.error("Purgatory Timeout Error:", error.stack || error.message);
+    res.status(500).json({ message: "Failed to process purgatory timeout." });
+  }
+};
+
+// @desc    Get forensic rankings for a specific job
+// @route   GET /api/exams/rankings?jobId=...
+// @access  Private (Recruiter only)
+const getRankings = async (req, res) => {
+  try {
+    const { jobId } = req.query;
+    if (!jobId) {
+      return res.status(400).json({ message: "jobId is required." });
+    }
+
+    const exams = await Exam.find({ jobId, status: "Completed" }).populate("candidateId", "name email avatar");
+    
+    // Process and sort exams by adaptiveRankScore or score
+    const rankings = exams.map(exam => {
+      const isAdaptive = exam.isAdaptive || false;
+      
+      return {
+        _id: exam._id,
+        candidateName: exam.candidateId?.name || "Unknown Candidate",
+        candidateEmail: exam.candidateId?.email || "",
+        avatar: exam.candidateId?.avatar || "",
+        score: exam.score,
+        adaptiveRankScore: exam.adaptiveRankScore || exam.score,
+        calibrationScore: exam.calibrationScore || 0,
+        adaptiveScore: exam.adaptiveScore || 0,
+        integrityScore: exam.integrityScore || 100,
+        consistencyIndex: exam.consistencyIndex || 0,
+        isAdaptive,
+        guessDetected: exam.adaptiveMetrics?.guessDetected || false,
+        trapCapApplied: exam.candidateDNA?.some(dna => dna.trapCapped) || false,
+        skillDNA: exam.candidateDNA || [],
+        submittedAt: exam.submittedAt || exam.updatedAt
+      };
+    });
+
+    // Sort descending by adaptiveRankScore
+    rankings.sort((a, b) => b.adaptiveRankScore - a.adaptiveRankScore);
+
+    res.json({
+      success: true,
+      jobId,
+      totalCandidates: rankings.length,
+      rankings,
+    });
+  } catch (error) {
+    console.error("Get Rankings Error:", error.stack || error.message);
+    res.status(500).json({ message: "Failed to fetch rankings." });
+  }
+};
+
 module.exports = {
   startExam,
   submitExam,
@@ -1549,6 +1869,10 @@ module.exports = {
   recordViolationSnapshot,
   getProjectDefenseQuestions,
   evaluateDefenseSubmission,
+  submitCalibration,
+  startPart2,
+  purgatoryTimeout,
+  getRankings,
 };
 
 
