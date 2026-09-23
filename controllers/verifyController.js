@@ -965,7 +965,13 @@ ${candidateText}
                 repositoryUrl: `https://github.com/${targetGithub}`,
                 techStack: matchedSkills.length > 0 ? matchedSkills : ["JavaScript", "Python", "React"],
                 isVerified: true,
-                githubStats: { commitsCount: 35, starsCount: 4, forksCount: 1, openIssuesCount: 0, languages: { JavaScript: 12000, Python: 9000 } }
+                githubStats: {
+                  commitsCount: applicant.githubStats?.commitsCount || 0,
+                  starsCount: applicant.githubStats?.starsCount || 0,
+                  forksCount: applicant.githubStats?.forksCount || 0,
+                  openIssuesCount: applicant.githubStats?.openIssuesCount || 0,
+                  languages: applicant.githubStats?.languages || {}
+                }
               },
               { upsert: true, new: true }
             );

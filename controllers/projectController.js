@@ -579,7 +579,7 @@ const coupleRepositories = async (req, res) => {
         status: "Verified",
         verificationStatus: "Verified",
         githubStats: {
-          commitsCount: totalCommits || 15,
+          commitsCount: totalCommits || 0,
           lastCommitDate: new Date(),
           languages: {},
         },
