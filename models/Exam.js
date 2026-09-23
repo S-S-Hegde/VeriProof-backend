@@ -14,7 +14,7 @@ const questionSchema = mongoose.Schema({
   codeLanguage: { type: String, default: "" },
   isTrapQuestion: { type: Boolean, default: false },
   trapBaitIndex: { type: Number, default: -1 },
-  phase: { type: String, enum: ["calibration", "adaptive"], default: "calibration" },
+  phase: { type: String, enum: ["calibration", "adaptive", "core", "elective"], default: "calibration" },
 });
 
 const defenseSubmissionSchema = mongoose.Schema({
@@ -153,7 +153,7 @@ const examSchema = mongoose.Schema(
     // Current phase in the adaptive exam lifecycle
     currentPhase: {
       type: String,
-      enum: ["calibration", "purgatory", "reverification", "adaptive", "completed", "expired"],
+      enum: ["calibration", "purgatory", "reverification", "adaptive", "completed", "expired", "legacy_active"],
       default: "calibration",
     },
 
