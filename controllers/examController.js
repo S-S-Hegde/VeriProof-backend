@@ -398,6 +398,8 @@ const submitExam = async (req, res) => {
     // ── 3. Tamper-Proof Question Scoring (Fixed Denominator Defense) ────
     let score = 0;
     let adaptiveRankScore = 0;
+    let totalQuestions = exam.questions && exam.questions.length > 0 ? exam.questions.length : (answers.length || 1);
+    let correctCount = 0;
     
     if (exam && exam.isAdaptive) {
       // ── ADAPTIVE ENGINE FINALIZATION ──
@@ -417,6 +419,7 @@ const submitExam = async (req, res) => {
       
       adaptiveRankScore = rankResult.adaptiveRankScore;
       score = rankResult.rawComposite; // Maps to standard score for compatibility
+      correctCount = Math.round((score / 100) * totalQuestions);
       
       exam.adaptiveRankScore = adaptiveRankScore;
       exam.adaptiveScore = adaptiveScore;
@@ -425,12 +428,10 @@ const submitExam = async (req, res) => {
       exam.answers = [...(exam.answers || []), ...answers];
     } else {
       // ── LEGACY SCORING ──
-      const totalQuestions = exam.questions && exam.questions.length > 0 ? exam.questions.length : (answers.length || 1);
       const questionMap = new Map(
         exam.questions.map((q) => [q._id.toString(), q.correctOption])
       );
 
-      let correctCount = 0;
       answers.forEach(({ questionId, answerIndex }) => {
         if (questionMap.has(String(questionId)) && questionMap.get(String(questionId)) === answerIndex) {
           correctCount += 1;
