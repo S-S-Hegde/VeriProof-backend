@@ -793,32 +793,22 @@ const assembleCalibrationRound = async (requiredSkills = [], questionCount = 10,
       const results = [];
       const tierRange = diffLevel === "Easy" ? { $lte: 2 } : diffLevel === "Hard" ? { $gte: 4 } : { $gte: 2, $lte: 4 };
 
-      let matched = await QuestionBank.aggregate([
-        {
-          $match: {
-            skillName: { $regex: skillRegex },
-            category: { $in: ["calibration", "any"] },
-            isTrapQuestion: { $ne: true },
-            difficultyTier: tierRange,
-          },
-        },
-        { $sample: { size: count * 2 } },
-      ]);
+      let matched = await QuestionBank.find({
+        skillName: { $regex: skillRegex },
+        category: { $in: ["calibration", "any"] },
+        isTrapQuestion: { $ne: true },
+        difficultyTier: tierRange,
+      }).sort({ _id: 1 }).limit(count * 2);
 
       // Cache miss: generate if not enough
       if (matched.length < count) {
         await generateAndCacheQuestions(skill, diffLevel);
-        matched = await QuestionBank.aggregate([
-          {
-            $match: {
-              skillName: { $regex: skillRegex },
-              category: { $in: ["calibration", "any"] },
-              isTrapQuestion: { $ne: true },
-              difficultyTier: tierRange,
-            },
-          },
-          { $sample: { size: count * 2 } },
-        ]);
+        matched = await QuestionBank.find({
+          skillName: { $regex: skillRegex },
+          category: { $in: ["calibration", "any"] },
+          isTrapQuestion: { $ne: true },
+          difficultyTier: tierRange,
+        }).sort({ _id: 1 }).limit(count * 2);
       }
 
       for (const doc of matched) {
@@ -840,15 +830,10 @@ const assembleCalibrationRound = async (requiredSkills = [], questionCount = 10,
 
     // ── Include 1 trap question per skill (if enabled and available) ──
     if (includeTrapQuestions && assembled.length < questionCount) {
-      const trapDocs = await QuestionBank.aggregate([
-        {
-          $match: {
-            skillName: { $regex: skillRegex },
-            isTrapQuestion: true,
-          },
-        },
-        { $sample: { size: 1 } },
-      ]);
+      const trapDocs = await QuestionBank.find({
+        skillName: { $regex: skillRegex },
+        isTrapQuestion: true,
+      }).sort({ _id: 1 }).limit(1);
 
       for (const doc of trapDocs) {
         if (assembled.length >= questionCount) break;
@@ -871,8 +856,8 @@ const assembleCalibrationRound = async (requiredSkills = [], questionCount = 10,
     }
   }
 
-  // Shuffle the assembled questions so easy/medium/hard aren't in order
-  const shuffled = shuffleArray(assembled.slice(0, questionCount));
+  // Use the exact assembled order to remain deterministic for all candidates on the same job
+  const shuffled = assembled.slice(0, questionCount);
 
   console.log(`[QuestionBank] Assembled ${shuffled.length} calibration questions (stratified difficulty) across ${effectiveSkills.length} skills.`);
   return shuffled;

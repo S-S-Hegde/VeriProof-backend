@@ -412,12 +412,12 @@ const calculateCompositeRank = ({
   const effectiveAdaptiveScore = partialFinalization ? 0 : adaptiveScore;
 
   const rawComposite = partialFinalization
-    ? calibrationScore * 0.60 + skillCeilingScore * 0.20 + consistencyIndex * 0.20
-    : calibrationScore * 0.25 +
-      effectiveAdaptiveScore * 0.35 +
-      skillCeilingScore * 0.15 +
-      consistencyIndex * 0.10 +
-      responseQualityScore * 0.15;
+    ? calibrationScore * 0.40 + skillCeilingScore * 0.50 + consistencyIndex * 0.10
+    : calibrationScore * 0.15 +
+      effectiveAdaptiveScore * 0.15 +
+      skillCeilingScore * 0.55 + // Heavily weights "Advanced" mastery over intermediate raw points
+      consistencyIndex * 0.05 +
+      responseQualityScore * 0.10;
 
   // ── Apply modifiers ──
   const trustModifier = Math.max(0.5, trustScore / 100);
