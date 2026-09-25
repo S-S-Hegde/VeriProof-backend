@@ -212,6 +212,14 @@ router.post(
         return res.status(400).json({ message: "The uploaded resume does not match its declared file format." });
       }
 
+      // ── Guard: Invited candidates cannot replace recruiter-submitted resumes ──
+      if (req.user.origin === "recruiter_invited") {
+        return res.status(403).json({
+          message: "Resume upload is disabled for recruiter-invited candidates. Your resume was submitted by your recruiter and cannot be replaced.",
+          code: "INVITED_CANDIDATE_RESUME_LOCKED",
+        });
+      }
+
       let fileUrl;
 
       if (isCloudinaryConfigured()) {
