@@ -234,6 +234,16 @@ const authUser = async (req, res) => {
       });
     }
 
+    // ── Account Lockout Check ─────────────────────────────────────────────
+    if (user.isLocked && user.isLocked()) {
+      const unlockMinutes = Math.ceil((user.lockedUntil - Date.now()) / 60000);
+      return res.status(423).json({
+        message: `Account temporarily locked due to too many failed attempts. Try again in ${unlockMinutes} minute${unlockMinutes !== 1 ? "s" : ""}.`,
+        lockedUntil: user.lockedUntil,
+        code: "ACCOUNT_LOCKED",
+      });
+    }
+
     if (!user.password && user.authProvider === "google") {
       return res.status(401).json({
         message:
@@ -244,13 +254,23 @@ const authUser = async (req, res) => {
     }
 
     if (!(await user.matchPassword(password))) {
+      // Record failed attempt + possibly lock
+      const { getClientIp } = require("../utils/deviceFingerprint");
+      const ip = getClientIp(req);
+      if (user.recordFailedLogin) user.recordFailedLogin(ip);
+      await user.save({ validateBeforeSave: false });
+
+      const remaining = Math.max(0, 5 - (user.loginAttempts || 0));
       return res.status(401).json({
-        message: "Incorrect password. Please verify your credentials or reset your password.",
+        message: remaining > 0
+          ? `Incorrect password. ${remaining} attempt${remaining !== 1 ? "s" : ""} remaining before account lockout.`
+          : "Account locked. Too many failed attempts. Please wait 30 minutes.",
         userExists: true,
+        attemptsRemaining: remaining,
       });
     }
 
-    // Role-mismatch guard: user exists but registered under a different role
+    // Role-mismatch guard
     if (role && user.role !== role) {
       return res.status(403).json({
         message: `No ${role === "recruiter" ? "Investigator" : "Candidate"} account found for this email. Would you like to register one?`,
@@ -258,6 +278,15 @@ const authUser = async (req, res) => {
         existingRole: user.role,
       });
     }
+
+    // ── Device & Suspicious Login Detection ──────────────────────────────
+    const { getDeviceFingerprint, getClientIp } = require("../utils/deviceFingerprint");
+    const { deviceId, deviceName, browser, os, deviceType } = getDeviceFingerprint(req);
+    const ip = getClientIp(req);
+
+    const isNewDevice = user.lastLoginIp && !user.trustedDeviceIds?.includes(deviceId);
+    const isNewIp = user.lastLoginIp && user.lastLoginIp !== ip;
+    const isSuspicious = isNewDevice && isNewIp && user.lastLoginAt;
 
     // ── OTP Two-Factor Auth for recruiter_invited candidates on FIRST login ───
     const needsOtp = user.origin === "recruiter_invited" && !user.otpVerified;
@@ -299,6 +328,83 @@ const authUser = async (req, res) => {
       return res.json({ requiresOTP: true, email: normalizedEmail });
     }
 
+    // ── TOTP 2FA Check ────────────────────────────────────────────────────
+    if (user.totpEnabled) {
+      const deviceTrusted = (user.trustedDeviceIds || []).includes(deviceId);
+      if (!deviceTrusted) {
+        // Password correct but TOTP pending — return partial challenge
+        return res.json({
+          requiresTOTP: true,
+          email: normalizedEmail,
+          deviceName,
+          message: "Authenticator app verification required. Enter the 6-digit code from your app.",
+        });
+      }
+    }
+
+    // ── Suspicious Login — trigger security OTP ───────────────────────────
+    if (isSuspicious) {
+      const otp = user.getSecurityOtp("suspicious_login");
+      await user.save({ validateBeforeSave: false });
+
+      // Fire-and-forget alert email
+      const { mfaController } = (() => {
+        try { return require("../controllers/mfaController"); } catch { return {}; }
+      })();
+
+      sendEmail({
+        email: user.email,
+        subject: "[VeriProof] Security Alert — New Sign-In Detected",
+        html: `<!DOCTYPE html><html><head><meta charset="UTF-8"></head>
+<body style="font-family:sans-serif;background:#0a0e1a;color:#e8ecf4;padding:40px;">
+  <div style="max-width:520px;margin:0 auto;">
+    <h1 style="font-size:28px;font-weight:900;font-style:italic;letter-spacing:-1px;">VERI<span style="color:#6b8aff">PROOF</span>.</h1>
+    <p style="font-family:monospace;font-size:10px;letter-spacing:3px;color:#5a6478;text-transform:uppercase;">Security Alert</p>
+    <hr style="border-color:#1a2040;margin:24px 0;">
+    <p>Hi <strong>${user.name}</strong>, we detected a new sign-in from an unrecognized device.</p>
+    <table style="background:#0d1226;border:1px solid #2a3050;border-radius:8px;padding:16px;margin:16px 0;width:100%;border-collapse:collapse;">
+      <tr><td style="color:#5a6478;font-size:12px;padding:4px 8px;">Device</td><td style="font-size:12px;padding:4px 8px;">${deviceName}</td></tr>
+      <tr><td style="color:#5a6478;font-size:12px;padding:4px 8px;">Browser</td><td style="font-size:12px;padding:4px 8px;">${browser}</td></tr>
+      <tr><td style="color:#5a6478;font-size:12px;padding:4px 8px;">IP Address</td><td style="font-size:12px;padding:4px 8px;">${ip}</td></tr>
+      <tr><td style="color:#5a6478;font-size:12px;padding:4px 8px;">Time</td><td style="font-size:12px;padding:4px 8px;">${new Date().toUTCString()}</td></tr>
+    </table>
+    <div style="background:#0d1226;border:1px solid #6b8aff;border-radius:12px;padding:24px;margin:24px 0;text-align:center;">
+      <div style="font-size:36px;font-weight:900;letter-spacing:10px;color:#6b8aff;font-family:monospace;">${otp}</div>
+      <div style="font-size:11px;color:#5a6478;margin-top:8px;font-family:monospace;">Security Verification Code · Expires in 15 minutes</div>
+    </div>
+    <p style="color:#f87171;font-size:13px;">⚠ If this wasn't you, change your password immediately.</p>
+    <hr style="border-color:#1a2040;margin:24px 0;">
+    <p style="color:#5a6478;font-size:11px;font-family:monospace;">VeriProof — Screen Everyone · Catch the Fraud · Prove the Honest</p>
+  </div>
+</body></html>`
+      }).catch(() => {});
+
+      return res.json({
+        requiresSecurityOTP: true,
+        email: normalizedEmail,
+        deviceName,
+        message: "New device detected. A security verification code was sent to your email.",
+      });
+    }
+
+    // ── All checks passed — successful login ──────────────────────────────
+    if (user.recordSuccessfulLogin) user.recordSuccessfulLogin(ip, deviceId);
+    await user.save({ validateBeforeSave: false });
+
+    // Create login session record (async, non-blocking)
+    const LoginSession = require("../models/LoginSession");
+    LoginSession.create({
+      userId: user._id,
+      deviceId,
+      deviceName,
+      browser,
+      os,
+      deviceType,
+      ip,
+      authMethod: "password",
+      trusted: (user.trustedDeviceIds || []).includes(deviceId),
+    }).catch(() => {});
+
     res.json({
       _id: user._id,
       name: user.name,
@@ -307,6 +413,8 @@ const authUser = async (req, res) => {
       githubUsername: user.githubUsername,
       profileImage: user.profileImage,
       mustChangePassword: user.mustChangePassword || false,
+      emailVerified: user.emailVerified || false,
+      totpEnabled: user.totpEnabled || false,
       token: generateToken(user._id),
     });
   } catch (error) {
@@ -314,6 +422,8 @@ const authUser = async (req, res) => {
     res.status(500).json({ message: isDev ? error.message : "Login failed. Please try again." });
   }
 };
+
+
 
 // @desc    Verify OTP and issue JWT
 // @route   POST /api/users/verify-otp

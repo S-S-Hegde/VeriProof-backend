@@ -21,6 +21,7 @@ const examRoutes    = require("./routes/examRoutes");
 const skillTreeRoutes = require("./routes/skillTreeRoutes");
 const githubRoutes  = require("./routes/githubRoutes");
 const certificateRoutes = require("./routes/certificateRoutes");
+const mfaRoutes     = require("./routes/mfaRoutes");
 
 // Initialize DB connection asynchronously (non-blocking)
 connectDB();
@@ -313,6 +314,7 @@ app.get(["/uploads/resumes/:filename", "/uploads/recruiter-resumes/:filename"], 
 
 // Mount API routes
 app.use("/api/users", authRoutes);
+app.use("/api/users/mfa", mfaRoutes);
 app.use("/api/projects", projectRoutes);
 app.use("/api/verify", verifyRoutes);
 app.use("/api/exams", examRoutes);

@@ -208,10 +208,41 @@ const userSchema = new mongoose.Schema(
     resetPasswordToken: String,
     resetPasswordExpire: Date,
 
-    // OTP Two-Factor Authentication (for recruiter-invited candidates on first login)
+    // ── OTP Two-Factor Authentication (for recruiter-invited candidates on first login) ──
     otpCode:        String,
     otpExpire:      Date,
     otpVerified:    { type: Boolean, default: false },
+
+    // ── TOTP (Authenticator App) 2FA ──────────────────────────────────────────
+    totpSecret:        { type: String, default: "" },         // encrypted base32 TOTP secret
+    totpEnabled:       { type: Boolean, default: false },      // whether TOTP 2FA is active
+    totpBackupCodes:   { type: [String], default: [] },        // hashed backup codes (8 of them)
+    totpVerifiedAt:    { type: Date },                         // when TOTP was first verified
+
+    // ── Security OTP (for all users — suspicious login, device verification) ──
+    securityOtpCode:   { type: String },                       // hashed 6-digit OTP
+    securityOtpExpire: { type: Date },
+    securityOtpType:   { type: String, default: "" },          // 'new_device' | 'suspicious_login' | 'email_verify'
+
+    // ── Account Lockout (brute-force protection) ─────────────────────────────
+    loginAttempts:      { type: Number, default: 0 },
+    lockedUntil:        { type: Date },
+    lastFailedLoginAt:  { type: Date },
+    lastFailedLoginIp:  { type: String, default: "" },
+
+    // ── Trusted Devices ───────────────────────────────────────────────────────
+    // Fingerprint hashes of devices the user has explicitly trusted
+    trustedDeviceIds:  { type: [String], default: [] },
+
+    // ── Login Anomaly Tracking ────────────────────────────────────────────────
+    lastLoginAt:       { type: Date },
+    lastLoginIp:       { type: String, default: "" },
+    lastLoginDevice:   { type: String, default: "" },
+
+    // ── Email Verification ────────────────────────────────────────────────────
+    emailVerified:     { type: Boolean, default: false },
+    emailVerifyToken:  { type: String },
+    emailVerifyExpire: { type: Date },
 
     // Force password change after first invited sign-in
     mustChangePassword: { type: Boolean, default: false },
@@ -261,6 +292,52 @@ userSchema.methods.getOtpToken = function () {
   this.otpCode = crypto.createHash("sha256").update(otp).digest("hex");
   this.otpExpire = Date.now() + 10 * 60 * 1000; // 10 minutes
   return otp;
+};
+
+// Generate a security OTP for device verification / suspicious login alerts
+userSchema.methods.getSecurityOtp = function (type = "new_device") {
+  const otp = Math.floor(100000 + Math.random() * 900000).toString();
+  this.securityOtpCode = crypto.createHash("sha256").update(otp).digest("hex");
+  this.securityOtpExpire = Date.now() + 15 * 60 * 1000; // 15 minutes
+  this.securityOtpType = type;
+  return otp;
+};
+
+// Verify a TOTP backup code (single-use)
+userSchema.methods.consumeBackupCode = function (code) {
+  const hashed = crypto.createHash("sha256").update(code.toUpperCase().replace(/\s/g, "")).digest("hex");
+  const idx = this.totpBackupCodes.indexOf(hashed);
+  if (idx === -1) return false;
+  this.totpBackupCodes.splice(idx, 1); // consume it
+  return true;
+};
+
+// Check if account is currently locked
+userSchema.methods.isLocked = function () {
+  return this.lockedUntil && this.lockedUntil > Date.now();
+};
+
+// Increment failed login attempts; lock after 5 failures for 30 minutes
+userSchema.methods.recordFailedLogin = function (ip = "") {
+  const MAX_ATTEMPTS = 5;
+  const LOCK_DURATION_MS = 30 * 60 * 1000; // 30 minutes
+
+  this.loginAttempts = (this.loginAttempts || 0) + 1;
+  this.lastFailedLoginAt = new Date();
+  this.lastFailedLoginIp = ip;
+
+  if (this.loginAttempts >= MAX_ATTEMPTS) {
+    this.lockedUntil = new Date(Date.now() + LOCK_DURATION_MS);
+  }
+};
+
+// Clear failed login counter after successful login
+userSchema.methods.recordSuccessfulLogin = function (ip = "", deviceId = "") {
+  this.loginAttempts = 0;
+  this.lockedUntil = undefined;
+  this.lastLoginAt = new Date();
+  this.lastLoginIp = ip;
+  this.lastLoginDevice = deviceId;
 };
 
 const User = mongoose.model("User", userSchema);
