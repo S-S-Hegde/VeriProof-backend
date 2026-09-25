@@ -362,7 +362,7 @@ THE CORRECT ANSWER HAS:
 ${correctHedgeCount > 0 ? `- ${correctHedgeCount} hedging words like "typically", "usually" (each distractor must also include hedging words)` : `- No hedging words (distractors must NOT use hedging words like "typically", "usually", "in most cases")`}
 
 CRITICAL RULES FOR EACH DISTRACTOR:
-1. MUST be between ${minLength} and ${maxLength} characters. This is NON-NEGOTIABLE.
+1. ZERO LENGTH DISCREPANCY: MUST be exactly between ${minLength} and ${maxLength} characters to perfectly match the correct answer's length. This is NON-NEGOTIABLE.
 2. MUST use the same level of technical jargon as the correct answer.
 3. MUST sound equally confident — same tone, no wishy-washy language differences.
 4. MUST be technically WRONG but for subtle, specific reasons that could fool a mid-level developer.

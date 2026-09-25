@@ -632,7 +632,7 @@ const generateAndCacheQuestions = async (skillName, targetDifficulty = "Medium")
   const prompt = `You are an expert technical interviewer. Generate 5 unique multiple-choice questions for the skill: ${cleanSkill} at ${targetDifficulty} difficulty level. Use the ${selectedArchetype} format.
 
 CRITICAL RULES FOR OPTION LENGTH:
-1. The correct answer MUST be roughly the same character length as the distractors (within ±20%).
+1. ZERO LENGTH DISCREPANCY: The correct answer MUST be exactly the same character length as the distractors (within ±5%).
 2. ALL options must use the same level of technical jargon.
 3. ALL options must sound equally confident — no hedging in only one option.
 4. Distractors must be PLAUSIBLE wrong answers, not obviously absurd.
