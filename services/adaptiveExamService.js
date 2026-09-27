@@ -9,6 +9,7 @@
  * 3. Guess pattern detection
  * 4. Composite forensic ranking calculation
  * 5. Trap question evaluation and skill capping
+ * 6. Project Authenticity pipeline (Purgatory async slot)
  */
 
 const QuestionBank = require("../models/QuestionBank");
@@ -18,6 +19,7 @@ const {
   tierToDifficulty,
   shuffleArray,
 } = require("./questionQualityPipeline");
+const { runFullAuthenticityPipeline } = require("./projectAuthenticityService");
 
 // ══════════════════════════════════════════════════════════════════════
 // SKILL DNA PROFILER
@@ -478,6 +480,99 @@ const calculateDifficultyWeightedScore = (answers, questions) => {
   return maxPoints > 0 ? Math.round((earnedPoints / maxPoints) * 100) : 0;
 };
 
+// ══════════════════════════════════════════════════════════════════════
+// PROJECT AUTHENTICITY PIPELINE — PURGATORY ASYNC SLOT
+// ══════════════════════════════════════════════════════════════════════
+
+/**
+ * triggerAuthenticityPipelineAsync
+ *
+ * Runs fire-and-forget during the Purgatory Intermission window.
+ * For each project the candidate listed, runs the full authenticity
+ * pipeline and returns any interrogation questions to be injected into
+ * Phase 2 as `project_authenticity`-tagged items.
+ *
+ * NON-BLOCKING: this function intentionally does NOT await the pipeline
+ * per-project — it starts all projects concurrently and resolves when
+ * all settle, but its caller in examController should itself NOT await
+ * this or gate Phase 2 start on its completion.
+ *
+ * @param {object} opts
+ * @param {ObjectId} opts.candidateId
+ * @param {ObjectId} opts.examId
+ * @param {object}   opts.candidateUserRecord  — full User document
+ * @param {string[]} opts.repoUrls             — list of claimed repo URLs
+ * @param {Array}    opts.peerRepoEntries       — [{ candidateId, repoUrl }]
+ * @returns {Promise<Array>} — flat array of project_authenticity questions
+ *                             to inject into Phase 2
+ */
+const triggerAuthenticityPipelineAsync = async ({
+  candidateId,
+  examId,
+  candidateUserRecord,
+  repoUrls = [],
+  peerRepoEntries = [],
+}) => {
+  if (!repoUrls || repoUrls.length === 0) return [];
+
+  // All repos except the first one can serve as baseline fingerprint reference
+  const candidateBaselineRepoUrls = repoUrls.slice(1);
+
+  const allInterrogationQuestions = [];
+
+  // Run all repos concurrently; each pipeline error is non-fatal
+  const results = await Promise.allSettled(
+    repoUrls.map((repoUrl) =>
+      runFullAuthenticityPipeline({
+        repoUrl,
+        candidateId,
+        examId,
+        candidateUserRecord,
+        candidateBaselineRepoUrls,
+        peerRepoEntries,
+      })
+    )
+  );
+
+  results.forEach((result, idx) => {
+    if (result.status === "fulfilled") {
+      const { interrogationQuestions = [] } = result.value;
+      // Tag each question as project_authenticity and attach repo context
+      interrogationQuestions.forEach((q) => {
+        allInterrogationQuestions.push({
+          questionText:    q.question,
+          options:         [],       // free-text answer — no MCQ options
+          correctOption:   -1,       // N/A for free-text
+          skill:           "Project Authenticity",
+          difficulty:      "Hard",
+          difficultyTier:  4,
+          scenarioType:    "project_authenticity",
+          construct:       "project_authenticity",
+          phase:           "adaptive",
+          section:         "Adaptive",
+          repoUrl:         repoUrls[idx],
+          commitSha:       q.commitSha,
+          diffSummary:     q.diffSummary,
+          expectedAnswerShape: q.expectedAnswerShape,
+          requiresJustification: true,
+          isTrapQuestion:  false,
+        });
+      });
+    } else {
+      console.warn(
+        `[AdaptiveExam] Authenticity pipeline failed for repo ${repoUrls[idx]}:`,
+        result.reason?.message
+      );
+    }
+  });
+
+  console.log(
+    `[AdaptiveExam] Authenticity pipeline generated ${allInterrogationQuestions.length} interrogation questions for candidate ${candidateId}.`
+  );
+
+  return allInterrogationQuestions;
+};
+
 module.exports = {
   profileCandidateFromCalibration,
   generateAdaptiveRound,
@@ -485,4 +580,5 @@ module.exports = {
   calculateCompositeRank,
   calculateDifficultyWeightedScore,
   calculateMedian,
+  triggerAuthenticityPipelineAsync,
 };

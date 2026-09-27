@@ -13,6 +13,8 @@ const {
   startPart2,
   purgatoryTimeout,
   getRankings,
+  submitAuthenticityAnswer,
+  getProjectAuthenticity,
 } = require("../controllers/examController");
 const { protect } = require("../middleware/authMiddleware");
 const {
@@ -42,5 +44,20 @@ router.post("/project-defense/evaluate", protect, examActionRateLimit, evaluateD
 router.post("/proctor-snapshot", protect, analyzeProctorSnapshot);
 router.post("/record-violation", protect, recordProctorViolation);
 router.post("/record-violation-snapshot", recordViolationSnapshot);
+
+// ── Project Authenticity Verification Routes ──────────────────────────────
+// Candidate submits a free-text answer to a commit-defence interrogation question
+router.post(
+  "/:examId/project-authenticity/:projectId/answer",
+  protect,
+  submitAuthenticityAnswer
+);
+
+// Recruiter fetches all authenticity records for a candidate
+router.get(
+  "/recruiter/candidate/:candidateId/project-authenticity",
+  protect,
+  getProjectAuthenticity
+);
 
 module.exports = router;

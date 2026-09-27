@@ -1,4 +1,4 @@
-const fs = require("fs");
+﻿const fs = require("fs");
 const path = require("path");
 const axios = require("axios");
 const Exam = require("../models/Exam");
@@ -6,6 +6,7 @@ const User = require("../models/User");
 const Project = require("../models/Project");
 const VerificationResult = require("../models/VerificationResult");
 const ResumeAnalysis = require("../models/ResumeAnalysis");
+const ProjectAuthenticity = require("../models/ProjectAuthenticity");
 const crypto = require("crypto");
 const sendEmail = require("../utils/sendEmail");
 const {
@@ -22,7 +23,11 @@ const {
   generateAdaptiveRound,
   calculateCompositeRank,
   calculateDifficultyWeightedScore,
+  triggerAuthenticityPipelineAsync,
 } = require("../services/adaptiveExamService");
+const {
+  generateAndScoreInterrogation,
+} = require("../services/projectAuthenticityService");
 
 const PYTHON_API_BASE = process.env.AI_ENGINE_URL || "https://python-engine-adw8.onrender.com";
 
@@ -1672,11 +1677,32 @@ const submitCalibration = async (req, res) => {
     
     await exam.save();
 
+    // Fire Project Authenticity Pipeline (non-blocking, runs during Purgatory window)
+    // This does NOT delay the response or gate Phase 2 start
+    ;(async () => {
+      try {
+        const candidateUser = await User.findById(req.user._id).lean();
+        const candidateProjects = await Project.find({ user: req.user._id }).lean();
+        const repoUrls = candidateProjects.map((p) => p.repositoryUrl).filter(Boolean);
+        if (repoUrls.length > 0) {
+          await triggerAuthenticityPipelineAsync({
+            candidateId: req.user._id,
+            examId: exam._id,
+            candidateUserRecord: candidateUser,
+            repoUrls,
+            peerRepoEntries: [],
+          });
+        }
+      } catch (bgErr) {
+        console.warn("[Authenticity] Background pipeline error (non-fatal):", bgErr.message);
+      }
+    })();
+
     res.json({
       success: true,
       phase: "purgatory",
       calibrationScore,
-      candidateDNA: skillDNA, // Returned so UI can show the DNA breakdown
+      candidateDNA: skillDNA,
     });
   } catch (error) {
     console.error("Submit Calibration Error:", error.stack || error.message);
@@ -1861,6 +1887,127 @@ const getRankings = async (req, res) => {
   }
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// PROJECT AUTHENTICITY — CANDIDATE ANSWER SUBMISSION
+// @route   POST /api/exams/:examId/project-authenticity/:projectId/answer
+// @access  Private (candidate)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * submitAuthenticityAnswer
+ *
+ * Accepts a candidate's free-text answer to an interrogation question,
+ * calls generateAndScoreInterrogation (grading mode) to assign a
+ * specificityScore, and persists both the answer and the score back onto
+ * the ProjectAuthenticity document.
+ */
+const submitAuthenticityAnswer = async (req, res) => {
+  try {
+    const { examId, projectId } = req.params;
+    const { questionId, candidateAnswer } = req.body;
+
+    if (!questionId || !candidateAnswer || typeof candidateAnswer !== "string") {
+      return res.status(400).json({ message: "questionId and candidateAnswer are required." });
+    }
+
+    // Locate the ProjectAuthenticity document by examId + inner question _id
+    const authDoc = await ProjectAuthenticity.findOne({
+      $or: [
+        { examId, "interrogation.questions._id": questionId },
+        { _id: projectId },
+      ],
+      candidateId: req.user._id,
+    });
+
+    if (!authDoc) {
+      return res.status(404).json({ message: "Authenticity record not found." });
+    }
+
+    // Find the specific question within the document
+    const question = authDoc.interrogation.questions.id(questionId);
+    if (!question) {
+      return res.status(404).json({ message: "Question not found." });
+    }
+
+    // Grade the answer via the LLM grading mode
+    const { specificityScores } = await generateAndScoreInterrogation(
+      authDoc.repoUrl,
+      [], // no commit history needed in grading mode
+      [
+        {
+          questionId,
+          question:            question.question,
+          expectedAnswerShape: question.expectedAnswerShape,
+          diffSummary:         question.diffSummary,
+          candidateAnswer:     candidateAnswer.trim(),
+        },
+      ]
+    );
+
+    const graded = specificityScores && specificityScores[0];
+
+    // Update only the matched question sub-document
+    question.candidateAnswer  = candidateAnswer.trim();
+    question.specificityScore = graded ? graded.specificityScore : null;
+    question.graderRationale  = graded ? graded.rationale : "";
+    question.answeredAt       = new Date();
+
+    await authDoc.save();
+
+    return res.json({
+      success: true,
+      specificityScore:  question.specificityScore,
+      graderRationale:   question.graderRationale,
+    });
+  } catch (error) {
+    console.error("[submitAuthenticityAnswer] Error:", error.message);
+    return res.status(500).json({ message: "Failed to process authenticity answer." });
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PROJECT AUTHENTICITY — RECRUITER FETCH
+// @route   GET /api/recruiter/candidate/:candidateId/project-authenticity
+// @access  Private (recruiter)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * getProjectAuthenticity
+ *
+ * Returns all ProjectAuthenticity documents for a given candidate,
+ * ordered by most recently computed. Strips `expectedAnswerShape` from
+ * each question (internal grading rubric — not for recruiters either).
+ */
+const getProjectAuthenticity = async (req, res) => {
+  try {
+    if (!req.user || req.user.role !== "recruiter") {
+      return res.status(403).json({ message: "Recruiter access required." });
+    }
+
+    const { candidateId } = req.params;
+
+    const docs = await ProjectAuthenticity.find({ candidateId })
+      .sort({ computedAt: -1 })
+      .lean();
+
+    // Strip internal grading rubric fields
+    const sanitized = docs.map((doc) => ({
+      ...doc,
+      interrogation: {
+        questions: (doc.interrogation?.questions || []).map((q) => {
+          const { expectedAnswerShape, ...rest } = q;
+          return rest;
+        }),
+      },
+    }));
+
+    return res.json({ success: true, records: sanitized });
+  } catch (error) {
+    console.error("[getProjectAuthenticity] Error:", error.message);
+    return res.status(500).json({ message: "Failed to fetch project authenticity records." });
+  }
+};
+
 module.exports = {
   startExam,
   submitExam,
@@ -1874,6 +2021,6 @@ module.exports = {
   startPart2,
   purgatoryTimeout,
   getRankings,
+  submitAuthenticityAnswer,
+  getProjectAuthenticity,
 };
-
-
