@@ -1,4 +1,4 @@
-﻿const fs = require("fs");
+const fs = require("fs");
 const path = require("path");
 const axios = require("axios");
 const Exam = require("../models/Exam");
@@ -1670,7 +1670,7 @@ const submitCalibration = async (req, res) => {
     
     // Move to Purgatory
     exam.currentPhase = "purgatory";
-    exam.purgatoryStartTime = new Date();
+    exam.calibrationSubmittedAt = new Date();
     
     // Save the Part 1 answers for final composite calculation later
     exam.answers = answers;
@@ -1730,7 +1730,8 @@ const startPart2 = async (req, res) => {
     const maxDurationMins = job?.assessmentSettings?.purgatoryDuration || 15;
     
     const now = new Date();
-    const elapsedMins = (now.getTime() - exam.purgatoryStartTime.getTime()) / (1000 * 60);
+    const submittedAt = exam.calibrationSubmittedAt || exam.updatedAt || now;
+    const elapsedMins = (now.getTime() - submittedAt.getTime()) / (1000 * 60);
 
     if (elapsedMins > maxDurationMins) {
       // Timeout violated - force finalize early
