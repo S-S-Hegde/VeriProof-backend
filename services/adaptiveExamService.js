@@ -226,29 +226,43 @@ const generateAdaptiveRound = async (skillDNA, jobSkills = [], questionCount = 1
   const skillsToTest = Object.keys(skillTierMap);
   const perSkillCount = Math.max(1, Math.ceil(questionCount / skillsToTest.length));
 
-  const allQuestions = [];
-  const usedTexts = new Set();
-
-  for (const skill of skillsToTest) {
-    if (allQuestions.length >= questionCount) break;
-
+  const skillPromises = skillsToTest.map(async (skill) => {
     const tier = skillTierMap[skill];
-    const needed = Math.min(perSkillCount, questionCount - allQuestions.length);
-
-    // Generate quality-assured questions at the mapped difficulty tier
+    const needed = Math.min(perSkillCount, questionCount);
+    
+    // Generate quality-assured questions concurrently
     const batch = await generateQualityBatch(skill, needed, tier, jobDescription);
-
+    const skillQuestions = [];
+    const localUsedTexts = new Set();
+    
     for (const q of batch) {
-      if (allQuestions.length >= questionCount) break;
-      if (!usedTexts.has(q.questionText)) {
-        usedTexts.add(q.questionText);
-        allQuestions.push({
+      if (!localUsedTexts.has(q.questionText)) {
+        localUsedTexts.add(q.questionText);
+        skillQuestions.push({
           ...q,
           phase: "adaptive",
           section: "Adaptive",
         });
       }
     }
+    return skillQuestions;
+  });
+
+  const skillResults = await Promise.all(skillPromises);
+
+  const allQuestions = [];
+  const usedTexts = new Set();
+
+  // Flatten and enforce exact quota limits sequentially to preserve diversity
+  for (const skillRes of skillResults) {
+    for (const q of skillRes) {
+      if (allQuestions.length >= questionCount) break;
+      if (!usedTexts.has(q.questionText)) {
+        usedTexts.add(q.questionText);
+        allQuestions.push(q);
+      }
+    }
+    if (allQuestions.length >= questionCount) break;
   }
 
   // If we still don't have enough (LLM failures), pull from QuestionBank as fallback
