@@ -637,9 +637,6 @@ const generateQualityBatch = async (skill, count, difficultyTier = 3, context = 
       $match: {
         skillName: { $regex: skillRegex },
         difficultyTier: { $gte: difficultyTier - 1, $lte: difficultyTier + 1 },
-        category: { $in: ["adaptive", "any"] },
-        scenarioType: { $ne: "conceptual" },
-        qualityApproved: true,
       },
     },
     { $sample: { size: count } },
@@ -672,9 +669,15 @@ const generateQualityBatch = async (skill, count, difficultyTier = 3, context = 
   // If not enough from cache, generate fresh via 3-pass pipeline
   const remaining = count - generated.length;
   if (remaining > 0) {
-    console.log(`[QuestionQuality] Cache has ${generated.length}/${count} for ${skill}. Generating ${remaining} fresh.`);
-    for (let i = 0; i < remaining; i++) {
-      const q = await generateQualityQuestion(skill, difficultyTier, context);
+    console.log(`[QuestionQuality] Cache has ${generated.length}/${count} for ${skill}. Generating ${remaining} fresh concurrently.`);
+    
+    const freshPromises = Array.from({ length: remaining }).map(() => 
+      generateQualityQuestion(skill, difficultyTier, context)
+    );
+    
+    const freshResults = await Promise.all(freshPromises);
+    
+    for (const q of freshResults) {
       if (q && !usedTexts.has(q.questionText)) {
         usedTexts.add(q.questionText);
         generated.push(q);

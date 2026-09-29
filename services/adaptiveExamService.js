@@ -273,7 +273,6 @@ const generateAdaptiveRound = async (skillDNA, jobSkills = [], questionCount = 1
     const fallbackDocs = await QuestionBank.aggregate([
       {
         $match: {
-          scenarioType: { $ne: "conceptual" },
           question: { $nin: Array.from(usedTexts) },
         },
       },
