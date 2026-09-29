@@ -281,7 +281,7 @@ const generateAdaptiveRound = async (skillDNA, jobSkills = [], questionCount = 1
 
     for (const doc of fallbackDocs) {
       if (allQuestions.length >= questionCount) break;
-      const allOptions = [doc.correct_answer, ...doc.distractors.slice(0, 3)];
+      const allOptions = [doc.correct_answer, ...(doc.distractors || []).slice(0, 3)];
       const shuffled = shuffleArray(allOptions);
       allQuestions.push({
         questionText: doc.question,

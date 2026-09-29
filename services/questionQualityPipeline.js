@@ -648,7 +648,7 @@ const generateQualityBatch = async (skill, count, difficultyTier = 3, context = 
     if (!usedTexts.has(doc.question)) {
       usedTexts.add(doc.question);
       // Re-shuffle options for freshness
-      const allOptions = [doc.correct_answer, ...doc.distractors.slice(0, 3)];
+      const allOptions = [doc.correct_answer, ...(doc.distractors || []).slice(0, 3)];
       const shuffled = shuffleArray(allOptions);
       generated.push({
         questionText: doc.question,
