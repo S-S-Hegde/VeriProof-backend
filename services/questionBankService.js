@@ -778,10 +778,10 @@ const assembleCalibrationRound = async (requiredSkills = [], questionCount = 10,
   const assembled = [];
   const usedQuestionTexts = new Set();
 
-  for (const skill of effectiveSkills) {
-    if (assembled.length >= questionCount) break;
-
-    const needed = Math.min(perSkillCount, questionCount - assembled.length);
+  const skillPromises = effectiveSkills.map(async (skill) => {
+    const skillAssembled = [];
+    const usedQuestionTexts = new Set();
+    const needed = Math.min(perSkillCount, questionCount); // We'll trim later
     const skillRegex = new RegExp(`^${skill.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i");
 
     // ── Stratified difficulty sampling: 30% Easy, 50% Medium, 20% Hard ──
@@ -822,27 +822,42 @@ const assembleCalibrationRound = async (requiredSkills = [], questionCount = 10,
       return results;
     };
 
-    const easyQ = await pullByDifficulty("Easy", easyCount);
-    const medQ = await pullByDifficulty("Medium", mediumCount);
-    const hardQ = await pullByDifficulty("Hard", hardCount);
+    // Parallelize difficulty pulls
+    const [easyQ, medQ, hardQ] = await Promise.all([
+      pullByDifficulty("Easy", easyCount),
+      pullByDifficulty("Medium", mediumCount),
+      pullByDifficulty("Hard", hardCount)
+    ]);
 
-    assembled.push(...easyQ, ...medQ, ...hardQ);
+    skillAssembled.push(...easyQ, ...medQ, ...hardQ);
 
     // ── Include 1 trap question per skill (if enabled and available) ──
-    if (includeTrapQuestions && assembled.length < questionCount) {
+    if (includeTrapQuestions && skillAssembled.length < perSkillCount + 1) {
       const trapDocs = await QuestionBank.find({
         skillName: { $regex: skillRegex },
         isTrapQuestion: true,
       }).sort({ _id: 1 }).limit(1);
 
       for (const doc of trapDocs) {
-        if (assembled.length >= questionCount) break;
         if (!usedQuestionTexts.has(doc.question)) {
           usedQuestionTexts.add(doc.question);
-          assembled.push(formatAndRandomizeQuestion(doc, "Core", "calibration"));
+          skillAssembled.push(formatAndRandomizeQuestion(doc, "Core", "calibration"));
         }
       }
     }
+    
+    return skillAssembled;
+  });
+
+  const skillResults = await Promise.all(skillPromises);
+  
+  // Flatten and enforce exact quota limits sequentially to preserve diversity
+  for (const skillRes of skillResults) {
+    for (const q of skillRes) {
+      if (assembled.length >= questionCount) break;
+      assembled.push(q);
+    }
+    if (assembled.length >= questionCount) break;
   }
 
   // Fallback if still short
@@ -893,10 +908,9 @@ const assembleExam = async (requiredSkills = [], questionCount = 35, jdRatio = 0
     const usedQuestionTexts = new Set();
     const perSkillTarget = Math.max(1, Math.ceil(quota / targetSkills.length));
 
-    for (const skill of targetSkills) {
-      if (selectedQuestionDocs.length >= quota) break;
-
-      const needed = Math.min(perSkillTarget, quota - selectedQuestionDocs.length);
+    const skillPromises = targetSkills.map(async (skill) => {
+      const skillDocs = [];
+      const needed = Math.min(perSkillTarget, quota);
 
       const skillRegex = new RegExp(`^${skill.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i");
       let matched = await QuestionBank.aggregate([
@@ -916,9 +930,21 @@ const assembleExam = async (requiredSkills = [], questionCount = 35, jdRatio = 0
       }
 
       for (const doc of matched) {
-        if (!usedQuestionTexts.has(doc.question) && selectedQuestionDocs.length < quota) {
+        if (!usedQuestionTexts.has(doc.question)) {
           usedQuestionTexts.add(doc.question);
-          selectedQuestionDocs.push({ ...doc, section: sectionName });
+          skillDocs.push({ ...doc, section: sectionName });
+        }
+      }
+      return skillDocs;
+    });
+
+    const skillResults = await Promise.all(skillPromises);
+    
+    // Flatten sequentially to enforce quota
+    for (const skillDocs of skillResults) {
+      for (const doc of skillDocs) {
+        if (selectedQuestionDocs.length < quota) {
+          selectedQuestionDocs.push(doc);
         }
       }
     }
@@ -938,7 +964,7 @@ const assembleExam = async (requiredSkills = [], questionCount = 35, jdRatio = 0
       }
     }
 
-    return selectedQuestionDocs.map((doc) => formatAndRandomizeQuestion(doc, sectionName));
+    return selectedQuestionDocs.map((doc) => formatAndRandomizeQuestion(doc, sectionName, "legacy_active"));
   };
 
   const [coreQuestions, electiveQuestions] = await Promise.all([
