@@ -1726,7 +1726,8 @@ const startPart2 = async (req, res) => {
     }
 
     // Check Purgatory Timeout
-    const job = exam.jobId ? await Project.model('Job').findById(exam.jobId).catch(()=>null) : null;
+    const Job = require("../models/Job");
+    const job = exam.jobId ? await Job.findById(exam.jobId).catch(()=>null) : null;
     const maxDurationMins = job?.assessmentSettings?.purgatoryDuration || 15;
     
     const now = new Date();
