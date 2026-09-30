@@ -1794,7 +1794,7 @@ const startPart2 = async (req, res) => {
     await exam.save();
 
     // Format for frontend
-    const frontendQuestions = part2Questions.map((q) => ({
+    const frontendQuestions = exam.questions.filter(q => q.phase === "adaptive").map((q) => ({
       _id: q._id,
       category: q.skill,
       difficulty: q.difficulty,
