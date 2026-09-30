@@ -13,6 +13,31 @@ const mongoose = require("mongoose");
 const { connectDB, isDBConnected } = require("./config/db");
 const { generalLimiter } = require("./middleware/rateLimiter");
 
+// ── SAFE ENV VAR AUDIT (Boot Time Only) ──
+const checkEnv = (name, isKey = false) => {
+  const val = process.env[name];
+  if (!val || val.trim() === "") {
+    console.log(`[env-check] ${name}: MISSING`);
+  } else {
+    // Basic shape check without logging the key
+    let shapeValid = "present";
+    if (isKey && name.includes("GEMINI") && !val.startsWith("AIza")) {
+      shapeValid = "present (warning: unexpected format)";
+    }
+    console.log(`[env-check] ${name}: ${shapeValid}`);
+  }
+};
+console.log("=== ENV VAR AUDIT ===");
+checkEnv("GEMINI_API_KEY", true);
+checkEnv("COHERE_API_KEY", true);
+checkEnv("MISTRAL_API_KEY", true);
+checkEnv("NVIDIA_API_KEY", true);
+checkEnv("MONGODB_URI", false);
+checkEnv("JWT_SECRET", true);
+checkEnv("FRONTEND_URL", false);
+checkEnv("GITHUB_TOKEN", true);
+console.log("=====================");
+
 // Route files
 const authRoutes    = require("./routes/authRoutes");
 const projectRoutes = require("./routes/projectRoutes");
@@ -98,6 +123,16 @@ app.get(["/api/keep-alive", "/keep-alive", "/api/ping", "/ping"], (req, res) => 
 
 app.post(["/api/keep-alive/release", "/keep-alive/release"], (req, res) => {
   res.status(200).json({ status: "released", timestamp: new Date().toISOString() });
+});
+
+app.get("/api/admin/llm-provider-health", (req, res) => {
+  try {
+    const { getProviderHealth } = require("./services/llmRouter");
+    const health = getProviderHealth();
+    res.status(200).json({ success: true, providers: health });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Failed to get provider health" });
+  }
 });
 
 // Lightweight Render Health Check

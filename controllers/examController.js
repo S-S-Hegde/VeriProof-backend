@@ -1659,7 +1659,7 @@ const submitCalibration = async (req, res) => {
     const calibrationScore = Math.round((correctCount / Math.max(1, calibrationQuestions.length)) * 100);
 
     // Update Exam document
-    exam.candidateDNA = skillDNA;
+    exam.skillDNA = skillDNA;
     exam.calibrationScore = calibrationScore;
     exam.adaptiveMetrics = {
       ...(exam.adaptiveMetrics || {}),
@@ -1748,12 +1748,45 @@ const startPart2 = async (req, res) => {
     const calibrationCount = exam.questions.filter((q) => q.phase === "calibration").length;
     const adaptiveCount = Math.max(5, targetCount - calibrationCount);
 
-    const part2Questions = await generateAdaptiveRound(
-      exam.candidateDNA,
+    let part2Questions = [];
+    try {
+      part2Questions = await generateAdaptiveRound(
+      exam.skillDNA,
       exam.skills,
       adaptiveCount,
       exam.projectContext?.join("; ") || ""
     );
+    } catch (genError) {
+      console.error("[StartPart2] Adaptive Generation Failed:", genError.message);
+
+      const QuestionBank = require("../models/QuestionBank");
+      const fallbackDocs = await QuestionBank.aggregate([{ $sample: { size: adaptiveCount } }]);
+      
+      if (!fallbackDocs || fallbackDocs.length === 0) {
+        throw new Error("Generation failed and QuestionBank fallback is empty.");
+      }
+
+      part2Questions = fallbackDocs.map((doc) => {
+        const allOptions = [doc.correct_answer, ...(doc.distractors || []).slice(0, 3)];
+        for (let i = allOptions.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [allOptions[i], allOptions[j]] = [allOptions[j], allOptions[i]];
+        }
+        return {
+          questionText: doc.question,
+          options: allOptions,
+          correctOption: allOptions.indexOf(doc.correct_answer),
+          skill: doc.skillName || "Technical",
+          difficulty: doc.difficulty || "Medium",
+          difficultyTier: doc.difficultyTier || 3,
+          scenarioType: doc.scenarioType || "code_debug",
+          codeSnippet: doc.codeSnippet || "",
+          codeLanguage: doc.codeLanguage || "",
+          section: "Adaptive",
+          phase: "adaptive",
+        };
+      });
+    }
 
     // Append to existing questions
     exam.questions.push(...part2Questions);
@@ -1781,7 +1814,7 @@ const startPart2 = async (req, res) => {
     });
   } catch (error) {
     console.error("Start Part 2 Error:", error.stack || error.message);
-    res.status(500).json({ message: "Failed to generate Part 2 questions." });
+    res.status(502).json({ message: "Question generation temporarily unavailable. We are retrying. Please refresh in a moment." });
   }
 };
 

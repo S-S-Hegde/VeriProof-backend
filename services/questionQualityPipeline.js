@@ -256,12 +256,8 @@ const runQualityGates = (correctAnswer, distractors) => {
  * @returns {Promise<{ question, codeSnippet, codeLanguage, correctAnswer, scenarioType } | null>}
  */
 const generateScenarioAndAnswer = async (skill, difficultyTier = 3, scenarioType = "code_debug", context = "") => {
-  const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-  if (!geminiKey) {
-    console.warn("[QuestionQuality] No Gemini API key. Skipping Pass 1.");
-    return null;
-  }
-
+  const { generateWithFallback } = require("./llmRouter");
+  
   const scenarioInstruction = SCENARIO_PROMPTS[scenarioType] || SCENARIO_PROMPTS.code_debug;
   const tierDesc = TIER_DESCRIPTIONS[difficultyTier] || TIER_DESCRIPTIONS[3];
 
@@ -292,21 +288,13 @@ OUTPUT FORMAT — Return ONLY raw JSON (no markdown, no backticks):
 }`;
 
   try {
-    const genAI = new GoogleGenerativeAI(geminiKey);
-    const model = genAI.getGenerativeModel({
-      model: "gemini-2.0-flash",
-      generationConfig: { temperature: 0.4, responseMimeType: "application/json" },
+    const parsed = await generateWithFallback(prompt, (p) => {
+      return p &&
+        typeof p.question === "string" && p.question.length > 20 &&
+        typeof p.correct_answer === "string" && p.correct_answer.length > 10;
     });
 
-    const result = await model.generateContent(prompt);
-    const rawText = (result.response.text() || "").replace(/```json|```/g, "").trim();
-    const parsed = JSON.parse(rawText);
-
-    if (
-      parsed &&
-      typeof parsed.question === "string" && parsed.question.length > 20 &&
-      typeof parsed.correct_answer === "string" && parsed.correct_answer.length > 10
-    ) {
+    if (parsed) {
       return {
         question: parsed.question.trim(),
         codeSnippet: (parsed.code_snippet || "").trim(),
@@ -315,8 +303,6 @@ OUTPUT FORMAT — Return ONLY raw JSON (no markdown, no backticks):
         scenarioType,
       };
     }
-
-    console.warn("[QuestionQuality] Pass 1: Invalid structure from LLM.");
     return null;
   } catch (err) {
     console.error("[QuestionQuality] Pass 1 error:", err.message);
@@ -339,8 +325,7 @@ OUTPUT FORMAT — Return ONLY raw JSON (no markdown, no backticks):
  * @returns {Promise<string[] | null>} Array of 3 distractors, or null on failure
  */
 const generateAdversarialDistractors = async (question, correctAnswer, skill, codeSnippet = "") => {
-  const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-  if (!geminiKey) return null;
+  const { generateWithFallback } = require("./llmRouter");
 
   const correctLength = correctAnswer.length;
   const minLength = Math.floor(correctLength * 0.80);
@@ -373,23 +358,17 @@ OUTPUT FORMAT — Return ONLY a raw JSON array of exactly 3 strings (no markdown
 ["distractor 1", "distractor 2", "distractor 3"]`;
 
   try {
-    const genAI = new GoogleGenerativeAI(geminiKey);
-    const model = genAI.getGenerativeModel({
-      model: "gemini-2.0-flash",
-      generationConfig: { temperature: 0.35, responseMimeType: "application/json" },
+    const parsed = await generateWithFallback(prompt, (p) => {
+      const dists = Array.isArray(p) ? p : (p.distractors || []);
+      return dists.length >= 3 && dists.every((d) => typeof d === "string" && d.length > 10);
     });
-
-    const result = await model.generateContent(prompt);
-    const rawText = (result.response.text() || "").replace(/```json|```/g, "").trim();
-    const parsed = JSON.parse(rawText);
 
     const distractors = Array.isArray(parsed) ? parsed : (parsed.distractors || []);
 
-    if (distractors.length >= 3 && distractors.every((d) => typeof d === "string" && d.length > 10)) {
+    if (distractors.length >= 3) {
       return distractors.slice(0, 3).map((d) => d.trim());
     }
 
-    console.warn("[QuestionQuality] Pass 2: Insufficient distractors from LLM.");
     return null;
   } catch (err) {
     console.error("[QuestionQuality] Pass 2 error:", err.message);
