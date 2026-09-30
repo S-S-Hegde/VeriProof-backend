@@ -6,6 +6,7 @@ const {
   getExamHistory,
   analyzeProctorSnapshot,
   recordProctorViolation,
+  recordAuditSnapshot,
   recordViolationSnapshot,
   getProjectDefenseQuestions,
   evaluateDefenseSubmission,
@@ -43,6 +44,7 @@ router.post("/project-defense/evaluate", protect, examActionRateLimit, evaluateD
 // Anti-Cheat & Proctoring Telemetry
 router.post("/proctor-snapshot", protect, analyzeProctorSnapshot);
 router.post("/record-violation", protect, recordProctorViolation);
+router.post("/:examId/proctor/snapshot", protect, recordAuditSnapshot);
 router.post("/record-violation-snapshot", recordViolationSnapshot);
 
 // ── Project Authenticity Verification Routes ──────────────────────────────

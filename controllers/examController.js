@@ -2043,7 +2043,44 @@ const getProjectAuthenticity = async (req, res) => {
   }
 };
 
+
+// @desc    Record periodic face audit snapshot to Cloudinary
+// @route   POST /api/exams/:examId/proctor/snapshot
+// @access  Private
+const recordAuditSnapshot = async (req, res) => {
+  try {
+    const { imageBase64 } = req.body;
+    const { examId } = req.params;
+
+    if (!imageBase64) return res.status(400).json({ message: "No image provided" });
+    if (!req.user || !req.user._id) return res.status(401).json({ message: "Unauthorized" });
+
+    const Exam = require("../models/Exam");
+    const activeExam = await Exam.findOne({ _id: examId, candidateId: req.user._id });
+    if (!activeExam) return res.status(404).json({ message: "Exam not found" });
+
+    const cloudinary = require("../utils/cloudinary");
+    const uploadResult = await cloudinary.uploader.upload(imageBase64, {
+      folder: `veriproof/audits/${examId}`,
+      resource_type: "image"
+    });
+
+    if (!Array.isArray(activeExam.snapshots)) activeExam.snapshots = [];
+    activeExam.snapshots.push({
+      url: uploadResult.secure_url,
+      timestamp: new Date()
+    });
+    
+    await activeExam.save();
+    return res.status(200).json({ success: true, url: uploadResult.secure_url });
+  } catch (error) {
+    console.error("[recordAuditSnapshot Error]", error);
+    return res.status(500).json({ success: false, message: "Snapshot recording failed" });
+  }
+};
+
 module.exports = {
+  recordAuditSnapshot,
   startExam,
   submitExam,
   getExamHistory,
