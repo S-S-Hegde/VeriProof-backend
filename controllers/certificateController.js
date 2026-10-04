@@ -3,157 +3,172 @@ const path = require("path");
 const fs = require("fs");
 const Certificate = require("../models/Certificate");
 const User = require("../models/User");
-const pdfParse = require("pdf-parse");
+const ResumeAnalysis = require("../models/ResumeAnalysis");
+const {
+  inspectAndVerifyCertificate,
+  detectSubjectDomain,
+  crossReferenceWithResume,
+  cleanCertificateTitle,
+  isUuidOrHash,
+} = require("../services/certificateIntelligenceService");
 
-/**
- * Helper to extract certificate details from text
- */
-const extractCertificateFromText = (text = "", filename = "") => {
-  const result = {
-    title: "",
-    issuer: "",
-    issueDate: new Date(),
-    credentialId: "",
-    skills: [],
-  };
-
-  const cleanText = text.replace(/\r\n/g, "\n");
-
-  // 1. Identify Issuer
-  const issuers = [
-    { name: "Amazon Web Services (AWS)", regex: /\b(Amazon Web Services|AWS)\b/i },
-    { name: "Google Cloud", regex: /\b(Google Cloud|Google Cloud Platform|GCP)\b/i },
-    { name: "Microsoft Azure", regex: /\b(Microsoft|Azure|Microsoft Certified)\b/i },
-    { name: "Meta", regex: /\b(Meta|Facebook)\b/i },
-    { name: "DeepLearning.AI", regex: /\b(DeepLearning\.AI|Andrew Ng)\b/i },
-    { name: "Stanford Online", regex: /\b(Stanford Online|Stanford University)\b/i },
-    { name: "Coursera", regex: /\b(Coursera)\b/i },
-    { name: "edX", regex: /\b(edX|HarvardX|MITx)\b/i },
-    { name: "Udacity", regex: /\b(Udacity)\b/i },
-    { name: "Linux Foundation", regex: /\b(Linux Foundation|CNCF|Kubernetes)\b/i },
-    { name: "Oracle", regex: /\b(Oracle|Java SE|Oracle Certified)\b/i },
-    { name: "Cisco", regex: /\b(Cisco|CCNA|CCNP)\b/i },
-    { name: "IBM", regex: /\b(IBM|IBM Cloud)\b/i },
-    { name: "HashiCorp", regex: /\b(HashiCorp|Terraform)\b/i },
-    { name: "MongoDB", regex: /\b(MongoDB University|MongoDB Certified)\b/i },
-    { name: "HackerRank", regex: /\b(HackerRank)\b/i },
-    { name: "freeCodeCamp", regex: /\b(freeCodeCamp)\b/i },
-  ];
-
-  for (const item of issuers) {
-    if (item.regex.test(cleanText) || item.regex.test(filename)) {
-      result.issuer = item.name;
-      break;
-    }
-  }
-  if (!result.issuer) {
-    result.issuer = "Verified Educational Authority";
-  }
-
-  // 2. Identify Certificate Title
-  const titleMatch =
-    cleanText.match(/(?:certificate of (?:completion|achievement)|successfully completed|has achieved|certified as|certification in)\s+([A-Za-z0-9\s-]{4,60})/i) ||
-    cleanText.match(/([A-Za-z0-9\s-]{4,50}\s+(?:Architect|Developer|Engineer|Specialist|Associate|Professional|Practitioner|Administrator|Mastery))/i);
-
-  if (titleMatch) {
-    result.title = titleMatch[1]?.replace(/\n/g, " ").trim();
-  } else {
-    // Infer title from filename
-    const cleanFileName = filename
-      .replace(/\.[^/.]+$/, "")
-      .replace(/[-_]/g, " ")
-      .replace(/(certificate|cert|verified|diploma|proof)/gi, "")
-      .trim();
-    result.title = cleanFileName
-      ? cleanFileName.charAt(0).toUpperCase() + cleanFileName.slice(1)
-      : "Verified Technical Credential";
-  }
-
-  // 3. Credential ID
-  const idMatch =
-    cleanText.match(/(?:Certificate ID|Credential ID|License|Verification Number|Serial|ID)[\s:=-]+([A-Za-z0-9-]{6,32})/i) ||
-    cleanText.match(/\b([A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4})\b/);
-
-  if (idMatch) {
-    result.credentialId = idMatch[1]?.trim();
-  } else {
-    result.credentialId = `VP-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
-  }
-
-  // 4. Skills extraction
-  const commonSkills = [
-    "React", "Node.js", "Python", "JavaScript", "TypeScript", "AWS", "Google Cloud",
-    "Azure", "Docker", "Kubernetes", "Machine Learning", "Deep Learning", "SQL",
-    "PostgreSQL", "MongoDB", "Cybersecurity", "DevOps", "Data Science", "System Design",
-    "REST APIs", "GraphQL", "Java", "C++", "Go", "Rust", "Terraform", "CI/CD"
-  ];
-
-  for (const s of commonSkills) {
-    const re = new RegExp(`\\b${s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, "i");
-    if (re.test(cleanText) || re.test(result.title) || re.test(filename)) {
-      result.skills.push(s);
-    }
-  }
-
-  if (result.skills.length === 0) {
-    result.skills = ["Cloud Computing", "Full Stack Development"];
-  }
-
-  return result;
-};
-
-// @desc    Get all certificates for the authenticated user
+// @desc    Get all certificates for the authenticated user (with automatic UUID sanitization & enrichment)
 // @route   GET /api/certificates
 // @access  Private (Candidates & Recruiters)
 const getMyCertificates = asyncHandler(async (req, res) => {
   const certificates = await Certificate.find({ user: req.user._id }).sort({ createdAt: -1 });
+
+  // Get active resume analysis for cross-referencing legacy records
+  let resumeAnalysis = null;
+  try {
+    resumeAnalysis = await ResumeAnalysis.findOne({ candidateId: req.user._id }).sort({ createdAt: -1 });
+  } catch (err) {
+    // Silent
+  }
+
+  // Sanitize any existing certificates that have UUID titles or missing subject/vendor
+  let updatedAny = false;
+  for (const cert of certificates) {
+    let needsSave = false;
+
+    // Check if title is a UUID or hash
+    if (isUuidOrHash(cert.title) || !cert.title || cert.title.length < 3) {
+      const detectedSubject = cert.subject || detectSubjectDomain(cert.title, cert.skills);
+      cert.title = cleanCertificateTitle(cert.title, detectedSubject, cert.skills, cert.vendor || cert.issuer);
+      needsSave = true;
+    }
+
+    // Check if subject is missing
+    if (!cert.subject || cert.subject.trim() === "") {
+      cert.subject = detectSubjectDomain(`${cert.title} ${cert.skills.join(" ")}`, cert.skills);
+      needsSave = true;
+    }
+
+    // Check if vendor is missing or default
+    if (!cert.vendor || cert.vendor.trim() === "" || isUuidOrHash(cert.vendor)) {
+      if (cert.issuer && !isUuidOrHash(cert.issuer) && cert.issuer !== "Verified Educational Authority") {
+        cert.vendor = cert.issuer.split("/")[0].split("(")[0].trim();
+      } else {
+        cert.vendor = "Verified Technical Authority";
+      }
+      needsSave = true;
+    }
+
+    // Check resume cross-reference if not already matched
+    if (!cert.resumeMatched && resumeAnalysis) {
+      const match = await crossReferenceWithResume(req.user._id, {
+        title: cert.title,
+        vendor: cert.vendor,
+        issuer: cert.issuer,
+        subject: cert.subject,
+        skills: cert.skills,
+      });
+      if (match.matched) {
+        cert.resumeMatched = true;
+        cert.resumeMatchDetails = match.details;
+        needsSave = true;
+      } else if (!cert.resumeMatchDetails) {
+        cert.resumeMatchDetails = match.details;
+        needsSave = true;
+      }
+    }
+
+    if (needsSave) {
+      try {
+        await cert.save();
+        updatedAny = true;
+      } catch (err) {
+        console.warn("[Certificates] Auto-sanitize save error:", err.message);
+      }
+    }
+  }
+
   res.json(certificates);
 });
 
-// @desc    Upload and create a new verified certificate (Supports Auto-Extract or Manual)
+// @desc    Upload and create a new verified certificate with Multimodal AI Analysis & Resume Cross-Reference
 // @route   POST /api/certificates
 // @access  Private (Candidates & Recruiters)
 const createCertificate = asyncHandler(async (req, res) => {
-  let { title, issuer, issueDate, expiryDate, credentialId, credentialUrl, skills, autoExtract } = req.body;
+  let { title, issuer, vendor, subject, issueDate, expiryDate, credentialId, credentialUrl, skills, autoExtract } = req.body;
 
   let fileUrl = "";
-  let fileType = "document";
-  let extractedText = "";
+  let fileType = "application/pdf";
+  let fileBuffer = null;
+  let fileBufferBase64 = "";
 
   if (req.file) {
     fileUrl = `/uploads/certificates/${req.file.filename}`;
     fileType = req.file.mimetype || "application/pdf";
 
-    // Attempt text extraction if autoExtract is requested or missing essential fields
-    if (autoExtract === "true" || autoExtract === true || !title || !issuer) {
-      const filePath = path.join(__dirname, "..", "uploads", "certificates", req.file.filename);
-      if (fs.existsSync(filePath)) {
-        try {
-          if (fileType.includes("pdf") || req.file.originalname.toLowerCase().endsWith(".pdf")) {
-            const buffer = fs.readFileSync(filePath);
-            const pdfData = await pdfParse(buffer);
-            extractedText = pdfData?.text || "";
-          }
-        } catch (parseErr) {
-          console.warn("[Certificate AI Extract] Text parse notice:", parseErr.message);
+    const filePath = path.join(__dirname, "..", "uploads", "certificates", req.file.filename);
+    if (fs.existsSync(filePath)) {
+      try {
+        fileBuffer = fs.readFileSync(filePath);
+        // Store base64 if under 8MB to protect against ephemeral disk restarts
+        if (fileBuffer && fileBuffer.length <= 8 * 1024 * 1024) {
+          fileBufferBase64 = fileBuffer.toString("base64");
         }
-      }
-
-      const extracted = extractCertificateFromText(extractedText, req.file.originalname);
-      title = title || extracted.title;
-      issuer = issuer || extracted.issuer;
-      credentialId = credentialId || extracted.credentialId;
-      if (!skills || (Array.isArray(skills) && skills.length === 0)) {
-        skills = extracted.skills;
+      } catch (readErr) {
+        console.warn("[Certificate Upload] Buffer read warning:", readErr.message);
       }
     }
+
+    // Perform Deep Multimodal AI Inspection
+    const isAuto = autoExtract === "true" || autoExtract === true || !title || !issuer;
+    const aiResult = await inspectAndVerifyCertificate({
+      buffer: fileBuffer,
+      mimeType: fileType,
+      originalFilename: req.file.originalname,
+      userId: req.user._id,
+    });
+
+    if (isAuto) {
+      title = aiResult.title;
+      issuer = aiResult.issuer;
+      vendor = aiResult.vendor;
+      subject = aiResult.subject;
+      credentialId = aiResult.credentialId;
+      skills = aiResult.skills;
+      issueDate = issueDate || aiResult.issueDate;
+      expiryDate = expiryDate || aiResult.expiryDate;
+    } else {
+      // Manual input with AI augmentation
+      title = cleanCertificateTitle(title, subject || aiResult.subject, skills || aiResult.skills, issuer || aiResult.vendor);
+      vendor = vendor || aiResult.vendor || issuer;
+      subject = subject || aiResult.subject || detectSubjectDomain(`${title} ${issuer}`, skills);
+      credentialId = credentialId || aiResult.credentialId;
+      if (!skills || (Array.isArray(skills) && skills.length === 0)) {
+        skills = aiResult.skills;
+      }
+    }
+
+    // Attach resume match result from AI inspection
+    var resumeMatched = aiResult.resumeMatched;
+    var resumeMatchDetails = aiResult.resumeMatchDetails;
+    var recipientName = aiResult.recipientName || "";
   } else if (req.body.fileUrl) {
     fileUrl = req.body.fileUrl;
   }
 
+  // Cross-reference with resume if manual mode or fileless
+  if (resumeMatched === undefined) {
+    const resumeCheck = await crossReferenceWithResume(req.user._id, {
+      title,
+      vendor: vendor || issuer,
+      issuer,
+      subject,
+      skills,
+    });
+    resumeMatched = resumeCheck.matched;
+    resumeMatchDetails = resumeCheck.details;
+  }
+
   // Fallbacks if still unspecified
-  title = title || "Verified Technical Credential";
-  issuer = issuer || "VeriProof Certified Provider";
+  subject = subject || detectSubjectDomain(`${title || ""} ${issuer || ""}`, skills || []);
+  title = cleanCertificateTitle(title, subject, skills, vendor || issuer);
+  issuer = issuer || "VeriProof Certified Authority";
+  vendor = vendor || issuer.split("/")[0].trim();
 
   let parsedSkills = [];
   if (Array.isArray(skills)) {
@@ -166,23 +181,29 @@ const createCertificate = asyncHandler(async (req, res) => {
     }
   }
   if (parsedSkills.length === 0) {
-    parsedSkills = ["Full Stack", "System Verification"];
+    parsedSkills = ["Cloud Computing", "Full Stack Development"];
   }
 
   const certificate = await Certificate.create({
     user: req.user._id,
     title: title.trim(),
     issuer: issuer.trim(),
+    vendor: vendor.trim(),
+    subject: subject.trim(),
+    recipientName: (recipientName || "").trim(),
     issueDate: issueDate ? new Date(issueDate) : new Date(),
     expiryDate: expiryDate ? new Date(expiryDate) : undefined,
     credentialId: (credentialId || `VP-${Date.now().toString(36).toUpperCase()}`).trim(),
     credentialUrl: (credentialUrl || "").trim(),
     fileUrl,
     fileType,
+    fileBufferBase64,
     skills: parsedSkills,
+    resumeMatched: Boolean(resumeMatched),
+    resumeMatchDetails: resumeMatchDetails || "",
     verificationStatus: "Verified",
-    trustScoreBonus: 5,
-    xpAwarded: 250,
+    trustScoreBonus: resumeMatched ? 8 : 5,
+    xpAwarded: resumeMatched ? 350 : 250,
   });
 
   // Award XP and bump trust score for candidate
@@ -207,9 +228,12 @@ const createCertificate = asyncHandler(async (req, res) => {
         };
       }
 
-      user.skillProgress.totalXp = (user.skillProgress.totalXp || 0) + 250;
+      const xpGain = resumeMatched ? 350 : 250;
+      const trustGain = resumeMatched ? 5 : 3;
+
+      user.skillProgress.totalXp = (user.skillProgress.totalXp || 0) + xpGain;
       user.skillProgress.level = Math.max(1, Math.floor(user.skillProgress.totalXp / 500) + 1);
-      user.skillProgress.trustScore = Math.min(99, (user.skillProgress.trustScore || 80) + 3);
+      user.skillProgress.trustScore = Math.min(99, (user.skillProgress.trustScore || 80) + trustGain);
       user.skillProgress.verifiedCount = (user.skillProgress.verifiedCount || 0) + 1;
       user.skillProgress.lastUpdated = new Date();
 
@@ -220,6 +244,123 @@ const createCertificate = asyncHandler(async (req, res) => {
   }
 
   res.status(201).json(certificate);
+});
+
+// @desc    Re-analyze all existing certificates for the authenticated user
+// @route   POST /api/certificates/re-analyze-all
+// @access  Private
+const reanalyzeAllCertificates = asyncHandler(async (req, res) => {
+  const certificates = await Certificate.find({ user: req.user._id });
+  const resumeAnalysis = await ResumeAnalysis.findOne({ candidateId: req.user._id }).sort({ createdAt: -1 });
+
+  let updatedCount = 0;
+
+  for (const cert of certificates) {
+    let reanalyzed = false;
+
+    // 1. Try file buffer if available
+    let buffer = null;
+    if (cert.fileBufferBase64) {
+      try {
+        buffer = Buffer.from(cert.fileBufferBase64, "base64");
+      } catch (err) {}
+    } else if (cert.fileUrl && cert.fileUrl.startsWith("/uploads/certificates/")) {
+      const filePath = path.join(__dirname, "..", cert.fileUrl);
+      if (fs.existsSync(filePath)) {
+        try {
+          buffer = fs.readFileSync(filePath);
+        } catch (err) {}
+      }
+    }
+
+    if (buffer) {
+      try {
+        const aiResult = await inspectAndVerifyCertificate({
+          buffer,
+          mimeType: cert.fileType || "application/pdf",
+          originalFilename: cert.title,
+          userId: req.user._id,
+        });
+
+        if (aiResult && aiResult.title && !isUuidOrHash(aiResult.title)) {
+          cert.title = aiResult.title;
+          cert.vendor = aiResult.vendor;
+          cert.issuer = aiResult.issuer;
+          cert.subject = aiResult.subject;
+          if (aiResult.skills && aiResult.skills.length > 0) cert.skills = aiResult.skills;
+          cert.resumeMatched = aiResult.resumeMatched;
+          cert.resumeMatchDetails = aiResult.resumeMatchDetails;
+          reanalyzed = true;
+        }
+      } catch (aiErr) {
+        console.warn("[Certificate Re-Analyze] AI error:", aiErr.message);
+      }
+    }
+
+    // If still a UUID or missing subject, sanitize with domain heuristics
+    if (!reanalyzed || isUuidOrHash(cert.title)) {
+      const subject = cert.subject || detectSubjectDomain(`${cert.title} ${cert.skills.join(" ")}`, cert.skills);
+      cert.subject = subject;
+      cert.title = cleanCertificateTitle(cert.title, subject, cert.skills, cert.vendor || cert.issuer);
+      if (!cert.vendor || isUuidOrHash(cert.vendor)) {
+        cert.vendor = cert.issuer || "Verified Educational Authority";
+      }
+
+      if (resumeAnalysis) {
+        const match = await crossReferenceWithResume(req.user._id, {
+          title: cert.title,
+          vendor: cert.vendor,
+          issuer: cert.issuer,
+          subject: cert.subject,
+          skills: cert.skills,
+        });
+        cert.resumeMatched = match.matched;
+        cert.resumeMatchDetails = match.details;
+      }
+    }
+
+    await cert.save();
+    updatedCount++;
+  }
+
+  const updatedCertificates = await Certificate.find({ user: req.user._id }).sort({ createdAt: -1 });
+  res.json({
+    message: `Successfully re-analyzed ${updatedCount} certificates.`,
+    certificates: updatedCertificates,
+  });
+});
+
+// @desc    Get certificate proof file (supports disk or base64 stream)
+// @route   GET /api/certificates/:id/file
+// @access  Private
+const getCertificateFile = asyncHandler(async (req, res) => {
+  const certificate = await Certificate.findOne({
+    _id: req.params.id,
+    user: req.user._id,
+  });
+
+  if (!certificate) {
+    res.status(404);
+    throw new Error("Certificate not found.");
+  }
+
+  // 1. Try disk file
+  if (certificate.fileUrl && certificate.fileUrl.startsWith("/uploads/certificates/")) {
+    const filePath = path.join(__dirname, "..", certificate.fileUrl);
+    if (fs.existsSync(filePath)) {
+      return res.sendFile(filePath);
+    }
+  }
+
+  // 2. Fallback to fileBufferBase64
+  if (certificate.fileBufferBase64) {
+    const buffer = Buffer.from(certificate.fileBufferBase64, "base64");
+    res.set("Content-Type", certificate.fileType || "application/pdf");
+    res.set("Content-Disposition", `inline; filename="certificate_${certificate._id}.${(certificate.fileType || "pdf").includes("png") ? "png" : "pdf"}"`);
+    return res.send(buffer);
+  }
+
+  res.status(404).json({ message: "Certificate proof file not found." });
 });
 
 // @desc    Delete a certificate
@@ -255,5 +396,7 @@ const deleteCertificate = asyncHandler(async (req, res) => {
 module.exports = {
   getMyCertificates,
   createCertificate,
+  reanalyzeAllCertificates,
+  getCertificateFile,
   deleteCertificate,
 };

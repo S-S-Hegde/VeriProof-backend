@@ -8,6 +8,8 @@ const { protect } = require("../middleware/authMiddleware");
 const {
   getMyCertificates,
   createCertificate,
+  reanalyzeAllCertificates,
+  getCertificateFile,
   deleteCertificate,
 } = require("../controllers/certificateController");
 
@@ -45,6 +47,12 @@ const certUpload = multer({
 router.route("/")
   .get(protect, getMyCertificates)
   .post(protect, certUpload.single("certificate"), createCertificate);
+
+router.route("/re-analyze-all")
+  .post(protect, reanalyzeAllCertificates);
+
+router.route("/:id/file")
+  .get(protect, getCertificateFile);
 
 router.route("/:id")
   .delete(protect, deleteCertificate);

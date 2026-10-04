@@ -43,9 +43,36 @@ const certificateSchema = new mongoose.Schema(
       type: String,
       default: "application/pdf",
     },
+    fileBufferBase64: {
+      type: String,
+      default: "",
+    },
     skills: {
       type: [String],
       default: [],
+    },
+    subject: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    vendor: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    recipientName: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    resumeMatched: {
+      type: Boolean,
+      default: false,
+    },
+    resumeMatchDetails: {
+      type: String,
+      default: "",
     },
     verificationStatus: {
       type: String,
