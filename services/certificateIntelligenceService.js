@@ -1,14 +1,20 @@
 /**
  * certificateIntelligenceService.js
  *
- * Advanced AI-Powered Certificate & Credential Intelligence
- * 1. Multimodal document & image analysis with Gemini 2.0 Flash
- * 2. Vendor / Issuing authority forensic identification
- * 3. Subject domain classification (Machine Learning, Cloud, DevOps, Full Stack, etc.)
- * 4. Cross-referencing with Candidate's Verified Resume (claims.certifications & resume text)
- * 5. Elimination of UUID / hash titles with smart inference
+ * Multi-Engine AI-Powered Certificate & Credential Intelligence
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Optimized to preserve Gemini API credits:
+ * 1. Primary AI Engine: Groq LPU API (qwen/qwen3.8-27b / openai/gpt-oss-120b)
+ *    - 100% Free, ultra-fast (<400ms), structured JSON extraction
+ * 2. Local Forensic Parser: unpdf + pdf-parse (Zero API calls, 0 credits)
+ * 3. Deterministic Heuristic Fallback: 25+ Vendor Signatures & Subject Classifiers
+ * 4. Gemini 2.0 Flash: Emergency last-resort only for pure image bitmaps with 0 text
+ * 5. Resume Cross-Referencing: Verified against candidate's active ResumeAnalysis
+ * 6. Strict UUID / Hash Elimination: Prevents hash filenames from being titles
+ * ─────────────────────────────────────────────────────────────────────────────
  */
 
+const axios = require("axios");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const pdfParse = require("pdf-parse");
 const { extractText: extractWithUnpdf } = require("unpdf");
@@ -103,7 +109,6 @@ const detectSubjectDomain = (text = "", skills = []) => {
 const isUuidOrHash = (str = "") => {
   if (!str) return false;
   const cleaned = str.trim();
-  // Standard UUID or UUID without dashes, or hex sequences with spaces
   const uuidRegex = /^[0-9a-fA-F]{8}[\s-][0-9a-fA-F]{4}[\s-][0-9a-fA-F]{4}[\s-][0-9a-fA-F]{4}[\s-][0-9a-fA-F]{12}$/i;
   const hexHashRegex = /^[0-9a-fA-F\s-]{16,}$/;
   const uuidInTextRegex = /\b[0-9a-fA-F]{8}\s[0-9a-fA-F]{4}\s[0-9a-fA-F]{4}\b/i;
@@ -128,7 +133,6 @@ const cleanCertificateTitle = (title, subject, skills, vendor) => {
     return "Verified Technical Credential";
   }
 
-  // Remove trailing UUIDs or noise
   let clean = title.replace(/\.[a-zA-Z0-9]+$/, "").trim();
   if (isUuidOrHash(clean)) {
     return `Professional Certification in ${subject || "Software Engineering"}`;
@@ -137,37 +141,121 @@ const cleanCertificateTitle = (title, subject, skills, vendor) => {
 };
 
 /**
- * Extract text locally from PDF buffer
+ * Extract text locally from PDF buffer (0 API calls, 0 credits)
  */
 const extractPdfTextLocally = async (buffer) => {
   if (!buffer) return "";
   let fullText = "";
 
-  try {
-    const unpdfResult = await extractWithUnpdf(new Uint8Array(buffer));
-    if (unpdfResult && unpdfResult.text) {
-      fullText = Array.isArray(unpdfResult.text) ? unpdfResult.text.join("\n") : String(unpdfResult.text);
-    }
-  } catch (err) {
-    // Silent fallback
-  }
+  const isPdfBinary = buffer.length > 5 && buffer.subarray(0, 5).toString("latin1").includes("%PDF");
 
-  if (!fullText || fullText.trim().length < 10) {
+  if (isPdfBinary) {
     try {
-      const pdfData = await pdfParse(buffer);
-      if (pdfData && pdfData.text) {
-        fullText = pdfData.text;
+      const unpdfResult = await extractWithUnpdf(new Uint8Array(buffer));
+      if (unpdfResult && unpdfResult.text) {
+        fullText = Array.isArray(unpdfResult.text) ? unpdfResult.text.join("\n") : String(unpdfResult.text);
       }
-    } catch (err) {
-      // Silent fallback
+    } catch (err) {}
+
+    if (!fullText || fullText.trim().length < 10) {
+      try {
+        const pdfData = await pdfParse(buffer);
+        if (pdfData && pdfData.text) {
+          fullText = pdfData.text;
+        }
+      } catch (err) {}
     }
+  } else {
+    try {
+      const textCandidate = buffer.toString("utf-8");
+      if (textCandidate && textCandidate.trim().length > 10 && !/[\x00-\x08\x0E-\x1F]/.test(textCandidate.substring(0, 500))) {
+        fullText = textCandidate;
+      }
+    } catch (err) {}
   }
 
   return fullText.trim();
 };
 
 /**
- * Analyze certificate using Gemini 2.0 Flash (Multimodal: Images + PDFs)
+ * Primary AI Engine: Groq LPU (Zero Gemini credits used!)
+ * Uses qwen/qwen3.8-27b with automatic fallback to openai/gpt-oss-120b
+ */
+const analyzeWithGroq = async (extractedText = "", filename = "") => {
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey || !extractedText || extractedText.trim().length < 10) return null;
+
+  const prompt = `You are an expert academic and technical credential verification specialist.
+Analyze this certificate document text and extract structured JSON:
+- "title": Specific subject/course/credential title (e.g. "AWS Certified Solutions Architect", "Machine Learning Specialization", "Meta Front-End Developer"). Prefer specific course/exam names over generic "Certificate of Completion". NEVER use a file hash or UUID.
+- "vendor": The organization, platform, or university that issued or accredited this credential (e.g. "Amazon Web Services", "Coursera", "Stanford Online", "Google Cloud", "Meta", "DeepLearning.AI", "Udemy", "edX").
+- "issuer": Full official issuer line.
+- "subject": The primary technical subject domain (e.g. "Machine Learning & AI", "Cloud Architecture & DevOps", "Full Stack Web Development", "Cybersecurity & InfoSec", "Data Engineering & Analytics").
+- "recipientName": Full name of recipient if stated.
+- "credentialId": Certificate ID, serial, or verification number if present.
+- "issueDate": Date formatted as YYYY-MM-DD or empty string.
+- "expiryDate": Expiration date formatted as YYYY-MM-DD or empty string.
+- "skills": Array of 2 to 6 specific technical skills certified by this document.
+
+Return ONLY valid JSON matching this schema:
+{
+  "title": "",
+  "vendor": "",
+  "issuer": "",
+  "subject": "",
+  "recipientName": "",
+  "credentialId": "",
+  "issueDate": "",
+  "expiryDate": "",
+  "skills": []
+}
+
+CERTIFICATE TEXT:
+${extractedText.substring(0, 4000)}
+${filename ? `ORIGINAL FILE: ${filename}` : ""}
+`;
+
+  const models = ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"];
+
+  for (const model of models) {
+    try {
+      const res = await axios.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        {
+          model,
+          messages: [{ role: "user", content: prompt }],
+          response_format: { type: "json_object" },
+          temperature: 0.1,
+          max_tokens: 1024,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+          },
+          timeout: 10000,
+        }
+      );
+
+      const content = res.data?.choices?.[0]?.message?.content;
+      if (content) {
+        const parsed = JSON.parse(content.trim());
+        if (parsed && (parsed.title || parsed.vendor)) {
+          console.log(`[Certificate Intelligence] Extracted via Groq model ${model} (0 Gemini credits used)`);
+          return parsed;
+        }
+      }
+    } catch (err) {
+      console.warn(`[Certificate Intelligence] Groq model ${model} notice:`, err.response?.data?.error?.message || err.message);
+    }
+  }
+
+  return null;
+};
+
+/**
+ * Emergency Fallback: Gemini 2.0 Flash
+ * Only triggered if local extraction & Groq found 0 text (e.g. pure bitmap photo)
  */
 const analyzeWithGemini = async (buffer, mimeType = "application/pdf") => {
   if (!geminiClient || !buffer) return null;
@@ -193,15 +281,15 @@ const analyzeWithGemini = async (buffer, mimeType = "application/pdf") => {
 Analyze this certificate document or image with extreme precision and return structured JSON.
 
 EXTRACT CAREFULLY:
-- "title": Exact official credential or certificate title printed on the document (e.g., "AWS Certified Solutions Architect – Associate", "Machine Learning Specialization", "Meta Front-End Developer", "Certificate of Completion in Deep Learning"). If the document is a completion certificate, include the full course/subject title. NEVER return a filename, file hash, UUID, or "certificate.pdf".
+- "title": Exact official credential or certificate title printed on the document (e.g., "AWS Certified Solutions Architect – Associate", "Machine Learning Specialization", "Meta Front-End Developer"). NEVER return a filename, file hash, UUID, or "certificate.pdf".
 - "vendor": The organization, platform, company, or university that issued or accredited this certificate (e.g., "Amazon Web Services", "Coursera", "Stanford University", "DeepLearning.AI", "Meta", "Google Cloud", "Microsoft", "freeCodeCamp", "HackerRank", "Udemy", "edX", "Cisco", "Oracle").
-- "issuer": Full official issuing entity line (e.g. "Amazon Web Services Training & Certification", "Coursera in partnership with Stanford Online").
+- "issuer": Full official issuing entity line.
 - "subject": The primary technical subject domain (e.g., "Machine Learning & AI", "Cloud Architecture & DevOps", "Full Stack Web Development", "Cybersecurity & InfoSec", "Data Engineering & Analytics", "Mobile App Development", "Systems & Network Engineering").
-- "recipientName": Full name of the candidate/recipient whom this certificate was awarded to.
-- "credentialId": The serial number, license ID, verification code, or certificate ID printed on the document (or empty string if not visible).
+- "recipientName": Full name of the recipient whom this certificate was awarded to.
+- "credentialId": The serial number, license ID, verification code, or certificate ID.
 - "issueDate": Issue date formatted as YYYY-MM-DD if printed, or empty string.
 - "expiryDate": Expiration date formatted as YYYY-MM-DD if printed, or empty string.
-- "skills": Array of 2 to 6 specific technical skills certified by this credential (e.g., ["Python", "Machine Learning", "Neural Networks"]).
+- "skills": Array of 2 to 6 specific technical skills certified by this credential.
 
 Return ONLY valid JSON matching this schema:
 {
@@ -230,15 +318,16 @@ Return ONLY valid JSON matching this schema:
     if (!rawText) return null;
 
     const parsed = JSON.parse(rawText.trim());
+    console.log("[Certificate Intelligence] Extracted via Gemini Multimodal fallback");
     return parsed;
   } catch (err) {
-    console.warn("[Certificate AI Service] Gemini analysis notice:", err.message);
+    console.warn("[Certificate Intelligence] Gemini fallback notice:", err.message);
     return null;
   }
 };
 
 /**
- * Fallback Rule-Based Analyzer for local text
+ * Fallback Rule-Based Analyzer for local text (0 API calls, 0 credits)
  */
 const analyzeLocally = (extractedText = "", originalFilename = "") => {
   const result = {
@@ -314,7 +403,7 @@ const analyzeLocally = (extractedText = "", originalFilename = "") => {
 };
 
 /**
- * Cross-Reference Certificate Against Candidate's Verified Resume
+ * Cross-Reference Certificate Against Candidate's Verified Resume (0 API calls)
  */
 const crossReferenceWithResume = async (userId, certDetails = {}) => {
   const matchResult = {
@@ -333,7 +422,6 @@ const crossReferenceWithResume = async (userId, certDetails = {}) => {
     const certTitle = (certDetails.title || "").toLowerCase();
     const certVendor = (certDetails.vendor || certDetails.issuer || "").toLowerCase();
     const certSubject = (certDetails.subject || "").toLowerCase();
-    const certSkills = (certDetails.skills || []).map((s) => s.toLowerCase());
 
     // 1. Check against Resume Claims: Certifications
     const claimsCerts = resumeAnalysis.claims?.certifications || [];
@@ -343,7 +431,6 @@ const crossReferenceWithResume = async (userId, certDetails = {}) => {
       const claimName = (claim.name || "").toLowerCase();
       if (!claimName) continue;
 
-      // Direct or fuzzy match
       const titleTokens = certTitle.split(/\s+/).filter((t) => t.length > 2);
       const claimTokens = claimName.split(/\s+/).filter((t) => t.length > 2);
 
@@ -366,7 +453,7 @@ const crossReferenceWithResume = async (userId, certDetails = {}) => {
       matchResult.matchedClaimName = matchedClaim.name;
       matchResult.details = `Verified against resume credential: "${matchedClaim.name}"`;
 
-      // Update the resume analysis claim status to Verified!
+      // Update resume analysis claim status to Verified!
       matchedClaim.verificationStatus = "Verified";
       await resumeAnalysis.save().catch(() => {});
       return matchResult;
@@ -397,26 +484,41 @@ const crossReferenceWithResume = async (userId, certDetails = {}) => {
 
 /**
  * Master Pipeline: Analyze Certificate Buffer + Cross-Reference Resume
+ * Prioritizes Groq LLM & Local PDF extractors to preserve Gemini credits.
  */
 const inspectAndVerifyCertificate = async ({ buffer, mimeType, originalFilename, userId }) => {
   let certData = null;
+  let localText = "";
 
-  // 1. Try Gemini 2.0 Flash Multimodal Analysis
-  if (buffer && geminiClient) {
+  // 1. Extract text locally from PDF or document (Zero API calls, 0 credits)
+  if (buffer && (mimeType?.includes("pdf") || originalFilename?.toLowerCase().endsWith(".pdf"))) {
+    localText = await extractPdfTextLocally(buffer);
+  }
+
+  // 2. Primary: Run Groq LLM (Zero Gemini credits used!)
+  if (localText && localText.trim().length >= 15) {
+    certData = await analyzeWithGroq(localText, originalFilename);
+  }
+
+  // 3. Fallback: If Groq returned nothing or was rate-limited, try local rule-based extractor
+  if (!certData || !certData.title) {
+    if (localText && localText.trim().length >= 15) {
+      certData = analyzeLocally(localText, originalFilename);
+    }
+  }
+
+  // 4. Emergency Last-Resort: If the file is a pure bitmap image with NO extractable text
+  if ((!certData || !certData.title) && buffer && geminiClient) {
     certData = await analyzeWithGemini(buffer, mimeType);
   }
 
-  // 2. Fallback to Local Text Extraction if Gemini returned nothing
-  if (!certData || !certData.title) {
-    let localText = "";
-    if (buffer && (mimeType?.includes("pdf") || originalFilename?.toLowerCase().endsWith(".pdf"))) {
-      localText = await extractPdfTextLocally(buffer);
-    }
+  // 5. Final Fallback if all else failed
+  if (!certData) {
     certData = analyzeLocally(localText, originalFilename);
   }
 
-  // 3. Guarantee Clean Defaults & Zero UUIDs
-  const subject = certData.subject || detectSubjectDomain(certData.title, certData.skills);
+  // 6. Guarantee Clean Defaults & Zero UUIDs
+  const subject = certData.subject || detectSubjectDomain(`${certData.title || ""} ${localText}`, certData.skills);
   const vendor = certData.vendor && !isUuidOrHash(certData.vendor) ? certData.vendor : (certData.issuer || "Verified Educational Authority");
   const issuer = certData.issuer && !isUuidOrHash(certData.issuer) ? certData.issuer : vendor;
   const skills = Array.isArray(certData.skills) && certData.skills.length > 0
@@ -425,7 +527,7 @@ const inspectAndVerifyCertificate = async ({ buffer, mimeType, originalFilename,
 
   const title = cleanCertificateTitle(certData.title, subject, skills, vendor);
 
-  // 4. Cross-Reference against Resume
+  // 7. Cross-Reference against Resume (0 API calls)
   const resumeCheck = await crossReferenceWithResume(userId, {
     title,
     vendor,
