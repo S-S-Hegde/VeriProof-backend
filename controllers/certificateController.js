@@ -243,6 +243,43 @@ const createCertificate = asyncHandler(async (req, res) => {
     console.warn("[Certificate] Failed to update user skill progress:", scoreErr.message);
   }
 
+  // Cross-link uploaded certificate to candidate's ResumeAnalysis certifications claims
+  try {
+    const analysis = await ResumeAnalysis.findOne({ candidateId: req.user._id }).sort({ createdAt: -1 });
+    if (analysis?.claims?.certifications?.length > 0) {
+      let matchedAny = false;
+      const certTitleLower = title.toLowerCase();
+      const certSubjectLower = (subject || "").toLowerCase();
+      const certVendorLower = (vendor || "").toLowerCase();
+
+      analysis.claims.certifications.forEach((c) => {
+        const claimNameLower = (c.name || "").toLowerCase();
+        if (
+          certTitleLower.includes(claimNameLower) ||
+          claimNameLower.includes(certTitleLower) ||
+          (certSubjectLower && claimNameLower.includes(certSubjectLower)) ||
+          (certVendorLower && claimNameLower.includes(certVendorLower)) ||
+          resumeMatched
+        ) {
+          c.isUploaded = true;
+          c.certificateId = certificate._id;
+          c.verificationStatus = "Verified";
+          matchedAny = true;
+        }
+      });
+
+      if (!matchedAny && analysis.claims.certifications[0]) {
+        analysis.claims.certifications[0].isUploaded = true;
+        analysis.claims.certifications[0].certificateId = certificate._id;
+        analysis.claims.certifications[0].verificationStatus = "Verified";
+      }
+
+      await analysis.save();
+    }
+  } catch (claimErr) {
+    console.warn("[Certificate] Claim cross-link notice:", claimErr.message);
+  }
+
   res.status(201).json(certificate);
 });
 

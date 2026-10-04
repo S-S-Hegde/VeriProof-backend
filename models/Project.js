@@ -117,6 +117,11 @@ const projectSchema = new mongoose.Schema(
       enum: ["manual", "github_auto", "resume_auto"],
       default: "manual",
     },
+
+    // ── Resume Claim Immutability & Linking ───────────────────────────────────
+    fromResumeClaim: { type: Boolean, default: false },
+    resumeClaimId:   { type: String, default: "" },
+    isLocked:        { type: Boolean, default: false }, // When true, title and description cannot be modified
   },
   { timestamps: true },
 );

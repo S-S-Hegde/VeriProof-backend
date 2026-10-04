@@ -375,6 +375,12 @@ const updateProject = async (req, res) => {
         .json({ message: "Not authorized to update this project" });
     }
 
+    // ── IMMUTABILITY GUARD: Locked/Resume claims cannot have title or description modified ──
+    if (project.isLocked || project.fromResumeClaim) {
+      delete req.body.title;
+      delete req.body.description;
+    }
+
     const fields = [
       "title",
       "description",
@@ -605,6 +611,158 @@ const coupleRepositories = async (req, res) => {
   }
 };
 
+// @desc    Get resume project claims for authenticated candidate
+// @route   GET /api/projects/resume-claims
+// @access  Private
+const getResumeClaims = async (req, res) => {
+  try {
+    const analysis = await ResumeAnalysis.findOne({
+      candidateId: req.user._id,
+    }).sort({ createdAt: -1 });
+
+    if (!analysis || !analysis.claims || !analysis.claims.projects) {
+      return res.json({ claims: [], hasProjectsLinked: true });
+    }
+
+    const projects = await Project.find({ user: req.user._id });
+    const projectMapByClaimId = {};
+    const projectMapByTitle = {};
+    projects.forEach((p) => {
+      if (p.resumeClaimId) projectMapByClaimId[p.resumeClaimId] = p;
+      if (p.title) projectMapByTitle[p.title.trim().toLowerCase()] = p;
+    });
+
+    const claims = analysis.claims.projects.map((claim) => {
+      const matched = projectMapByClaimId[claim.id] || projectMapByTitle[claim.title?.trim().toLowerCase()];
+      const repoUrl = claim.repositoryUrl || matched?.repositoryUrl || "";
+      const isLinked = Boolean(claim.repoLinked || repoUrl);
+      return {
+        id: claim.id,
+        title: claim.title,
+        description: claim.description,
+        repositoryUrl: repoUrl,
+        repoLinked: isLinked,
+        isLocked: true, // Strictly immutable from resume claim
+        projectId: matched?._id || claim.projectId || null,
+        verificationStatus: isLinked ? "Verified" : (claim.verificationStatus || "Pending"),
+      };
+    });
+
+    const hasProjectsLinked = claims.length === 0 || claims.every((c) => c.repoLinked);
+
+    res.json({
+      claims,
+      hasProjectsLinked,
+      totalClaims: claims.length,
+      linkedClaims: claims.filter((c) => c.repoLinked).length,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// @desc    Link repository to a resume project claim (Title & Description immutable)
+// @route   POST /api/projects/link-resume-claim
+// @access  Private
+const linkResumeProjectClaim = async (req, res) => {
+  try {
+    const { claimId, repositoryUrl } = req.body;
+
+    if (!claimId || !repositoryUrl) {
+      return res.status(400).json({ message: "claimId and repositoryUrl are required" });
+    }
+
+    const cleanRepoUrl = repositoryUrl.trim();
+    if (!cleanRepoUrl.includes("github.com") && !cleanRepoUrl.startsWith("http")) {
+      return res.status(400).json({ message: "Please provide a valid repository URL" });
+    }
+
+    const analysis = await ResumeAnalysis.findOne({
+      candidateId: req.user._id,
+    }).sort({ createdAt: -1 });
+
+    if (!analysis || !analysis.claims || !analysis.claims.projects) {
+      return res.status(404).json({ message: "No resume project claims found for your profile" });
+    }
+
+    const claimIndex = analysis.claims.projects.findIndex((p) => p.id === claimId);
+    if (claimIndex === -1) {
+      return res.status(404).json({ message: "Specified resume project claim not found" });
+    }
+
+    const targetClaim = analysis.claims.projects[claimIndex];
+
+    // Find existing project by claimId or title
+    let project = await Project.findOne({
+      user: req.user._id,
+      $or: [
+        { resumeClaimId: claimId },
+        { title: new RegExp(`^${targetClaim.title.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") },
+      ],
+    });
+
+    if (project) {
+      project.repositoryUrl = cleanRepoUrl;
+      project.fromResumeClaim = true;
+      project.resumeClaimId = claimId;
+      project.isLocked = true;
+      project.title = targetClaim.title; // Strictly overwrite with original claim title
+      if (targetClaim.description) {
+        project.description = targetClaim.description;
+      }
+      project.isVerified = true;
+      project.status = "Verified";
+      await project.save();
+    } else {
+      project = new Project({
+        user: req.user._id,
+        title: targetClaim.title, // IMMUTABLE: Strictly from resume claim
+        description: targetClaim.description || `Project extracted from resume claim: ${targetClaim.title}`, // IMMUTABLE
+        technologies: ["JavaScript", "Full Stack"],
+        repositoryUrl: cleanRepoUrl,
+        fromResumeClaim: true,
+        resumeClaimId: claimId,
+        isLocked: true,
+        sourceType: "resume_auto",
+        isVerified: true,
+        status: "Verified",
+      });
+      await project.save();
+    }
+
+    // Update the ResumeAnalysis claim
+    targetClaim.repositoryUrl = cleanRepoUrl;
+    targetClaim.repoLinked = true;
+    targetClaim.projectId = project._id;
+    targetClaim.verificationStatus = "Verified";
+    await analysis.save();
+
+    // Rebuild skill progression
+    try {
+      await rebuildSkillProgression(req.user._id, {
+        type: "project",
+        label: project.title,
+        technologies: project.technologies,
+        score: 85,
+        xp: 120,
+        completed: true,
+        source: project._id.toString(),
+      });
+    } catch (e) {
+      console.warn("[linkResumeProjectClaim] Skill progression update warning:", e.message);
+    }
+
+    res.json({
+      success: true,
+      message: "Repository successfully linked to resume project",
+      project,
+      claim: targetClaim,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
 module.exports = {
   createProject,
   getProjects,
@@ -617,4 +775,6 @@ module.exports = {
   getMyAnalytics,
   verifyProjectDualSource,
   coupleRepositories,
+  getResumeClaims,
+  linkResumeProjectClaim,
 };

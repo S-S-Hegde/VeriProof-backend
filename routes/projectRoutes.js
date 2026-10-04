@@ -17,6 +17,8 @@ const {
   getMyAnalytics,
   verifyProjectDualSource,
   coupleRepositories,
+  getResumeClaims,
+  linkResumeProjectClaim,
 } = require("../controllers/projectController");
 const { checkPlagiarism, globalPlagiarismReport } = require("../controllers/plagiarismController");
 const { protect, recruiterOnly } = require("../middleware/authMiddleware");
@@ -47,6 +49,8 @@ const attachmentUpload = multer({
 router.route("/").get(getProjects).post(protect, createProjectValidator, validate, createProject);
 router.route("/couple").post(protect, coupleRepositories);
 router.route("/analytics").get(protect, getMyAnalytics);
+router.route("/resume-claims").get(protect, getResumeClaims);
+router.route("/link-resume-claim").post(protect, linkResumeProjectClaim);
 router.route("/plagiarism/report").get(protect, recruiterOnly, globalPlagiarismReport);
 router.route("/myprojects").get(protect, getMyProjects);
 router

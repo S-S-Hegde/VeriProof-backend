@@ -476,11 +476,18 @@ const getUserProfile = async (req, res) => {
     const userId = req.user._id;
 
     // Parallelize all DB lookups concurrently
-    const [user, latestAnalysis, hasProjects, certificates] = await Promise.all([
+    const [user, latestAnalysis, hasProjects, certificates, linkedProjectsCount] = await Promise.all([
       User.findById(userId).select("-password").lean(),
       ResumeAnalysis.findOne({ candidateId: userId }).sort({ createdAt: -1 }).lean(),
       Project.exists({ user: userId }),
       Certificate.find({ user: userId }).sort({ createdAt: -1 }).lean(),
+      Project.countDocuments({
+        user: userId,
+        $or: [
+          { fromResumeClaim: true },
+          { repositoryUrl: { $regex: /github\.com/i } },
+        ],
+      }),
     ]);
 
     if (!user) return res.status(404).json({ message: "User not found" });
@@ -549,20 +556,46 @@ const getUserProfile = async (req, res) => {
 
     const p = user.pipelineStage || "resume_upload";
 
-    const hasExamPassed =
-      Boolean(certificates && certificates.length > 0) ||
-      user.examStatus === "Attended" ||
-      user.examStatus === "Completed" ||
-      ["candidate_complete", "waiting_for_recruiter", "verification_complete"].includes(p);
+    // Resume project claims and linking status
+    const resumeProjects = latestAnalysis?.claims?.projects || [];
+    const hasProjectsLinked = resumeProjects.length > 0
+      ? (resumeProjects.every((pr) => pr.repoLinked) || linkedProjectsCount >= Math.min(resumeProjects.length, 1))
+      : Boolean(hasProjects);
 
-    const isVerificationComplete =
-      hasExamPassed ||
-      ["candidate_complete", "waiting_for_recruiter", "verification_complete"].includes(p);
+    // Certificate verification status
+    const hasCertificatesUploaded = Boolean(certificates && certificates.length > 0);
+    const hasCertificatesVerified = (certificates || []).some((c) => c.verificationStatus === "Verified");
+
+    const hasResume = Boolean(isInvited || !!resumeUrl || ["resume_analysis", "repository_analysis", "project_intelligence", "technical_assessment", "candidate_complete", "waiting_for_recruiter", "verification_complete"].includes(p));
+    const isResumeAnalyzed = Boolean(isInvited || resumeStatus === "Analyzed" || latestAnalysis?.status === "Analysis Complete" || ["repository_analysis", "project_intelligence", "technical_assessment", "candidate_complete", "waiting_for_recruiter", "verification_complete"].includes(p));
+
+    // Mandatory Assessment Gating: projects linked + certificates verified
+    const isAssessmentUnlocked = Boolean(
+      hasResume &&
+      isResumeAnalyzed &&
+      hasProjectsLinked &&
+      hasCertificatesVerified
+    );
+
+    const hasExamPassed = Boolean(
+      user.examStatus === "Completed" ||
+      (user.examStatus === "Attended" && (user.examScore || 0) >= 60) ||
+      ["candidate_complete", "waiting_for_recruiter", "verification_complete"].includes(p)
+    );
+
+    const isVerificationComplete = Boolean(
+      hasExamPassed &&
+      (hasExamPassed || ["candidate_complete", "waiting_for_recruiter", "verification_complete"].includes(p))
+    );
 
     const workflowState = {
-      hasResume: isInvited || !!resumeUrl || ["resume_analysis", "repository_analysis", "project_intelligence", "technical_assessment", "candidate_complete", "waiting_for_recruiter", "verification_complete"].includes(p),
-      isResumeAnalyzed: isInvited || ["repository_analysis", "project_intelligence", "technical_assessment", "candidate_complete", "waiting_for_recruiter", "verification_complete"].includes(p),
-      hasRepoAnalysis: isInvited || Boolean(hasProjects) || ["project_intelligence", "technical_assessment", "candidate_complete", "waiting_for_recruiter", "verification_complete"].includes(p),
+      hasResume,
+      isResumeAnalyzed,
+      hasProjectsLinked,
+      hasRepoAnalysis: hasProjectsLinked,
+      hasCertificatesUploaded,
+      hasCertificatesVerified,
+      isAssessmentUnlocked,
       hasExamPassed,
       hasVerificationRequest: isVerificationComplete,
       isVerificationComplete,

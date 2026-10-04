@@ -61,6 +61,9 @@ const resumeAnalysisSchema = new mongoose.Schema(
           id: { type: String, required: true },
           title: { type: String, required: true },
           description: { type: String, default: "" },
+          repositoryUrl: { type: String, default: "" },
+          repoLinked: { type: Boolean, default: false },
+          projectId: { type: mongoose.Schema.Types.ObjectId, ref: "Project" },
           verificationStatus: { type: String, default: "Pending" },
           evidenceCount: { type: Number, default: 0 },
         },
@@ -69,6 +72,8 @@ const resumeAnalysisSchema = new mongoose.Schema(
         {
           id: { type: String, required: true },
           name: { type: String, required: true },
+          certificateId: { type: mongoose.Schema.Types.ObjectId, ref: "Certificate" },
+          isUploaded: { type: Boolean, default: false },
           verificationStatus: { type: String, default: "Pending" },
         },
       ],

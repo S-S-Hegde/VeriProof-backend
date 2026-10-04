@@ -181,6 +181,39 @@ const startExam = async (req, res) => {
       }
     }
 
+    // ── STRICT SECURITY GUARD: Gating Check (Projects Linked & Certificates Verified) ──
+    const Certificate = require("../models/Certificate");
+    const resumeProjects = analysis?.claims?.projects || [];
+    
+    // Check if candidate has projects linked
+    const userProjects = await Project.find({ user: req.user._id });
+    const hasProjectsLinked = resumeProjects.length > 0
+      ? (resumeProjects.every((p) => p.repoLinked) || userProjects.some((p) => p.repositoryUrl && p.repositoryUrl.includes("github.com")))
+      : userProjects.length > 0;
+
+    // Check if candidate has at least one verified certificate
+    const verifiedCertCount = await Certificate.countDocuments({
+      user: req.user._id,
+      verificationStatus: "Verified",
+    });
+    const hasCertificatesVerified = verifiedCertCount > 0;
+
+    if (!hasProjectsLinked || !hasCertificatesVerified) {
+      return res.status(403).json({
+        locked: true,
+        error: "ASSESSMENT_LOCKED",
+        message: "Assessment locked: You must link your resume project repositories and have at least one verified certificate before starting the assessment.",
+        missingPrerequisites: {
+          projectsLinked: hasProjectsLinked,
+          certificatesVerified: hasCertificatesVerified,
+        },
+      });
+    }
+
+
+
+
+
     // ── Resolve question count (Defaults to 20 for Stage 1 Token-Free Baseline Filter) ──
     let targetQuestionCount = job?.assessmentSettings?.questionCount || 20;
     const allowedCounts = [10, 15, 20, 25, 30, 35, 40, 50, 60];
