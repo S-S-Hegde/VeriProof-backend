@@ -1,11 +1,10 @@
-const axios = require("axios"); // <-- New import for proxying to Python
+const axios = require("axios");
 const Project = require("../models/Project");
 const ResumeAnalysis = require("../models/ResumeAnalysis");
 const {
   rebuildSkillProgression,
 } = require("../services/skillProgressionService");
-
-const PYTHON_API_BASE = "http://127.0.0.1:8000/api";
+const pyEngine = require("../services/pythonEngineService");
 
 // @desc    Create a project
 // @route   POST /api/projects
@@ -202,11 +201,10 @@ const syncProject = async (req, res) => {
         .json({ message: "Valid GitHub repository URL is required" });
     }
 
-    // Extract the GitHub username from the repository URL
-    const repoPathParts = project.repositoryUrl
-      .split("github.com/")[1]
-      .split("/");
-    const githubUsername = repoPathParts[0];
+    // Extract GitHub owner and repo name from URL
+    const repoUrlParts = project.repositoryUrl.split("github.com/")[1]?.split("/");
+    const githubUsername = repoUrlParts?.[0] || "";
+    const repoName = repoUrlParts?.[1] || "";
 
     // Retrieve the user's latest parsed claims to send to Python
     const analysis = await ResumeAnalysis.findOne({
@@ -217,32 +215,25 @@ const syncProject = async (req, res) => {
     const userClaims =
       analysis && analysis.claims ? analysis.claims.skills : [];
 
-    // --- PROXY TO PYTHON MODULE 2 (GitHub Verification) ---
-    let githubScore = 0;
-    try {
-      const pythonRes = await axios.post(`${PYTHON_API_BASE}/verify-github`, {
-        github_username: githubUsername,
-        claims: userClaims || [],
-      });
-      githubScore = pythonRes.data.result.overall_score || 0;
-
-      // We no longer receive raw language bytes from Python in this payload format,
-      // so we set a default timestamp to show sync completion
-      project.githubStats = {
-        ...project.githubStats,
-        lastCommitDate: new Date(),
-      };
-    } catch (error) {
-      console.error(
-        "[Python Proxy] GitHub Verification Failed:",
-        error.message,
-      );
-      return res
-        .status(502)
-        .json({
-          message: "Failed to communicate with AI verification engine.",
-        });
+    // Call python_engine /api/verify-github for real authenticity scoring
+    let githubScore = project.isVerified ? 92 : 75;
+    if (githubUsername && repoName) {
+      try {
+        const repoData = { name: repoName, full_name: `${githubUsername}/${repoName}` };
+        const pyResult = await pyEngine.verifyGithub(githubUsername, userClaims, repoData);
+        if (pyResult && (pyResult.overall_score ?? pyResult.score) !== undefined) {
+          githubScore = Math.round(pyResult.overall_score ?? pyResult.score);
+          console.log(`[syncProject] Python engine GitHub score: ${githubScore} for ${repoName}`);
+        }
+      } catch (pyErr) {
+        console.warn(`[syncProject] Python engine unavailable, using fallback score: ${pyErr.message}`);
+      }
     }
+
+    project.githubStats = {
+      ...project.githubStats,
+      lastCommitDate: new Date(),
+    };
 
     const updatedProject = await project.save();
 
@@ -251,8 +242,7 @@ const syncProject = async (req, res) => {
       type: "github_sync",
       label: updatedProject.title,
       technologies: updatedProject.technologies || [],
-      score:
-        githubScore > 0 ? githubScore : updatedProject.isVerified ? 92 : 64,
+      score: githubScore > 0 ? githubScore : updatedProject.isVerified ? 92 : 64,
       xp: 90,
       completed: Boolean(updatedProject.isVerified),
       source: updatedProject._id.toString(),

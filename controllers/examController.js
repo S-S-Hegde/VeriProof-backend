@@ -28,8 +28,8 @@ const {
 const {
   generateAndScoreInterrogation,
 } = require("../services/projectAuthenticityService");
+const pyEngine = require("../services/pythonEngineService");
 
-const PYTHON_API_BASE = process.env.AI_ENGINE_URL || "https://python-engine-adw8.onrender.com";
 
 // Helper to shuffle array with Fisher-Yates
 const shuffle = (arr) => {
@@ -484,13 +484,11 @@ const submitExam = async (req, res) => {
     // --- PROXY TO PYTHON: Grade Code Snippets ---
     if (code_snippet) {
       try {
-        const codeRes = await axios.post(`${PYTHON_API_BASE}/grade-code`, {
-          code_snippet,
-          language: "javascript",
-          problem_context: "Practice Assessment",
-        });
-        const codeScore = codeRes.data.result.score || 0;
-        score = Math.round((score + codeScore) / 2); // Average the scores
+        const codeScore = await pyEngine.gradeCode(code_snippet, "javascript", "Practice Assessment");
+        if (codeScore !== null) {
+          score = Math.round((score + codeScore) / 2); // Average the scores
+          console.log(`[Exam] Python code grading score: ${codeScore} → blended: ${score}`);
+        }
       } catch (err) {
         console.error("[Python Proxy] Code Grading Failed:", err.message);
       }
@@ -499,15 +497,14 @@ const submitExam = async (req, res) => {
     // --- PROXY TO PYTHON: Grade Behavioral Answers ---
     if (behavioral_response) {
       try {
-        const behavRes = await axios.post(
-          `${PYTHON_API_BASE}/evaluate-behavioral`,
-          {
-            response_text: behavioral_response,
-            question_context: "Describe a challenging problem you solved.",
-          },
+        const behavScore = await pyEngine.evaluateBehavioral(
+          behavioral_response,
+          "Describe a challenging problem you solved."
         );
-        const behavScore = behavRes.data.result.score || 0;
-        score = Math.round((score + behavScore) / 2); // Average the scores
+        if (behavScore !== null) {
+          score = Math.round((score + behavScore) / 2); // Average the scores
+          console.log(`[Exam] Python behavioral evaluation score: ${behavScore} → blended: ${score}`);
+        }
       } catch (err) {
         console.error(
           "[Python Proxy] Behavioral Evaluation Failed:",

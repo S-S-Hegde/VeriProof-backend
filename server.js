@@ -103,7 +103,6 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 // Activity Tracking for Render Free-Tier Keep-Alive
 global.lastClientActivity = Date.now();
-const PYTHON_API_BASE = process.env.AI_ENGINE_URL || "https://python-engine-adw8.onrender.com";
 
 // ── 2. Health & Keep-Alive Endpoints (Zero-Failure) ──
 app.get(["/api/keep-alive", "/keep-alive", "/api/ping", "/ping"], (req, res) => {
@@ -171,6 +170,8 @@ app.use("/api", (req, res, next) => {
 app.use("/api", generalLimiter);
 
 // ── Autonomous Background Keep-Alive Watchdog (Every 3.5 Minutes) ──
+const pyEngine = require("./services/pythonEngineService");
+
 setInterval(async () => {
   try {
     const timeSinceLastActivity = Date.now() - (global.lastClientActivity || 0);
@@ -179,11 +180,7 @@ setInterval(async () => {
     if (timeSinceLastActivity < IDLE_LIMIT) {
       const elapsedMinutes = Math.round(timeSinceLastActivity / 60000);
       console.log(`[KeepAlive Watchdog] Active user detected (${elapsedMinutes}m ago). Keeping Node.js backend & Python AI engine awake.`);
-      try {
-        await axios.get(`${PYTHON_API_BASE}/health`, { timeout: 5000 });
-      } catch (e) {
-        console.log(`[KeepAlive Watchdog] Python Engine warm ping sent.`);
-      }
+      pyEngine.ping().catch(() => {});
     }
   } catch (_) {
     // Graceful error suppression for background timer

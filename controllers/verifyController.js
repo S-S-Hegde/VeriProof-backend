@@ -21,6 +21,8 @@ const {
 } = require("../services/resumeIntelligenceService");
 
 const { flatSkillCatalog } = require("../data/skillCatalog");
+const { assembleExam } = require("../services/questionBankService");
+const pyEngine = require("../services/pythonEngineService");
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -127,9 +129,7 @@ const {
   rebuildSkillProgression,
 } = require("../services/skillProgressionService");
 
-const PYTHON_API_BASE = "http://127.0.0.1:8000/api";
-
-// @desc    Parse Resume against Job description (Proxied to Python)
+// @desc    Parse Resume against Job description (Server-Authoritative)
 // @route   POST /api/verify/parse
 // @access  Private (Recruiter)
 const parseResume = asyncHandler(async (req, res) => {
@@ -165,24 +165,8 @@ const parseResume = asyncHandler(async (req, res) => {
     );
   }
 
-  let alignmentScore = 0;
-  let verifiableMatched = 0;
-  try {
-    const pythonRes = await axios.post(`${PYTHON_API_BASE}/verify-claims`, {
-      claims: analysis.claims.skills || [],
-      job_requirements: job.targetSkills || [],
-    }, { timeout: 12000 });
-    alignmentScore    = pythonRes.data.result.score || 0;
-    verifiableMatched = pythonRes.data.result.verifiable_claims_matched || 0;
-  } catch (error) {
-    // Python offline — use local keyword matcher
-    const isConnErr = error.code === "ECONNREFUSED" || error.code === "ETIMEDOUT";
-    console.warn(isConnErr
-      ? "[VerifyController] Python offline — using local alignment scorer"
-      : `[VerifyController] Alignment error: ${error.message}`);
-    alignmentScore    = scoreAlignmentLocally(analysis.claims.skills || [], job.targetSkills || []);
-    verifiableMatched = alignmentScore > 0 ? Math.round((alignmentScore / 100) * (job.targetSkills?.length || 0)) : 0;
-  }
+  const alignmentScore = scoreAlignmentLocally(analysis.claims?.skills || [], job.targetSkills || []);
+  const verifiableMatched = alignmentScore > 0 ? Math.round((alignmentScore / 100) * (job.targetSkills?.length || 0)) : 0;
 
   const status = "Pending Exam";
 
@@ -239,32 +223,21 @@ const getExamForJob = asyncHandler(async (req, res) => {
 
     let generatedMcqs = [];
     try {
-      const formattedClaims = skills.map((skill) => ({
-        skill,
-        context: "Required job skill",
-      }));
-      const pythonRes = await axios.post(
-        `${PYTHON_API_BASE}/generate-assessment`,
-        {
-          claims:
-            formattedClaims.length > 0
-              ? formattedClaims
-              : [{ skill: "Software Engineering", context: "General" }],
-          difficulty: "intermediate",
-        },
+      const examQuestions = await assembleExam(
+        skills.length > 0 ? skills : ["Software Engineering"],
+        10,
+        []
       );
-      generatedMcqs = pythonRes.data.result.mcq_questions || [];
+      generatedMcqs = examQuestions || [];
     } catch (error) {
-      console.error("[Python Proxy] Exam Generation Failed:", error.message);
+      console.error("[VerifyController] Exam Generation Failed:", error.message);
       res.status(500);
-      throw new Error(
-        "AI Engine failed to generate exam. Is the Python server running?",
-      );
+      throw new Error("Failed to generate exam questions. Please try again.");
     }
 
     if (!generatedMcqs.length) {
       res.status(409);
-      throw new Error("AI Engine returned empty questions. Please try again.");
+      throw new Error("Empty questions returned. Please try again.");
     }
 
     exam = await Exam.create({
@@ -273,14 +246,7 @@ const getExamForJob = asyncHandler(async (req, res) => {
       topic: job?.title || "Claim Verification",
       skills,
       passingScore: 70,
-      questions: generatedMcqs.map((q) => {
-        const correctIdx = q.options.indexOf(q.correct_answer);
-        return {
-          questionText: q.question_text,
-          options: q.options,
-          correctOption: correctIdx !== -1 ? correctIdx : 0,
-        };
-      }),
+      questions: generatedMcqs,
     });
 
     verificationResult.examId = exam._id;
@@ -811,16 +777,16 @@ ${candidateText}
       // Composite Deterministic Score
       let calculatedScore = Math.round(coreSkillScore + depthScore + evidenceScore + breadthScore);
 
-      // Boost or refine via Deep AI Claim Verification
+      // Boost or refine via Deep AI Claim Verification (python_engine /api/verify-claims)
       try {
-        const pythonRes = await axios.post(`${PYTHON_API_BASE}/verify-claims`, {
-          claims: resumeSkills.map(s => (typeof s === "string" ? { skill: s, context: "Resume claim", source_quote: s } : s)),
-          job_requirements: jobSkills,
-        }, { timeout: 10000 });
-        if (pythonRes.data?.result?.score !== undefined && pythonRes.data?.result?.score > 0) {
-          const aiScore = Number(pythonRes.data.result.score);
+        const normalizedClaims = resumeSkills.map(s =>
+          typeof s === "string" ? { skill: s, context: "Resume claim", source_quote: s } : s
+        );
+        const aiScore = await pyEngine.verifyClaims(normalizedClaims, jobSkills);
+        if (aiScore !== null && aiScore > 0) {
           // Blend 60% AI deep analysis + 40% structural ATS evidence
           calculatedScore = Math.round((aiScore * 0.6) + (calculatedScore * 0.4));
+          console.log(`[Intake] Python claim verification score: ${aiScore} → blended: ${calculatedScore}`);
         }
       } catch (pythonErr) {
         console.warn("[Intake] Python claim verifier fallback used:", pythonErr.message);
@@ -1540,13 +1506,15 @@ const runFullVerificationPipeline = asyncHandler(async (req, res) => {
   };
 
   try {
-    const pythonRes = await axios.post(`${PYTHON_API_BASE}/v2/verify-candidate`, pipelineRequest, { timeout: 45000 });
-    
-    applicant.v2Report = pythonRes.data;
+    // Full E2E candidate verification via python_engine /api/v2/verify-candidate
+    const pipelineResult = await pyEngine.runFullPipeline(pipelineRequest);
+    if (!pipelineResult) throw new Error("Python engine returned empty pipeline result");
+
+    applicant.v2Report = pipelineResult;
     applicant.status = "Completed";
     await applicant.save();
-    
-    res.json(pythonRes.data);
+
+    res.json(pipelineResult);
   } catch (error) {
     const isConnErr = error.code === "ECONNREFUSED" || error.code === "ETIMEDOUT";
     if (isConnErr) {
