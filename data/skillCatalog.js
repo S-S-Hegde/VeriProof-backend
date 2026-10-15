@@ -103,6 +103,46 @@ const skillCatalog = [
       { id: "portfolio-architecture", name: "Portfolio Architecture", level: 4, xp: 260, prerequisites: ["react", "rest-api", "git-github"], triggers: ["portfolio", "dashboard", "analytics"] },
     ],
   },
+  {
+    key: "systems",
+    name: "Systems & Low-Level Programming",
+    description: "Memory management, system architectures, systems software, and high-performance computing.",
+    accent: "#f43f5e",
+    skills: [
+      { id: "c-cpp", name: "C / C++", level: 2, xp: 180, prerequisites: [], triggers: ["c", "c++", "cpp", "pointers", "memory management", "valgrind"] },
+      { id: "rust", name: "Rust", level: 3, xp: 220, prerequisites: ["c-cpp"], triggers: ["rust", "cargo", "ownership", "borrow checker"] },
+      { id: "os-concurrency", name: "Operating Systems & Concurrency", level: 3, xp: 220, prerequisites: ["c-cpp"], triggers: ["os", "operating systems", "threads", "multithreading", "concurrency", "mutex", "deadlock", "posix"] },
+    ],
+  },
+  {
+    key: "algorithms",
+    name: "Data Structures & Algorithms",
+    description: "Computational problem solving, algorithmic complexity, and abstract data structures.",
+    accent: "#8b5cf6",
+    skills: [
+      { id: "data-structures", name: "Data Structures", level: 1, xp: 140, prerequisites: [], triggers: ["dsa", "data structures", "linked list", "trees", "graphs", "heap", "stack", "queue", "hash map"] },
+      { id: "algorithms", name: "Algorithms & Optimization", level: 2, xp: 190, prerequisites: ["data-structures"], triggers: ["algorithms", "dynamic programming", "greedy", "sorting", "big-o", "time complexity", "divide and conquer"] },
+    ],
+  },
+  {
+    key: "networks",
+    name: "Networks & Distributed Systems",
+    description: "Network protocols, distributed consensus, microservices, and asynchronous event streams.",
+    accent: "#0ea5e9",
+    skills: [
+      { id: "computer-networks", name: "Computer Networks", level: 2, xp: 160, prerequisites: [], triggers: ["networking", "tcp/ip", "udp", "http", "dns", "socket", "websockets", "osi model"] },
+      { id: "distributed-systems", name: "Distributed Systems", level: 4, xp: 280, prerequisites: ["computer-networks"], triggers: ["distributed systems", "microservices", "kafka", "rabbitmq", "grpc", "event-driven", "cap theorem", "raft"] },
+    ],
+  },
+  {
+    key: "mobile",
+    name: "Mobile & Cross-Platform",
+    description: "Native and hybrid mobile engineering for iOS and Android ecosystems.",
+    accent: "#f97316",
+    skills: [
+      { id: "mobile-development", name: "Mobile Development", level: 2, xp: 180, prerequisites: [], triggers: ["react native", "flutter", "android", "ios", "kotlin", "swift", "mobile app"] },
+    ],
+  },
 ];
 
 const flattenCatalog = () =>

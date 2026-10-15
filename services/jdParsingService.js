@@ -14,7 +14,11 @@ const fallbackExtractJD = (rawJDText = "") => {
     "PostgreSQL", "MySQL", "MongoDB", "Redis", "Elasticsearch", "Cassandra", "DynamoDB",
     "AWS", "GCP", "Azure", "Docker", "Kubernetes", "Terraform", "CI/CD", "GitHub Actions",
     "GraphQL", "REST", "gRPC", "WebSockets", "Kafka", "RabbitMQ", "Microservices",
-    "TailwindCSS", "CSS3", "HTML5", "Redux", "Zustand", "Jest", "PyTest", "Cypress"
+    "TailwindCSS", "CSS3", "HTML5", "Redux", "Zustand", "Jest", "PyTest", "Cypress",
+    "C", "Data Structures", "Algorithms", "DSA", "Distributed Systems", "Operating Systems",
+    "Computer Networks", "Cybersecurity", "Cryptography", "Machine Learning", "Deep Learning",
+    "NLP", "Computer Vision", "PyTorch", "TensorFlow", "React Native", "Flutter", "Android",
+    "iOS", "Kotlin", "Swift", "Solidity", "Blockchain", "Compilers", "DBMS"
   ];
 
   const matchedSkills = [];
