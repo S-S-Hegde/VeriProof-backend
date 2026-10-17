@@ -494,8 +494,9 @@ const sendSecurityOtp = async (req, res) => {
 
     await sendEmail({
       email: user.email,
-      subject: `[VeriProof] Security Alert — ${typeLabels[type] || "Verification Required"}`,
+      subject: `[VeriProof] ${otp} is your Security Verification Code — ${typeLabels[type] || "Verification Required"}`,
       html,
+      otp,
     });
 
     res.json({ message: "Security verification code sent to your email.", expiresInMinutes: 15 });

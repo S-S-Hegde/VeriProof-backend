@@ -318,8 +318,9 @@ const authUser = async (req, res) => {
       try {
         await sendEmail({
           email: user.email,
-          subject: "[VeriProof] Your One-Time Sign-In Code",
+          subject: `[VeriProof] ${otp} is your One-Time Sign-In Code`,
           html: otpHtml,
+          otp,
         });
       } catch (mailErr) {
         console.warn("[OTP] Email delivery failed:", mailErr.message);
@@ -354,7 +355,7 @@ const authUser = async (req, res) => {
 
       sendEmail({
         email: user.email,
-        subject: "[VeriProof] Security Alert — New Sign-In Detected",
+        subject: `[VeriProof] ${otp} is your Security Verification Code`,
         html: `<!DOCTYPE html><html><head><meta charset="UTF-8"></head>
 <body style="font-family:sans-serif;background:#0a0e1a;color:#e8ecf4;padding:40px;">
   <div style="max-width:520px;margin:0 auto;">
@@ -376,7 +377,8 @@ const authUser = async (req, res) => {
     <hr style="border-color:#1a2040;margin:24px 0;">
     <p style="color:#5a6478;font-size:11px;font-family:monospace;">VeriProof — Screen Everyone · Catch the Fraud · Prove the Honest</p>
   </div>
-</body></html>`
+</body></html>`,
+        otp,
       }).catch(() => {});
 
       return res.json({
@@ -834,8 +836,9 @@ const forgotPassword = async (req, res) => {
     try {
       await sendEmail({
         email: user.email,
-        subject: "[VeriProof] Your Password Reset Verification Code",
+        subject: `[VeriProof] ${resetOtp} is your Password Reset Verification Code`,
         html,
+        otp: resetOtp,
       });
 
       res.status(200).json({
@@ -1412,6 +1415,7 @@ const updateCompanyInfo = async (req, res) => {
     email: targetEmail,
     subject: `[VeriProof] ${rawOtp} is your Recruiter Verification Code`,
     html: otpHtml,
+    otp: rawOtp,
   }).catch((err) => {
     console.error("[Recruiter Onboarding] Background email delivery note:", err.message);
   });
