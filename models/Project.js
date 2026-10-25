@@ -59,7 +59,9 @@ const projectSchema = new mongoose.Schema(
       languages:     { type: Object },
       stars:         { type: Number, default: 0 },
       forks:         { type: Number, default: 0 },
+      lastSyncedAt:  { type: Date },
     },
+    originalityScore: { type: Number, default: 100 },
     isVerified: { type: Boolean, default: false },
     status: {
       type: String,

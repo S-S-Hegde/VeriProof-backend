@@ -47,6 +47,7 @@ const skillTreeRoutes = require("./routes/skillTreeRoutes");
 const githubRoutes  = require("./routes/githubRoutes");
 const certificateRoutes = require("./routes/certificateRoutes");
 const mfaRoutes     = require("./routes/mfaRoutes");
+const vaultRoutes   = require("./routes/vaultRoutes");
 
 // Initialize DB connection asynchronously (non-blocking)
 connectDB();
@@ -384,6 +385,7 @@ app.use("/api/exams", examRoutes);
 app.use("/api/skill-tree", skillTreeRoutes);
 app.use("/api/github", githubRoutes);
 app.use("/api/certificates", certificateRoutes);
+app.use("/api/vault", vaultRoutes);
 
 // Global Error Handler — ensures CORS headers are always sent even on uncaught errors
 app.use((err, req, res, next) => {
