@@ -212,6 +212,37 @@ app.use(
   express.static(path.join(__dirname, "uploads"))
 );
 
+// Fallback route for ephemeral file recovery from MongoDB (e.g. Render container restarts)
+app.get("/uploads/certificates/:filename", async (req, res) => {
+  try {
+    const filename = req.params.filename;
+    const Certificate = require("./models/Certificate");
+    const cert = await Certificate.findOne({
+      $or: [
+        { fileUrl: `/uploads/certificates/${filename}` },
+        { fileUrl: { $regex: filename.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), $options: "i" } },
+      ],
+    });
+
+    if (cert) {
+      if (cert.fileUrl && (cert.fileUrl.startsWith("http://") || cert.fileUrl.startsWith("https://"))) {
+        return res.redirect(cert.fileUrl);
+      }
+      if (cert.fileBufferBase64) {
+        const buffer = Buffer.from(cert.fileBufferBase64, "base64");
+        res.setHeader("Content-Type", cert.fileType || (filename.endsWith(".pdf") ? "application/pdf" : "image/jpeg"));
+        res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
+        res.setHeader("Access-Control-Allow-Origin", "*");
+        res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+        return res.send(buffer);
+      }
+    }
+  } catch (err) {
+    console.warn("[Uploads Fallback] Error recovering certificate:", err.message);
+  }
+  return res.status(404).send("Certificate file not found on disk or storage.");
+});
+
 // Helper to stamp the sleek VeriProof Verified banner on any PDF
 const stampVeriproofHeader = async (pdfBuffer) => {
   try {

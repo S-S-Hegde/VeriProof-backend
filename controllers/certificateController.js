@@ -31,11 +31,16 @@ const getMyCertificates = asyncHandler(async (req, res) => {
   for (const cert of certificates) {
     let needsSave = false;
 
-    // Check if title is a UUID or hash
-    if (isUuidOrHash(cert.title) || !cert.title || cert.title.length < 3) {
-      const detectedSubject = cert.subject || detectSubjectDomain(cert.title, cert.skills);
-      cert.title = cleanCertificateTitle(cert.title, detectedSubject, cert.skills, cert.vendor || cert.issuer);
-      needsSave = true;
+    // Check if title is a UUID or hash, or was stuck with the duplicate static fallback
+    const isGenericStaticTitle = cert.title === "Professional Certification in Cloud Architecture & DevOps";
+    if (isUuidOrHash(cert.title) || !cert.title || cert.title.length < 3 || isGenericStaticTitle) {
+      const filename = cert.fileUrl ? path.basename(cert.fileUrl) : "";
+      const detectedSubject = cert.subject || detectSubjectDomain(`${cert.title || ""} ${cert.skills?.join(" ") || ""}`, cert.skills);
+      const newTitle = cleanCertificateTitle(isGenericStaticTitle ? "" : cert.title, detectedSubject, cert.skills, cert.vendor || cert.issuer, filename);
+      if (newTitle && newTitle !== cert.title) {
+        cert.title = newTitle;
+        needsSave = true;
+      }
     }
 
     // Check if subject is missing
@@ -97,6 +102,8 @@ const createCertificate = asyncHandler(async (req, res) => {
   let fileBuffer = null;
   let fileBufferBase64 = "";
 
+  const originalFilename = req.file?.originalname || "";
+
   if (req.file) {
     fileUrl = `/uploads/certificates/${req.file.filename}`;
     fileType = req.file.mimetype || "application/pdf";
@@ -112,6 +119,33 @@ const createCertificate = asyncHandler(async (req, res) => {
       } catch (readErr) {
         console.warn("[Certificate Upload] Buffer read warning:", readErr.message);
       }
+    }
+
+    // Direct Cloudinary upload if credentials configured
+    try {
+      const cloudinary = require("../utils/cloudinary");
+      if (cloudinary?.config()?.cloud_name && cloudinary?.config()?.api_key && fileBuffer) {
+        const uploadResult = await new Promise((resolve, reject) => {
+          const stream = cloudinary.uploader.upload_stream(
+            {
+              folder: "veriproof_certificates",
+              resource_type: "auto",
+              public_id: `cert_${Date.now()}_${path.parse(req.file.originalname).name.replace(/[^a-zA-Z0-9]/g, "_")}`,
+            },
+            (error, result) => {
+              if (error) reject(error);
+              else resolve(result);
+            }
+          );
+          stream.end(fileBuffer);
+        });
+
+        if (uploadResult?.secure_url) {
+          fileUrl = uploadResult.secure_url;
+        }
+      }
+    } catch (cloudErr) {
+      console.warn("[Certificate Upload] Cloudinary upload fallback:", cloudErr.message);
     }
 
     // Perform Deep Multimodal AI Inspection
@@ -134,7 +168,7 @@ const createCertificate = asyncHandler(async (req, res) => {
       expiryDate = expiryDate || aiResult.expiryDate;
     } else {
       // Manual input with AI augmentation
-      title = cleanCertificateTitle(title, subject || aiResult.subject, skills || aiResult.skills, issuer || aiResult.vendor);
+      title = cleanCertificateTitle(title, subject || aiResult.subject, skills || aiResult.skills, issuer || aiResult.vendor, originalFilename);
       vendor = vendor || aiResult.vendor || issuer;
       subject = subject || aiResult.subject || detectSubjectDomain(`${title} ${issuer}`, skills);
       credentialId = credentialId || aiResult.credentialId;
@@ -166,9 +200,9 @@ const createCertificate = asyncHandler(async (req, res) => {
 
   // Fallbacks if still unspecified
   subject = subject || detectSubjectDomain(`${title || ""} ${issuer || ""}`, skills || []);
-  title = cleanCertificateTitle(title, subject, skills, vendor || issuer);
+  title = cleanCertificateTitle(title, subject, skills, vendor || issuer, originalFilename);
   issuer = issuer || "VeriProof Certified Authority";
-  vendor = vendor || issuer.split("/")[0].trim();
+  vendor = vendor || (issuer.includes("/") ? issuer.split("/")[0].trim() : issuer);
 
   let parsedSkills = [];
   if (Array.isArray(skills)) {
@@ -367,21 +401,27 @@ const reanalyzeAllCertificates = asyncHandler(async (req, res) => {
   });
 });
 
-// @desc    Get certificate proof file (supports disk or base64 stream)
+// @desc    Get certificate proof file (supports Cloudinary redirect, disk, or base64 stream)
 // @route   GET /api/certificates/:id/file
-// @access  Private
+// @access  Public (Embeddable for candidate profiles & verification modals)
 const getCertificateFile = asyncHandler(async (req, res) => {
-  const certificate = await Certificate.findOne({
-    _id: req.params.id,
-    user: req.user._id,
-  });
+  const certificate = await Certificate.findById(req.params.id);
 
   if (!certificate) {
     res.status(404);
     throw new Error("Certificate not found.");
   }
 
-  // 1. Try disk file
+  // Set open CORS and embedding headers for iframe / object viewer
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+
+  // 1. If stored in Cloudinary or remote storage, redirect directly
+  if (certificate.fileUrl && (certificate.fileUrl.startsWith("http://") || certificate.fileUrl.startsWith("https://"))) {
+    return res.redirect(certificate.fileUrl);
+  }
+
+  // 2. Try disk file if running on local environment
   if (certificate.fileUrl && certificate.fileUrl.startsWith("/uploads/certificates/")) {
     const filePath = path.join(__dirname, "..", certificate.fileUrl);
     if (fs.existsSync(filePath)) {
@@ -389,15 +429,18 @@ const getCertificateFile = asyncHandler(async (req, res) => {
     }
   }
 
-  // 2. Fallback to fileBufferBase64
+  // 3. Fallback to MongoDB fileBufferBase64 (bulletproof on Render ephemeral restarts)
   if (certificate.fileBufferBase64) {
     const buffer = Buffer.from(certificate.fileBufferBase64, "base64");
     res.set("Content-Type", certificate.fileType || "application/pdf");
-    res.set("Content-Disposition", `inline; filename="certificate_${certificate._id}.${(certificate.fileType || "pdf").includes("png") ? "png" : "pdf"}"`);
+    res.set(
+      "Content-Disposition",
+      `inline; filename="certificate_${certificate._id}.${(certificate.fileType || "pdf").includes("png") ? "png" : "pdf"}"`
+    );
     return res.send(buffer);
   }
 
-  res.status(404).json({ message: "Certificate proof file not found." });
+  res.status(404).json({ message: "Certificate proof file not found on disk or storage." });
 });
 
 // @desc    Delete a certificate

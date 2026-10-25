@@ -52,7 +52,7 @@ router.route("/re-analyze-all")
   .post(protect, reanalyzeAllCertificates);
 
 router.route("/:id/file")
-  .get(protect, getCertificateFile);
+  .get(getCertificateFile);
 
 router.route("/:id")
   .delete(protect, deleteCertificate);

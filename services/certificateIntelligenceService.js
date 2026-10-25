@@ -116,28 +116,64 @@ const isUuidOrHash = (str = "") => {
 };
 
 /**
- * Sanitize title so that UUIDs or hashes never become certificate titles
+ * Extract clean, human-readable title from document original filename
  */
-const cleanCertificateTitle = (title, subject, skills, vendor) => {
-  if (!title || isUuidOrHash(title) || title.length < 3) {
-    if (subject && subject !== "Software & Systems Engineering") {
-      return `Professional Certification in ${subject}`;
+const extractTitleFromFilename = (filename = "") => {
+  if (!filename) return "";
+  let base = filename.replace(/\.[a-zA-Z0-9]+$/, ""); // strip extension
+  // remove random hashes or cert_ prefixes like cert_384918239128 or 17293849182
+  base = base.replace(/^(cert_|certificate_|doc_|file_|[0-9a-f]{8,}[-_]?)/i, "");
+  // replace underscores, hyphens, pluses with spaces
+  base = base.replace(/[-_+]/g, " ").trim();
+  // if it's too short or contains only numbers/hashes, return empty
+  if (base.length < 3 || isUuidOrHash(base) || /^[0-9\s]+$/.test(base)) return "";
+
+  // Title case formatting with tech acronym preservation
+  const words = base.split(/\s+/).map((word) => {
+    const upper = word.toUpperCase();
+    if (["AWS", "GCP", "AI", "ML", "SQL", "API", "REST", "UI", "UX", "IT", "ID", "CSS", "HTML", "JS", "TS", "IBM", "CEH", "CISSP", "CCNA"].includes(upper)) {
+      return upper;
     }
-    if (skills && skills.length > 0) {
-      const topSkills = skills.slice(0, 2).join(" & ");
-      return `${topSkills} Verified Specialist Credential`;
+    return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+  });
+  return words.join(" ");
+};
+
+/**
+ * Sanitize title so that UUIDs or hashes never become certificate titles,
+ * while preserving genuine user or document-specific certificate names.
+ */
+const cleanCertificateTitle = (title, subject, skills, vendor, originalFilename = "") => {
+  if (title && !isUuidOrHash(title) && title.trim().length >= 3 && !/^certificate(\.pdf)?$/i.test(title.trim())) {
+    const clean = title.replace(/\.[a-zA-Z0-9]+$/, "").trim();
+    if (!isUuidOrHash(clean)) {
+      return clean;
     }
-    if (vendor && vendor !== "Verified Educational Authority") {
-      return `${vendor} Verified Technical Credential`;
-    }
-    return "Verified Technical Credential";
   }
 
-  let clean = title.replace(/\.[a-zA-Z0-9]+$/, "").trim();
-  if (isUuidOrHash(clean)) {
-    return `Professional Certification in ${subject || "Software Engineering"}`;
+  // 1. Try deriving from originalFilename if provided
+  const fromFilename = extractTitleFromFilename(originalFilename);
+  if (fromFilename) {
+    return fromFilename;
   }
-  return clean;
+
+  // 2. Try skills-based specific title
+  if (Array.isArray(skills) && skills.length > 0) {
+    const topSkills = skills.slice(0, 2).join(" & ");
+    return `${topSkills} Verified Credential`;
+  }
+
+  // 3. Try vendor-specific title
+  if (vendor && vendor !== "Verified Educational Authority" && !isUuidOrHash(vendor)) {
+    return `${vendor} Technical Certification`;
+  }
+
+  // 4. Try subject-based title
+  if (subject && subject !== "Software & Systems Engineering") {
+    return `${subject} Certification`;
+  }
+
+  return "Verified Technical Credential";
 };
 
 /**
@@ -355,9 +391,11 @@ const analyzeLocally = (extractedText = "", originalFilename = "") => {
 
   // 2. Identify Title
   const titlePatterns = [
-    /(?:certificate of (?:completion|achievement|excellence)|has successfully completed|has achieved|certified as|certification in|awarded to)\s*[:\n-]?\s*([A-Za-z0-9\s-]{4,60})/i,
-    /([A-Za-z0-9\s-]{4,50}\s+(?:Architect|Developer|Engineer|Specialist|Associate|Professional|Practitioner|Administrator|Mastery))/i,
-    /(?:credential|certificate|specialization|course):\s*([A-Za-z0-9\s-]{4,60})/i,
+    /(?:for successfully completing|has successfully completed|in recognition of completing|completed the online course|completed the specialization)\s*[:\n-]?\s*([A-Za-z0-9\s-]{4,60})/i,
+    /(?:certificate of (?:completion|achievement|excellence|mastery))\s*(?:in|for)?\s*[:\n-]?\s*([A-Za-z0-9\s-]{4,60})/i,
+    /([A-Za-z0-9\s-]{4,50}\s+(?:Architect|Developer|Engineer|Specialist|Associate|Professional|Practitioner|Administrator|Mastery|Expert))/i,
+    /(?:credential|certificate|specialization|course|program)\s*:\s*([A-Za-z0-9\s-]{4,60})/i,
+    /([A-Za-z0-9\s-]{4,50}\s+(?:Certification|Specialization|Nanodegree|Bootcamp))/i,
   ];
 
   for (const pat of titlePatterns) {
@@ -396,8 +434,8 @@ const analyzeLocally = (extractedText = "", originalFilename = "") => {
   // 5. Subject
   result.subject = detectSubjectDomain(extractedText, result.skills);
 
-  // 6. Clean Title
-  result.title = cleanCertificateTitle(result.title, result.subject, result.skills, result.vendor);
+  // 6. Clean Title with dynamic fallback to originalFilename
+  result.title = cleanCertificateTitle(result.title, result.subject, result.skills, result.vendor, originalFilename);
 
   return result;
 };
@@ -525,7 +563,7 @@ const inspectAndVerifyCertificate = async ({ buffer, mimeType, originalFilename,
     ? certData.skills
     : ["Full Stack Development", "System Verification"];
 
-  const title = cleanCertificateTitle(certData.title, subject, skills, vendor);
+  const title = cleanCertificateTitle(certData.title, subject, skills, vendor, originalFilename);
 
   // 7. Cross-Reference against Resume (0 API calls)
   const resumeCheck = await crossReferenceWithResume(userId, {
