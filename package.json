@@ -40,8 +40,10 @@
     "pdf-parse": "^1.1.1",
     "pdf2json": "^4.0.3",
     "pdfkit": "^0.18.0",
+    "psl": "^1.15.0",
     "qrcode": "^1.5.4",
     "speakeasy": "^2.0.0",
+    "tesseract.js": "^7.0.0",
     "ua-parser-js": "^2.0.10",
     "unpdf": "^1.8.1",
     "xlsx": "^0.18.5"

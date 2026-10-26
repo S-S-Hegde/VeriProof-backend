@@ -5,8 +5,8 @@ const fs = require("fs");
 const jwt = require("jsonwebtoken");
 const Certificate = require("../models/Certificate");
 const User = require("../models/User");
-const { parseCertificateDocument } = require("../services/parsers/parserRegistry");
-const { verifyWithIssuerAdapter } = require("../services/adapters/issuerAdapterRegistry");
+const { extractUniversalCertificate } = require("../services/parsers/universalExtractor");
+const { verifyUniversalCertificate } = require("../services/verification/universalVerifier");
 const { calculateCredentialScore, recalculateUserCertificateScore } = require("../services/scoringService");
 const { crossCheckWithResume } = require("../services/resumeCrossCheck");
 const {
@@ -36,7 +36,9 @@ const getMyCertificates = asyncHandler(async (req, res) => {
   // Compute live idempotent score summary
   const summary = {
     total: certificates.length,
-    issuerConfirmed: certificates.filter((c) => c.verificationStatus === "ISSUER_CONFIRMED").length,
+    issuerConfirmed: certificates.filter(
+      (c) => c.verificationStatus === "ISSUER_CONFIRMED" || c.verificationStatus === "MANUALLY_CONFIRMED"
+    ).length,
     documentRead: certificates.filter((c) => c.verificationStatus === "DOCUMENT_READ").length,
     needsReview: certificates.filter(
       (c) => c.verificationStatus === "NAME_MISMATCH" || c.verificationStatus === "UNVERIFIED"
@@ -131,79 +133,103 @@ const uploadCertificates = asyncHandler(async (req, res) => {
         }
       );
 
-      // Extract document metadata via Deterministic Parser Registry
-      const extracted = await parseCertificateDocument(
+      // Extract document metadata via Universal Extractor
+      const extracted = await extractUniversalCertificate(
         buffer,
         magicCheck.mimeType,
         file.originalname
       );
 
-      // Verify with Issuer Adapter (allowlist, SSRF protection, token-subset name matching)
-      const verification = await verifyWithIssuerAdapter(extracted, currentUser);
+      // Verify with Universal Verifier (S1-S4 strategies, token-subset name matching)
+      const verification = await verifyUniversalCertificate(extracted, currentUser);
 
       // Check duplicate by issuer + credential_id
-      if (extracted.credential_id && extracted.issuer_canonical) {
+      const firstId = extracted.identifiers[0]?.value;
+      if (firstId && extracted.issuer_canonical?.value) {
         const existingIdCert = await Certificate.findOne({
           user: req.user._id,
-          issuer_canonical: extracted.issuer_canonical,
-          credential_id: extracted.credential_id,
+          issuer_canonical: extracted.issuer_canonical.value,
+          credentialId: firstId,
         });
 
         if (existingIdCert) {
           verification.status = "DUPLICATE";
-          verification.reason = `Credential ID ${extracted.credential_id} already registered for ${extracted.issuer_canonical}.`;
+          verification.reason = `Credential ID ${firstId} already registered for ${extracted.issuer_canonical.value}.`;
         }
       }
 
       // Resume Cross-Check (separate from verification status)
       const resumeCheck = await crossCheckWithResume(
         req.user._id,
-        extracted.title_as_printed,
-        extracted.issuer_as_printed
+        extracted.title?.value,
+        extracted.issuer_as_printed?.value
       );
 
       // Calculate evidence-weighted score from config
-      const tempCertForScore = {
+      const score = calculateCredentialScore({
         verificationStatus: verification.status,
-        score_details: extracted.score_details,
-      };
-      const score = calculateCredentialScore(tempCertForScore);
+        document_type: extracted.document_type,
+        scores: extracted.scores,
+        expiry_date: extracted.expiry_date,
+      });
 
       // Construct verified record without invented fallbacks
       const newCert = await Certificate.create({
         user: req.user._id,
-        title: extracted.title_as_printed || "Not stated on certificate",
-        title_as_printed: extracted.title_as_printed,
-        issuer: extracted.issuer_as_printed || "Not stated on certificate",
-        issuer_as_printed: extracted.issuer_as_printed,
-        issuer_canonical: extracted.issuer_canonical,
-        certificate_type: extracted.certificate_type || "Certificate",
-        recipient_as_printed: extracted.recipient_as_printed,
-        recipientName: extracted.recipient_as_printed,
-        issueDate: extracted.issue_date ? new Date(extracted.issue_date) : null,
-        session_or_period: extracted.session_or_period,
-        credentialId: extracted.credential_id,
-        verification_url: extracted.verification_url,
-        signatory: extracted.signatory,
-        score_details: extracted.score_details,
-        gridfs_id: gridFsResult.gridfs_id,
+        document_type: extracted.document_type,
+        title: extracted.title?.value || "Not stated on certificate",
+        title_field: extracted.title,
+        issuer: extracted.issuer_as_printed?.value || "Not stated on certificate",
+        issuer_as_printed: extracted.issuer_as_printed?.value,
+        issuer_canonical: extracted.issuer_canonical?.value,
+        recipient_name: extracted.recipient_name?.value,
+        recipient_field: extracted.recipient_name,
+        issueDate: extracted.issue_date?.value ? new Date(extracted.issue_date.value) : null,
+        issue_date_field: extracted.issue_date,
+        expiryDate: extracted.expiry_date?.value ? new Date(extracted.expiry_date.value) : null,
+        period_or_session: extracted.period_or_session?.value,
+        duration_hours: extracted.duration_hours?.value,
+        credits: extracted.credits?.value,
+        grade_or_level: extracted.grade_or_level?.value,
+        identifiers: extracted.identifiers || [],
+        scores: extracted.scores || [],
+        signatories: extracted.signatories || [],
+        verification_urls: extracted.verification_urls || [],
+        qr_payloads: extracted.qr_payloads || [],
+        extras: extracted.extras || [],
+        language: extracted.language || "en",
+        page_count: extracted.page_count || 1,
+        pdf_metadata: extracted.pdf_metadata || {},
+        extraction_method: extracted.extraction_method || "text",
+        extraction_confidence: extracted.extraction_confidence || 1.0,
+        raw_text: extracted.raw_text || "",
         file_hash: fileHash,
+        ungrounded_fields: extracted.ungrounded_fields || [],
+        gridfs_id: gridFsResult.gridfs_id,
         fileType: magicCheck.mimeType,
         originalFilename: file.originalname,
-        raw_text: extracted.raw_text,
-        extraction_method: extracted.extraction_method,
-        field_sources: extracted.field_sources,
         skills: extracted.skills || [],
-        subject: extracted.subject,
-        vendor: extracted.issuer_canonical || extracted.issuer_as_printed,
         verificationStatus: verification.status,
         verificationReason: verification.reason,
-        checkedAt: verification.checkedAt,
+        checkedAt: new Date(),
+        verification_audit: verification.audit || [],
         isResumeVerified: resumeCheck.isResumeVerified,
         resumeMatched: resumeCheck.resumeMatched,
         resumeMatchDetails: resumeCheck.resumeMatchDetails,
         trustScoreBonus: score.trustEarned,
         xpAwarded: score.xpEarned,
+        // Legacy fields for existing frontend compatibility
+        credentialId: firstId || null,
+        verification_url: extracted.verification_urls[0]?.url || null,
+        signatory: extracted.signatories[0]?.name || null,
+        score_details: {
+          consolidated_score: extracted.scores.find((s) => s.unit === "%")?.value || null,
+          online_assignments: extracted.scores.find((s) => s.label_as_printed?.toLowerCase().includes("assignment"))?.value || null,
+          proctored_exam: extracted.scores.find((s) => s.label_as_printed?.toLowerCase().includes("exam"))?.value || null,
+          candidates_certified: parseInt(extracted.extras.find((e) => e.label_as_printed?.toLowerCase().includes("candidates"))?.value || "0", 10) || null,
+          credits_recommended: extracted.credits?.value || null,
+          elite_badge: extracted.scores.some((s) => s.value === "Elite"),
+        },
       });
 
       // Update signed proof URL
@@ -232,6 +258,114 @@ const uploadCertificates = asyncHandler(async (req, res) => {
   });
 });
 
+// @desc    Update certificate details ("Fix details" feature)
+// @route   PUT /api/certificates/:id
+// @access  Private
+const updateCertificateDetails = asyncHandler(async (req, res) => {
+  const certificate = await Certificate.findOne({
+    _id: req.params.id,
+    user: req.user._id,
+  });
+
+  if (!certificate) {
+    res.status(404);
+    throw new Error("Certificate not found or unauthorized.");
+  }
+
+  const { title, issuer, recipient_name, issueDate, credentialId } = req.body;
+  const userEdits = certificate.user_edits || [];
+
+  if (title && title !== certificate.title) {
+    userEdits.push({ field: "title", original_value: certificate.title, new_value: title });
+    certificate.title = title;
+    certificate.title_field = { value: title, evidence_quote: title, source: "user_corrected", confidence: 1.0 };
+  }
+  if (issuer && issuer !== certificate.issuer) {
+    userEdits.push({ field: "issuer", original_value: certificate.issuer, new_value: issuer });
+    certificate.issuer = issuer;
+    certificate.issuer_as_printed = issuer;
+  }
+  if (recipient_name && recipient_name !== certificate.recipient_name) {
+    userEdits.push({ field: "recipient_name", original_value: certificate.recipient_name, new_value: recipient_name });
+    certificate.recipient_name = recipient_name;
+    certificate.recipient_field = { value: recipient_name, evidence_quote: recipient_name, source: "user_corrected", confidence: 1.0 };
+  }
+  if (issueDate) {
+    const d = new Date(issueDate);
+    userEdits.push({ field: "issueDate", original_value: certificate.issueDate, new_value: d });
+    certificate.issueDate = d;
+    certificate.issue_date_field = { value: issueDate, evidence_quote: issueDate, source: "user_corrected", confidence: 1.0 };
+  }
+  if (credentialId) {
+    userEdits.push({ field: "credentialId", original_value: certificate.credentialId, new_value: credentialId });
+    certificate.credentialId = credentialId;
+    if (certificate.identifiers && certificate.identifiers.length > 0) {
+      certificate.identifiers[0].value = credentialId;
+      certificate.identifiers[0].source = "user_corrected";
+    } else {
+      certificate.identifiers = [{ label_as_printed: "Identifier", value: credentialId, source: "user_corrected", confidence: 1.0 }];
+    }
+  }
+
+  certificate.user_edits = userEdits;
+  // Any user edit resets verification status until re-verified
+  certificate.verificationStatus = "DOCUMENT_READ";
+  certificate.verificationReason = "Fields updated by user. Verification status reset to DOCUMENT_READ.";
+
+  const score = calculateCredentialScore(certificate);
+  certificate.xpAwarded = score.xpEarned;
+  certificate.trustScoreBonus = score.trustEarned;
+
+  await certificate.save();
+  await recalculateUserCertificateScore(req.user._id, Certificate, User);
+
+  res.json({
+    message: "Certificate details updated successfully.",
+    certificate,
+  });
+});
+
+// @desc    Mark certificate as manually confirmed by recruiter
+// @route   POST /api/certificates/:id/manual-confirm
+// @access  Recruiter or Admin
+const markManuallyConfirmed = asyncHandler(async (req, res) => {
+  if (req.user.role !== "recruiter" && req.user.role !== "admin") {
+    res.status(403);
+    throw new Error("Only recruiters and administrators can manually confirm credentials.");
+  }
+
+  const certificate = await Certificate.findById(req.params.id);
+  if (!certificate) {
+    res.status(404);
+    throw new Error("Certificate not found.");
+  }
+
+  certificate.verificationStatus = "MANUALLY_CONFIRMED";
+  certificate.verificationReason = `Manually confirmed by ${req.user.email} (${req.body.reason || "Audited proof document"}).`;
+  certificate.checkedAt = new Date();
+
+  certificate.verification_audit.push({
+    time: new Date(),
+    strategy: "S4_MANUAL",
+    host: "local",
+    result: "MANUALLY_CONFIRMED",
+    reason: req.body.reason || "Manual audit by recruiter",
+    actor: req.user.email,
+  });
+
+  const score = calculateCredentialScore(certificate);
+  certificate.xpAwarded = score.xpEarned;
+  certificate.trustScoreBonus = score.trustEarned;
+
+  await certificate.save();
+  await recalculateUserCertificateScore(certificate.user, Certificate, User);
+
+  res.json({
+    message: "Certificate marked as manually confirmed.",
+    certificate,
+  });
+});
+
 // @desc    Get certificate proof file with authorized ownership/token checking
 // @route   GET /api/certificates/:id/file
 // @access  Protected via Session Token or Signed Short-Lived URL Token
@@ -246,8 +380,7 @@ const getCertificateFile = asyncHandler(async (req, res) => {
     return;
   }
 
-  // 1. Authorization Check:
-  // Check signed query token OR Authorization bearer header
+  // Authorization Check
   let isAuthorized = false;
 
   if (req.query.token) {
@@ -270,7 +403,6 @@ const getCertificateFile = asyncHandler(async (req, res) => {
     } catch (authErr) {}
   }
 
-  // For embeddable preview in the user's active session, allow if signed token or auth matched
   if (!isAuthorized && !req.query.token) {
     res.status(403).json({
       error: "UNAUTHORIZED",
@@ -280,7 +412,7 @@ const getCertificateFile = asyncHandler(async (req, res) => {
   }
 
   const isDownload = req.query.download === "true";
-  const filename = `${(certificate.title_as_printed || "certificate").replace(/[^a-zA-Z0-9_-]/g, "_")}.pdf`;
+  const filename = `${(certificate.title_as_printed || certificate.title || "certificate").replace(/[^a-zA-Z0-9_-]/g, "_")}.pdf`;
 
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
@@ -290,7 +422,7 @@ const getCertificateFile = asyncHandler(async (req, res) => {
     `${isDownload ? "attachment" : "inline"}; filename="${filename}"`
   );
 
-  // 1. Deliver directly from MongoDB GridFS
+  // Deliver directly from MongoDB GridFS
   if (certificate.gridfs_id) {
     try {
       const downloadStream = getFileStreamFromGridFS(certificate.gridfs_id);
@@ -307,7 +439,7 @@ const getCertificateFile = asyncHandler(async (req, res) => {
     }
   }
 
-  // 2. Deliver from local disk cache if available
+  // Deliver from local disk cache if available
   if (certificate.fileUrl) {
     const localBasename = path.basename(certificate.fileUrl.split("?")[0]);
     const diskPath = path.join(__dirname, "../uploads/certificates", localBasename);
@@ -316,7 +448,6 @@ const getCertificateFile = asyncHandler(async (req, res) => {
     }
   }
 
-  // 3. Structured Unavailable State (Never show raw JSON in UI)
   res.status(404).json({
     error: "PROOF_UNAVAILABLE",
     message: "Proof file unavailable. Re-upload to restore.",
@@ -338,7 +469,6 @@ const deleteCertificate = asyncHandler(async (req, res) => {
     throw new Error("Certificate not found or unauthorized.");
   }
 
-  // Delete from GridFS if present
   if (certificate.gridfs_id) {
     await deleteFileFromGridFS(certificate.gridfs_id);
   }
@@ -349,89 +479,11 @@ const deleteCertificate = asyncHandler(async (req, res) => {
   res.json({ message: "Certificate removed successfully.", id: req.params.id });
 });
 
-// @desc    Re-analyze all certificates for the user idempotently
-// @route   POST /api/certificates/re-analyze-all
-// @access  Private
-const reanalyzeAllCertificates = asyncHandler(async (req, res) => {
-  const certificates = await Certificate.find({ user: req.user._id });
-  const currentUser = await User.findById(req.user._id);
-
-  let updatedCount = 0;
-
-  for (const cert of certificates) {
-    let buffer = null;
-
-    if (cert.gridfs_id) {
-      try {
-        const stream = getFileStreamFromGridFS(cert.gridfs_id);
-        const chunks = [];
-        await new Promise((resolve, reject) => {
-          stream.on("data", (chunk) => chunks.push(chunk));
-          stream.on("end", () => {
-            buffer = Buffer.concat(chunks);
-            resolve();
-          });
-          stream.on("error", reject);
-        });
-      } catch (e) {}
-    }
-
-    if (buffer) {
-      const extracted = await parseCertificateDocument(buffer, cert.fileType, cert.originalFilename);
-      const verification = await verifyWithIssuerAdapter(extracted, currentUser);
-      const resumeCheck = await crossCheckWithResume(
-        req.user._id,
-        extracted.title_as_printed,
-        extracted.issuer_as_printed
-      );
-
-      const score = calculateCredentialScore({
-        verificationStatus: verification.status,
-        score_details: extracted.score_details,
-      });
-
-      cert.title_as_printed = extracted.title_as_printed;
-      cert.title = extracted.title_as_printed || cert.title;
-      cert.issuer_as_printed = extracted.issuer_as_printed;
-      cert.issuer_canonical = extracted.issuer_canonical;
-      cert.issuer = extracted.issuer_as_printed || cert.issuer;
-      cert.recipient_as_printed = extracted.recipient_as_printed;
-      cert.certificate_type = extracted.certificate_type;
-      cert.issueDate = extracted.issue_date ? new Date(extracted.issue_date) : cert.issueDate;
-      cert.session_or_period = extracted.session_or_period;
-      cert.credentialId = extracted.credential_id;
-      cert.signatory = extracted.signatory;
-      cert.score_details = extracted.score_details;
-      cert.verification_url = extracted.verification_url;
-      cert.skills = extracted.skills || [];
-      cert.subject = extracted.subject;
-      cert.verificationStatus = verification.status;
-      cert.verificationReason = verification.reason;
-      cert.checkedAt = verification.checkedAt;
-      cert.isResumeVerified = resumeCheck.isResumeVerified;
-      cert.resumeMatched = resumeCheck.resumeMatched;
-      cert.resumeMatchDetails = resumeCheck.resumeMatchDetails;
-      cert.xpAwarded = score.xpEarned;
-      cert.trustScoreBonus = score.trustEarned;
-
-      await cert.save();
-      updatedCount++;
-    }
-  }
-
-  await recalculateUserCertificateScore(req.user._id, Certificate, User);
-
-  const updatedCertificates = await Certificate.find({ user: req.user._id }).sort({ createdAt: -1 });
-  res.json({
-    message: `Successfully re-analyzed ${updatedCount} certificates.`,
-    certificates: updatedCertificates,
-  });
-});
-
 module.exports = {
   getMyCertificates,
   uploadCertificates,
+  updateCertificateDetails,
+  markManuallyConfirmed,
   getCertificateFile,
   deleteCertificate,
-  reanalyzeAllCertificates,
 };

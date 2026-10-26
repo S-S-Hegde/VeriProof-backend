@@ -2,24 +2,18 @@ const express = require("express");
 const router = express.Router();
 const path = require("path");
 const fs = require("fs");
-const crypto = require("crypto");
 const multer = require("multer");
 const { protect } = require("../middleware/authMiddleware");
 const {
   getMyCertificates,
   uploadCertificates,
-  reanalyzeAllCertificates,
+  updateCertificateDetails,
+  markManuallyConfirmed,
   getCertificateFile,
   deleteCertificate,
 } = require("../controllers/certificateController");
 
-// Ensure certificate uploads folder exists
-const certUploadDir = path.join(__dirname, "../uploads/certificates");
-if (!fs.existsSync(certUploadDir)) {
-  fs.mkdirSync(certUploadDir, { recursive: true });
-}
-
-const storage = multer.memoryStorage(); // Use memory storage for direct buffer hashing & database preservation
+const storage = multer.memoryStorage(); // Use memory storage for direct buffer hashing & GridFS storage
 
 const certUpload = multer({
   storage,
@@ -44,10 +38,13 @@ router
   .get(protect, getMyCertificates)
   .post(protect, certUpload.array("certificates", 10), uploadCertificates);
 
-router.route("/re-analyze-all").post(protect, reanalyzeAllCertificates);
-
 router.route("/:id/file").get(getCertificateFile);
 
-router.route("/:id").delete(protect, deleteCertificate);
+router
+  .route("/:id")
+  .put(protect, updateCertificateDetails)
+  .delete(protect, deleteCertificate);
+
+router.route("/:id/manual-confirm").post(protect, markManuallyConfirmed);
 
 module.exports = router;

@@ -1,0 +1,77 @@
+[
+  {
+    "pattern": "infosys",
+    "canonical_name": "Infosys Springboard",
+    "domain": "infosys.com"
+  },
+  {
+    "pattern": "nptel",
+    "canonical_name": "NPTEL",
+    "domain": "nptel.ac.in"
+  },
+  {
+    "pattern": "coursera",
+    "canonical_name": "Coursera",
+    "domain": "coursera.org"
+  },
+  {
+    "pattern": "udemy",
+    "canonical_name": "Udemy",
+    "domain": "udemy.com"
+  },
+  {
+    "pattern": "amazon web services|aws",
+    "canonical_name": "Amazon Web Services",
+    "domain": "aws.amazon.com"
+  },
+  {
+    "pattern": "google cloud|google",
+    "canonical_name": "Google",
+    "domain": "google.com"
+  },
+  {
+    "pattern": "microsoft",
+    "canonical_name": "Microsoft",
+    "domain": "microsoft.com"
+  },
+  {
+    "pattern": "credly",
+    "canonical_name": "Credly",
+    "domain": "credly.com"
+  },
+  {
+    "pattern": "accredible",
+    "canonical_name": "Accredible",
+    "domain": "accredible.com"
+  },
+  {
+    "pattern": "freecodecamp",
+    "canonical_name": "freeCodeCamp",
+    "domain": "freecodecamp.org"
+  },
+  {
+    "pattern": "hackerrank",
+    "canonical_name": "HackerRank",
+    "domain": "hackerrank.com"
+  },
+  {
+    "pattern": "harvard",
+    "canonical_name": "Harvard University",
+    "domain": "harvard.edu"
+  },
+  {
+    "pattern": "stanford",
+    "canonical_name": "Stanford University",
+    "domain": "stanford.edu"
+  },
+  {
+    "pattern": "mit |massachusetts institute of technology",
+    "canonical_name": "MIT",
+    "domain": "mit.edu"
+  },
+  {
+    "pattern": "iit |indian institute of technology",
+    "canonical_name": "Indian Institute of Technology",
+    "domain": "iit.ac.in"
+  }
+]

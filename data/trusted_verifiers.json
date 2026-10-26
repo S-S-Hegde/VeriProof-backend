@@ -1,0 +1,65 @@
+[
+  {
+    "host": "archive.nptel.ac.in",
+    "registered_domain": "nptel.ac.in",
+    "issuer_hint": "NPTEL",
+    "issuer_as_printed": "NPTEL, Indian Institute of Technology Kanpur (Funded by MoE, Govt. of India)",
+    "description": "NPTEL National Programme on Technology Enhanced Learning Official Certificate Archive",
+    "content_type": "html_and_pdf",
+    "trusted": true
+  },
+  {
+    "host": "nptel.ac.in",
+    "registered_domain": "nptel.ac.in",
+    "issuer_hint": "NPTEL",
+    "issuer_as_printed": "NPTEL, Indian Institute of Technology Kanpur (Funded by MoE, Govt. of India)",
+    "description": "NPTEL National Certification Portal",
+    "content_type": "html_with_iframe",
+    "trusted": true
+  },
+  {
+    "host": "verify.onwingspan.com",
+    "registered_domain": "onwingspan.com",
+    "issuer_hint": "Infosys Springboard",
+    "issuer_as_printed": "Infosys Limited, Infosys Springboard",
+    "description": "Wingspan / Infosys Springboard Credential Verification Portal",
+    "content_type": "spa",
+    "trusted": true
+  },
+  {
+    "host": "coursera.org",
+    "registered_domain": "coursera.org",
+    "issuer_hint": "Coursera",
+    "issuer_as_printed": "Coursera",
+    "description": "Coursera Certificate Verification Portal",
+    "content_type": "html",
+    "trusted": true
+  },
+  {
+    "host": "udemy.com",
+    "registered_domain": "udemy.com",
+    "issuer_hint": "Udemy",
+    "issuer_as_printed": "Udemy",
+    "description": "Udemy Certificate Verification Portal",
+    "content_type": "html",
+    "trusted": true
+  },
+  {
+    "host": "credly.com",
+    "registered_domain": "credly.com",
+    "issuer_hint": "Credly",
+    "issuer_as_printed": "Credly",
+    "description": "Credly Digital Badges and Credentials",
+    "content_type": "json_and_html",
+    "trusted": true
+  },
+  {
+    "host": "verify.skillproof.org",
+    "registered_domain": "skillproof.org",
+    "issuer_hint": "VeriProof",
+    "issuer_as_printed": "VeriProof Authority",
+    "description": "VeriProof Internal Test and Verification Authority",
+    "content_type": "json",
+    "trusted": true
+  }
+]
