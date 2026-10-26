@@ -38,8 +38,6 @@
     "nodemailer": "^9.0.3",
     "pdf-lib": "^1.17.1",
     "pdf-parse": "^1.1.1",
-    "pdf2json": "^4.0.3",
-    "pdfkit": "^0.18.0",
     "psl": "^1.15.0",
     "qrcode": "^1.5.4",
     "speakeasy": "^2.0.0",

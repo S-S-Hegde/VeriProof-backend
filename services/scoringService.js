@@ -20,7 +20,7 @@ function calculateCredentialScore(credential) {
 
   // 2. Document type base XP
   const docType =
-    credential.document_type?.value ||
+    (typeof credential.document_type === "string" ? credential.document_type : credential.document_type?.value) ||
     (credential.certificate_type?.toLowerCase().includes("program") ? "program_completion" : "course_completion");
 
   let baseXP = config.BASE_XP[docType] || config.COMPLETION_CERT_BASE_XP;

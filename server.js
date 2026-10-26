@@ -35,8 +35,17 @@ checkEnv("NVIDIA_API_KEY", true);
 checkEnv("MONGODB_URI", false);
 checkEnv("JWT_SECRET", true);
 checkEnv("FRONTEND_URL", false);
-checkEnv("GITHUB_TOKEN", true);
 console.log("=====================");
+
+// Validate vendor data files at startup
+const { loadAndValidateDataFiles } = require("./services/parsers/dataSchemaValidator");
+try {
+  loadAndValidateDataFiles();
+  console.log("[Data-Validation] trusted_verifiers.json and issuer_aliases.json validated successfully.");
+} catch (dataErr) {
+  console.error("[FATAL DATA VALIDATION ERROR]", dataErr.message);
+  process.exit(1);
+}
 
 // Route files
 const authRoutes    = require("./routes/authRoutes");

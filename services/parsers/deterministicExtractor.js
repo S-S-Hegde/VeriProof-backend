@@ -116,10 +116,10 @@ function runDeterministicPass(rawText, qrPayloads = []) {
 
   // 2. Generic Candidate Recipient Name
   let recipientIndex = -1;
-  // Pattern A: line following "conferred upon", "certifies that", "awarded to", "presented to", "this is to certify that"
+  // Pattern A: line following "conferred upon", "confers upon", "certifies that", "awarded to", "presented to", "this is to certify that"
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i];
-    if (/(?:certif(?:y|ies)\s+that|awarded\s+to|presented\s+to|conferred\s+upon|presented\s+by)/i.test(l)) {
+    if (/(?:certif(?:y|ies)\s+that|awarded\s+to|presented\s+to|confer(?:s|red)?\s+upon|presented\s+by)/i.test(l)) {
       if (i + 1 < lines.length && lines[i + 1].length >= 3 && !/has|for|completed|the\s+degree/i.test(lines[i + 1])) {
         result.recipient_name = {
           value: lines[i + 1],
@@ -133,13 +133,13 @@ function runDeterministicPass(rawText, qrPayloads = []) {
     }
   }
 
-  // Pattern B: all-uppercase name line
+  // Pattern B: all-uppercase name line (excluding institutions and keywords)
   if (!result.recipient_name.value) {
     for (let i = 0; i < lines.length; i++) {
       const l = lines[i];
       if (
-        /^[A-Z][A-Z\s.]{6,45}$/.test(l) &&
-        !/CERTIFICATE|CREDITS|COURSE|PROGRAM|RECOMMENDED|VERIFY|TO VERIFY|ROLL|ONLINE|PROCTORED|HONORS/i.test(l)
+        /^[A-Z][A-Z\s.]{4,45}$/.test(l) &&
+        !/CERTIFICATE|CREDITS|COURSE|PROGRAM|RECOMMENDED|VERIFY|TO VERIFY|ROLL|ONLINE|PROCTORED|HONORS|UNIVERSITY|INSTITUTE|COLLEGE|ACADEMY|TECHNOLOGY|SCHOOL|DEPARTMENT|FOUNDATION|COUNCIL|BOARD/i.test(l)
       ) {
         result.recipient_name = {
           value: l,
@@ -227,7 +227,7 @@ function runDeterministicPass(rawText, qrPayloads = []) {
 
   // 5. Generic Scores and Marks
   const assignMatch = rawText.match(/(25\/25)/);
-  if (assignMatch) {
+  if (assignMatch && !result.scores.some((s) => s.value === "25/25")) {
     result.scores.push({
       label_as_printed: "Online Assignments",
       value: "25/25",
@@ -240,7 +240,7 @@ function runDeterministicPass(rawText, qrPayloads = []) {
   }
 
   const examMatch = rawText.match(/(?:25\/25)?(\d{1,2}(?:\.\d+)?\/75)/);
-  if (examMatch) {
+  if (examMatch && !result.scores.some((s) => s.value === examMatch[1])) {
     result.scores.push({
       label_as_printed: "Proctored Exam",
       value: examMatch[1],
@@ -250,6 +250,23 @@ function runDeterministicPass(rawText, qrPayloads = []) {
       source: "text",
       confidence: 0.95,
     });
+  }
+
+  // Generic x/y scores (percentages, assignments, proctored marks)
+  const ratioMatches = Array.from(rawText.matchAll(/\b(\d{1,3}(?:\.\d+)?)\s*\/\s*(\d{1,3})\b/g));
+  for (const m of ratioMatches) {
+    const val = m[0].replace(/\s+/g, "");
+    if (!result.scores.some((s) => s.value === val)) {
+      result.scores.push({
+        label_as_printed: "Assessment Score",
+        value: val,
+        max: m[2],
+        unit: "marks",
+        evidence_quote: m[0],
+        source: "text",
+        confidence: 0.95,
+      });
+    }
   }
 
   const pctExplicit = rawText.match(/\b(\d{1,3}(?:\.\d+)?)\s*%/);

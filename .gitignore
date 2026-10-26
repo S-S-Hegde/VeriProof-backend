@@ -10,3 +10,6 @@ config/serviceAccountKey.json
 backups
 backups/
 backups/*
+tests/private_fixtures/
+tests/private_fixtures/*
+*.pdf
