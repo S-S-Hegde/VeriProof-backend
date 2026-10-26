@@ -7,7 +7,7 @@ const multer = require("multer");
 const { protect } = require("../middleware/authMiddleware");
 const {
   getMyCertificates,
-  createCertificate,
+  uploadCertificates,
   reanalyzeAllCertificates,
   getCertificateFile,
   deleteCertificate,
@@ -19,24 +19,19 @@ if (!fs.existsSync(certUploadDir)) {
   fs.mkdirSync(certUploadDir, { recursive: true });
 }
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, certUploadDir);
-  },
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname || "").toLowerCase() || ".pdf";
-    const uniqueSuffix = crypto.randomBytes(12).toString("hex");
-    cb(null, `cert_${uniqueSuffix}${ext}`);
-  },
-});
+const storage = multer.memoryStorage(); // Use memory storage for direct buffer hashing & database preservation
 
 const certUpload = multer({
   storage,
-  limits: { fileSize: 15 * 1024 * 1024 }, // 15MB max
+  limits: { fileSize: 20 * 1024 * 1024 }, // 20MB max per file
   fileFilter: (req, file, cb) => {
     const allowedExts = [".pdf", ".png", ".jpg", ".jpeg", ".webp"];
     const ext = path.extname(file.originalname || "").toLowerCase();
-    if (allowedExts.includes(ext) || file.mimetype.startsWith("image/") || file.mimetype === "application/pdf") {
+    if (
+      allowedExts.includes(ext) ||
+      file.mimetype.startsWith("image/") ||
+      file.mimetype === "application/pdf"
+    ) {
       cb(null, true);
     } else {
       cb(new Error("Only certificate files (PDF, PNG, JPG, WEBP) are allowed."), false);
@@ -44,17 +39,15 @@ const certUpload = multer({
   },
 });
 
-router.route("/")
+router
+  .route("/")
   .get(protect, getMyCertificates)
-  .post(protect, certUpload.single("certificate"), createCertificate);
+  .post(protect, certUpload.array("certificates", 10), uploadCertificates);
 
-router.route("/re-analyze-all")
-  .post(protect, reanalyzeAllCertificates);
+router.route("/re-analyze-all").post(protect, reanalyzeAllCertificates);
 
-router.route("/:id/file")
-  .get(getCertificateFile);
+router.route("/:id/file").get(getCertificateFile);
 
-router.route("/:id")
-  .delete(protect, deleteCertificate);
+router.route("/:id").delete(protect, deleteCertificate);
 
 module.exports = router;
