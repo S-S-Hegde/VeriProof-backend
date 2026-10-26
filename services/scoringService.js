@@ -1,40 +1,16 @@
+const config = require("../config/certificateScoringConfig");
+
 /**
  * Evidence-Based Certificate Scoring Engine
- * Truthful, idempotent XP and Trust Score calculation.
+ * Truthful, idempotent XP and Trust Score calculation with configurable weights & caps.
  */
-
-const SCORING_CONFIG = {
-  // Base weights by credential rigor
-  PROCTORED_EXAM_BASE_XP: 300,
-  COMPLETION_CERT_BASE_XP: 100,
-
-  // Multipliers by verification state
-  STATUS_MULTIPLIERS: {
-    ISSUER_CONFIRMED: 1.0,    // 100% of base
-    DOCUMENT_READ: 0.25,      // 25% of base
-    UNVERIFIED: 0.0,
-    NAME_MISMATCH: 0.0,
-    REJECTED: 0.0,
-    DUPLICATE: 0.0,
-  },
-
-  // Trust score points
-  TRUST_POINTS: {
-    ISSUER_CONFIRMED: 10,
-    DOCUMENT_READ: 3,
-    UNVERIFIED: 0,
-    NAME_MISMATCH: 0,
-    REJECTED: 0,
-    DUPLICATE: 0,
-  },
-};
 
 /**
  * Calculates XP and Trust Bonus for a single credential record
  */
 function calculateCredentialScore(credential) {
   const status = credential.verificationStatus || "UNVERIFIED";
-  const multiplier = SCORING_CONFIG.STATUS_MULTIPLIERS[status] ?? 0;
+  const multiplier = config.STATUS_MULTIPLIERS[status] ?? 0;
 
   // Determine if credential involved a proctored exam or score
   const isProctored = Boolean(
@@ -43,11 +19,11 @@ function calculateCredentialScore(credential) {
   );
 
   const baseXP = isProctored
-    ? SCORING_CONFIG.PROCTORED_EXAM_BASE_XP
-    : SCORING_CONFIG.COMPLETION_CERT_BASE_XP;
+    ? config.PROCTORED_EXAM_BASE_XP
+    : config.COMPLETION_CERT_BASE_XP;
 
   const xpEarned = Math.round(baseXP * multiplier);
-  const trustEarned = SCORING_CONFIG.TRUST_POINTS[status] ?? 0;
+  const trustEarned = config.TRUST_POINTS[status] ?? 0;
 
   let reason = "No points awarded.";
   if (status === "ISSUER_CONFIRMED") {
@@ -81,34 +57,40 @@ async function recalculateUserCertificateScore(userId, CertificateModel, UserMod
   });
 
   let totalXp = 0;
-  let totalTrust = 0;
+  let rawTrust = 0;
   let confirmedCount = 0;
   let readCount = 0;
 
   for (const cert of certificates) {
     const score = calculateCredentialScore(cert);
     totalXp += score.xpEarned;
-    totalTrust += score.trustEarned;
+    rawTrust += score.trustEarned;
     if (cert.verificationStatus === "ISSUER_CONFIRMED") confirmedCount++;
     if (cert.verificationStatus === "DOCUMENT_READ") readCount++;
   }
 
-  const user = await UserModel.findById(userId);
-  if (user && user.skillProgress) {
-    user.skillProgress.verifiedCount = confirmedCount;
-    await user.save();
+  // Cap total trust boost from certificates according to config
+  const totalTrust = Math.min(config.MAX_TOTAL_TRUST_BOOST, rawTrust);
+
+  if (UserModel) {
+    const user = await UserModel.findById(userId);
+    if (user && user.skillProgress) {
+      user.skillProgress.verifiedCount = confirmedCount;
+      await user.save();
+    }
   }
 
   return {
     totalXp,
     totalTrust,
+    rawTrust,
     confirmedCount,
     readCount,
   };
 }
 
 module.exports = {
-  SCORING_CONFIG,
+  SCORING_CONFIG: config,
   calculateCredentialScore,
   recalculateUserCertificateScore,
 };

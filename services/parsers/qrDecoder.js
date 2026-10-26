@@ -1,86 +1,60 @@
-const { spawnSync } = require("child_process");
-const fs = require("fs");
-const path = require("path");
-const os = require("os");
+const { extractImages } = require("unpdf");
+const jsQR = require("jsqr");
 
 /**
- * Robust QR Code Extractor for PDF Documents
- * Leverages python's pypdf + pyzbar/opencv to extract and decode QR codes from PDF page 1 images.
+ * 100% Pure Node.js QR Code Extractor for PDF and Image Documents.
+ * Uses unpdf to extract page 1 image pixel arrays and jsQR to decode them.
+ * Requires ZERO system packages, zero Python subprocesses, and zero native binaries.
+ * Guaranteed to run on Render, Linux, Windows, and macOS out of the box.
  */
-function decodeQrFromPdf(pdfBuffer) {
+async function decodeQrFromPdf(pdfBuffer) {
   if (!pdfBuffer || pdfBuffer.length === 0) return null;
 
-  // Write temporary PDF file
-  const tmpPath = path.join(os.tmpdir(), `qr_${Date.now()}_${Math.random().toString(36).substring(2, 8)}.pdf`);
   try {
-    fs.writeFileSync(tmpPath, pdfBuffer);
+    const images = await extractImages(new Uint8Array(pdfBuffer), 1);
+    for (const img of images) {
+      const { data, width, height, channels } = img;
+      if (!data || width < 40 || height < 40) continue;
 
-    // Call python script to extract QR code
-    const pythonScript = `
-import sys, json, io
-from pypdf import PdfReader
-from PIL import Image
-try:
-    from pyzbar.pyzbar import decode
-except Exception:
-    decode = None
-import cv2, numpy as np
-
-pdf_path = sys.argv[1]
-result = {"url": None, "raw": None}
-try:
-    reader = PdfReader(pdf_path)
-    if reader.pages:
-        page = reader.pages[0]
-        qr_detector = cv2.QRCodeDetector()
-        for img_file in page.images:
-            try:
-                img = Image.open(io.BytesIO(img_file.data))
-                if decode:
-                    barcodes = decode(img)
-                    if barcodes:
-                        data = barcodes[0].data.decode('utf-8')
-                        result["raw"] = data
-                        break
-                img_cv = cv2.cvtColor(np.array(img.convert('RGB')), cv2.COLOR_RGB2BGR)
-                data, _, _ = qr_detector.detectAndDecode(img_cv)
-                if data:
-                    result["raw"] = data
-                    break
-            except Exception:
-                continue
-except Exception as e:
-    result["error"] = str(e)
-
-print(json.dumps(result))
-`;
-
-    const py = spawnSync("python", ["-c", pythonScript, tmpPath], {
-      encoding: "utf-8",
-      timeout: 10000,
-    });
-
-    if (py.stdout) {
-      try {
-        const out = JSON.parse(py.stdout.trim());
-        if (out.raw) {
-          // If the raw text is JSON or W3C VC, or a direct URL
-          return out.raw;
+      let rgba = null;
+      if (channels === 4) {
+        rgba = new Uint8ClampedArray(data);
+      } else if (channels === 3) {
+        rgba = new Uint8ClampedArray(width * height * 4);
+        for (let p = 0; p < width * height; p++) {
+          rgba[p * 4] = data[p * 3];
+          rgba[p * 4 + 1] = data[p * 3 + 1];
+          rgba[p * 4 + 2] = data[p * 3 + 2];
+          rgba[p * 4 + 3] = 255;
         }
-      } catch (e) {}
+      } else if (channels === 1) {
+        rgba = new Uint8ClampedArray(width * height * 4);
+        for (let p = 0; p < width * height; p++) {
+          const val = data[p];
+          rgba[p * 4] = val;
+          rgba[p * 4 + 1] = val;
+          rgba[p * 4 + 2] = val;
+          rgba[p * 4 + 3] = 255;
+        }
+      }
+
+      if (rgba) {
+        const code = jsQR(rgba, width, height);
+        if (code && code.data) {
+          return code.data;
+        }
+      }
     }
   } catch (err) {
-    console.warn("[QR Decoder] Extraction notice:", err.message);
-  } finally {
-    try {
-      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
-    } catch (e) {}
+    console.warn("[QR Decoder] jsQR extraction notice:", err.message);
   }
 
-  // Fallback: Scan text buffer for verify URLs
+  // Fallback string scan for text-embedded verify URLs
   try {
     const text = pdfBuffer.toString("latin1");
-    const urlMatch = text.match(/https?:\/\/(?:verify\.onwingspan\.com|nptel\.ac\.in\/noc\/E_Certificate\/[A-Za-z0-9]+)/i);
+    const urlMatch = text.match(
+      /https?:\/\/(?:verify\.onwingspan\.com|nptel\.ac\.in\/noc\/E_Certificate\/[A-Za-z0-9]+)/i
+    );
     if (urlMatch) return urlMatch[0];
   } catch (e) {}
 

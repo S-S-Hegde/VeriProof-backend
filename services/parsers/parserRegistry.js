@@ -27,7 +27,7 @@ async function parseCertificateDocument(buffer, mimeType = "application/pdf", or
   }
 
   // Extract QR payload / URL
-  const qrData = decodeQrFromPdf(buffer);
+  const qrData = await decodeQrFromPdf(buffer);
 
   // 1. Run deterministic per-issuer parsers
   for (const parser of DETERMINISTIC_PARSERS) {

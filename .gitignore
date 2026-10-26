@@ -7,4 +7,6 @@ serviceAccountKey.json
 config/serviceAccountKey.json
 *.json.secret
 *.traineddata
-
+backups
+backups/
+backups/*

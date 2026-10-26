@@ -2,8 +2,13 @@ const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
 const { parseCertificateDocument } = require("../services/parsers/parserRegistry");
-const { verifyWithIssuerAdapter, compareNames } = require("../services/adapters/issuerAdapterRegistry");
+const {
+  verifyWithIssuerAdapter,
+  compareNamesTokenSubset,
+} = require("../services/adapters/issuerAdapterRegistry");
 const { calculateCredentialScore } = require("../services/scoringService");
+const { validateMagicBytes } = require("../utils/gridfsStorage");
+const config = require("../config/certificateScoringConfig");
 
 const FIXTURES = {
   INFOSYS_ML: "D:/New folder/New folder/infosys certi.pdf",
@@ -137,43 +142,97 @@ async function runTests() {
     assert.strictEqual(dataD.score_details?.elite_badge, true);
   });
 
-  // 5. Verification States & Name Mismatch Logic
-  console.log("\nTesting Verification States & Security Adapters...");
-
-  // Match recipient with account
-  const verifyStateA = await verifyWithIssuerAdapter(dataA, ACCOUNT_USER);
-  test("Infosys Springboard sets DOCUMENT_READ without fake confirmed", () => {
-    assert.strictEqual(verifyStateA.status, "DOCUMENT_READ");
+  // 5. Verification States, W3C Check & Name Mismatch (Amendments 1, 2, 4)
+  console.log("\nTesting Token-Subset Name Matching (Amendment 4)...");
+  test("Token-subset match with middle names matches", () => {
+    const res = compareNamesTokenSubset("Shridhar Hegde", "SHRIDHAR SHARATKUMAR HEGDE");
+    assert.strictEqual(res.matches, true);
+  });
+  test("Token-subset match with initials matches", () => {
+    const res = compareNamesTokenSubset("S. Hegde", "SHRIDHAR SHARATKUMAR HEGDE");
+    assert.strictEqual(res.matches, true);
+  });
+  test("Token-subset mismatch fails", () => {
+    const res = compareNamesTokenSubset("Rahul Sharma", "SHRIDHAR SHARATKUMAR HEGDE");
+    assert.strictEqual(res.matches, false);
+    assert(res.unmatchedTokens.includes("rahul"));
   });
 
-  // Name Mismatch
-  const mismatchUser = { name: "Rahul Sharma", email: "rahul@example.com" };
+  console.log("\nTesting Issuer Adapters & Verification States...");
+  // Infosys Springboard: valid W3C QR, key cannot be tied to Infosys domain -> DOCUMENT_READ
+  const verifyStateA = await verifyWithIssuerAdapter(dataA, ACCOUNT_USER);
+  test("Infosys Springboard sets DOCUMENT_READ when key cannot be tied to Infosys domain", () => {
+    assert.strictEqual(verifyStateA.status, "DOCUMENT_READ");
+    assert(verifyStateA.reason.includes("cannot be authoritatively tied"));
+  });
+
+  // Tampered Document check (Amendment 1)
+  const tamperedDataA = {
+    ...dataA,
+    title_as_printed: "Fake Altered Course Name",
+  };
+  const verifyTampered = await verifyWithIssuerAdapter(tamperedDataA, ACCOUNT_USER);
+  test("Altered course title with original QR ends in REJECTED", () => {
+    assert.strictEqual(verifyTampered.status, "REJECTED");
+    assert(verifyTampered.reason.includes("Document does not match its embedded credential"));
+  });
+
+  // NPTEL check (Amendment 2: fetch official archive & compare)
+  console.log("\nTesting NPTEL live archive comparison...");
+  const verifyStateD = await verifyWithIssuerAdapter(dataD, ACCOUNT_USER);
+  test("NPTEL archive match sets ISSUER_CONFIRMED", () => {
+    assert.strictEqual(verifyStateD.status, "ISSUER_CONFIRMED");
+    assert(verifyStateD.reason.includes("matched recipient, course, roll number"));
+  });
+
+  // NPTEL with mismatched roll number in URL
+  const mismatchedRollData = {
+    ...dataD,
+    credential_id: "NPTEL25CS9999999999",
+  };
+  const verifyMismatchedRoll = await verifyWithIssuerAdapter(mismatchedRollData, ACCOUNT_USER);
+  test("Mismatched roll number in URL ends in REJECTED", () => {
+    assert.strictEqual(verifyMismatchedRoll.status, "REJECTED");
+  });
+
+  // Name mismatch check
+  const mismatchUser = { name: "Aditya Verma", email: "aditya@example.com" };
   const verifyMismatch = await verifyWithIssuerAdapter(dataA, mismatchUser);
   test("Different recipient name ends in NAME_MISMATCH", () => {
     assert.strictEqual(verifyMismatch.status, "NAME_MISMATCH");
+    assert.strictEqual(calculateCredentialScore({ verificationStatus: verifyMismatch.status }).xpEarned, 0);
   });
 
-  // Scoring with Name Mismatch
-  const scoreMismatch = calculateCredentialScore({ verificationStatus: verifyMismatch.status });
-  test("NAME_MISMATCH awards exactly 0 XP", () => {
-    assert.strictEqual(scoreMismatch.xpEarned, 0);
+  // 6. Magic Bytes Validation (Amendment 5)
+  console.log("\nTesting Magic Bytes Validation...");
+  test("Valid PDF magic bytes accepted", () => {
+    const res = validateMagicBytes(bufA);
+    assert.strictEqual(res.valid, true);
+    assert.strictEqual(res.mimeType, "application/pdf");
+  });
+  test("Corrupt or invalid magic bytes rejected", () => {
+    const corruptBuf = Buffer.from([0x00, 0x11, 0x22, 0x33, 0x44]);
+    const res = validateMagicBytes(corruptBuf);
+    assert.strictEqual(res.valid, false);
+    assert(res.error.includes("Invalid file format"));
   });
 
-  // Scoring with Proctored Exam vs Completion
-  const scoreNptel = calculateCredentialScore({
+  // 7. Scoring & Trust Boost Caps (Amendment 6)
+  console.log("\nTesting Scoring Weights & Caps...");
+  const nptelScore = calculateCredentialScore({
     verificationStatus: "ISSUER_CONFIRMED",
     score_details: dataD.score_details,
   });
-  test("Confirmed proctored exam earns full 300 XP", () => {
-    assert.strictEqual(scoreNptel.xpEarned, 300);
+  test("Confirmed proctored exam earns configured 300 XP", () => {
+    assert.strictEqual(nptelScore.xpEarned, config.PROCTORED_EXAM_BASE_XP);
   });
 
-  const scoreDocRead = calculateCredentialScore({
+  const docReadScore = calculateCredentialScore({
     verificationStatus: "DOCUMENT_READ",
     score_details: null,
   });
-  test("DOCUMENT_READ earns reduced 25% weight (25 XP)", () => {
-    assert.strictEqual(scoreDocRead.xpEarned, 25);
+  test("DOCUMENT_READ completion earns 25% weight (25 XP)", () => {
+    assert.strictEqual(docReadScore.xpEarned, 25);
   });
 
   console.log(`\n========================================`);

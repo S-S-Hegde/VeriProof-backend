@@ -94,6 +94,7 @@ function parseInfosysSpringboard(rawText, qrData = null) {
     credential_id: credentialId, // None printed on document
     score_details: null,
     verification_url: "https://verify.onwingspan.com",
+    qr_raw: qrData,
     skills,
     subject,
     extraction_method: "template",

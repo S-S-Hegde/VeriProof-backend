@@ -97,7 +97,16 @@ const certificateSchema = new mongoose.Schema(
       credits_recommended: { type: String, default: null },
       elite_badge: { type: Boolean, default: false },
     },
-    // File storage & hashing
+    // File storage & hashing (GridFS & Cloudinary)
+    gridfs_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      default: null,
+      index: true,
+    },
+    cloudinary_public_id: {
+      type: String,
+      default: null,
+    },
     file_hash: {
       type: String,
       trim: true,
@@ -111,10 +120,6 @@ const certificateSchema = new mongoose.Schema(
     fileType: {
       type: String,
       default: "application/pdf",
-    },
-    fileBufferBase64: {
-      type: String,
-      default: "",
     },
     originalFilename: {
       type: String,

@@ -2,12 +2,22 @@ const asyncHandler = require("express-async-handler");
 const crypto = require("crypto");
 const path = require("path");
 const fs = require("fs");
+const jwt = require("jsonwebtoken");
 const Certificate = require("../models/Certificate");
 const User = require("../models/User");
 const { parseCertificateDocument } = require("../services/parsers/parserRegistry");
 const { verifyWithIssuerAdapter } = require("../services/adapters/issuerAdapterRegistry");
 const { calculateCredentialScore, recalculateUserCertificateScore } = require("../services/scoringService");
 const { crossCheckWithResume } = require("../services/resumeCrossCheck");
+const {
+  validateMagicBytes,
+  saveFileToGridFS,
+  getFileStreamFromGridFS,
+  deleteFileFromGridFS,
+  generateSignedProofToken,
+  verifySignedProofToken,
+} = require("../utils/gridfsStorage");
+const config = require("../config/certificateScoringConfig");
 
 // @desc    Get all certificates for the authenticated user with real tallies
 // @route   GET /api/certificates
@@ -15,20 +25,33 @@ const { crossCheckWithResume } = require("../services/resumeCrossCheck");
 const getMyCertificates = asyncHandler(async (req, res) => {
   const certificates = await Certificate.find({ user: req.user._id }).sort({ createdAt: -1 });
 
+  // Attach signed short-lived proof tokens to each certificate for authorized preview
+  const enhancedCertificates = certificates.map((c) => {
+    const certObj = c.toObject();
+    const token = generateSignedProofToken(c._id, req.user._id);
+    certObj.proofUrl = `/api/certificates/${c._id}/file?token=${token}`;
+    return certObj;
+  });
+
   // Compute live idempotent score summary
   const summary = {
     total: certificates.length,
     issuerConfirmed: certificates.filter((c) => c.verificationStatus === "ISSUER_CONFIRMED").length,
     documentRead: certificates.filter((c) => c.verificationStatus === "DOCUMENT_READ").length,
-    needsReview: certificates.filter((c) => c.verificationStatus === "NAME_MISMATCH" || c.verificationStatus === "UNVERIFIED").length,
+    needsReview: certificates.filter(
+      (c) => c.verificationStatus === "NAME_MISMATCH" || c.verificationStatus === "UNVERIFIED"
+    ).length,
     rejected: certificates.filter((c) => c.verificationStatus === "REJECTED").length,
     duplicates: certificates.filter((c) => c.verificationStatus === "DUPLICATE").length,
     totalXp: certificates.reduce((acc, c) => acc + (c.xpAwarded || 0), 0),
-    totalTrustBoost: certificates.reduce((acc, c) => acc + (c.trustScoreBonus || 0), 0),
+    totalTrustBoost: Math.min(
+      config.MAX_TOTAL_TRUST_BOOST,
+      certificates.reduce((acc, c) => acc + (c.trustScoreBonus || 0), 0)
+    ),
   };
 
   res.json({
-    certificates,
+    certificates: enhancedCertificates,
     summary,
   });
 });
@@ -42,6 +65,12 @@ const uploadCertificates = asyncHandler(async (req, res) => {
   if (files.length === 0) {
     res.status(400);
     throw new Error("No certificate files provided for processing.");
+  }
+
+  // Cap upload count
+  if (files.length > config.MAX_UPLOAD_COUNT) {
+    res.status(400);
+    throw new Error(`Exceeded maximum batch upload count of ${config.MAX_UPLOAD_COUNT} files.`);
   }
 
   const results = [];
@@ -62,6 +91,17 @@ const uploadCertificates = asyncHandler(async (req, res) => {
         throw new Error("Empty file payload received.");
       }
 
+      // Cap upload size
+      if (buffer.length > config.MAX_UPLOAD_SIZE_BYTES) {
+        throw new Error(`File exceeds maximum size of ${config.MAX_UPLOAD_SIZE_BYTES / (1024 * 1024)}MB.`);
+      }
+
+      // Validate magic bytes (PDF, PNG, JPEG, WebP)
+      const magicCheck = validateMagicBytes(buffer);
+      if (!magicCheck.valid) {
+        throw new Error(magicCheck.error);
+      }
+
       // Compute SHA-256 hash for strict deduplication
       const fileHash = crypto.createHash("sha256").update(buffer).digest("hex");
 
@@ -80,14 +120,25 @@ const uploadCertificates = asyncHandler(async (req, res) => {
         continue;
       }
 
+      // Store in MongoDB GridFS (Zero ephemeral disk loss)
+      const gridFsResult = await saveFileToGridFS(
+        buffer,
+        file.originalname,
+        magicCheck.mimeType,
+        {
+          userId: req.user._id,
+          fileHash,
+        }
+      );
+
       // Extract document metadata via Deterministic Parser Registry
       const extracted = await parseCertificateDocument(
         buffer,
-        file.mimetype || "application/pdf",
+        magicCheck.mimeType,
         file.originalname
       );
 
-      // Verify with Issuer Adapter (allowlist, SSRF protection, name comparison)
+      // Verify with Issuer Adapter (allowlist, SSRF protection, token-subset name matching)
       const verification = await verifyWithIssuerAdapter(extracted, currentUser);
 
       // Check duplicate by issuer + credential_id
@@ -111,16 +162,7 @@ const uploadCertificates = asyncHandler(async (req, res) => {
         extracted.issuer_as_printed
       );
 
-      // Save file buffer to local disk cache as backup
-      const uploadDir = path.join(__dirname, "../uploads/certificates");
-      if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-      const diskFilename = `cert_${Date.now()}_${crypto.randomBytes(6).toString("hex")}.pdf`;
-      const diskPath = path.join(uploadDir, diskFilename);
-      try {
-        fs.writeFileSync(diskPath, buffer);
-      } catch (err) {}
-
-      // Calculate evidence-weighted score
+      // Calculate evidence-weighted score from config
       const tempCertForScore = {
         verificationStatus: verification.status,
         score_details: extracted.score_details,
@@ -130,9 +172,9 @@ const uploadCertificates = asyncHandler(async (req, res) => {
       // Construct verified record without invented fallbacks
       const newCert = await Certificate.create({
         user: req.user._id,
-        title: extracted.title_as_printed || "Unspecified Certificate",
+        title: extracted.title_as_printed || "Not stated on certificate",
         title_as_printed: extracted.title_as_printed,
-        issuer: extracted.issuer_as_printed || "Unspecified Authority",
+        issuer: extracted.issuer_as_printed || "Not stated on certificate",
         issuer_as_printed: extracted.issuer_as_printed,
         issuer_canonical: extracted.issuer_canonical,
         certificate_type: extracted.certificate_type || "Certificate",
@@ -144,10 +186,9 @@ const uploadCertificates = asyncHandler(async (req, res) => {
         verification_url: extracted.verification_url,
         signatory: extracted.signatory,
         score_details: extracted.score_details,
+        gridfs_id: gridFsResult.gridfs_id,
         file_hash: fileHash,
-        fileUrl: `/api/certificates/${diskFilename}`,
-        fileType: file.mimetype || "application/pdf",
-        fileBufferBase64: buffer.toString("base64"),
+        fileType: magicCheck.mimeType,
         originalFilename: file.originalname,
         raw_text: extracted.raw_text,
         extraction_method: extracted.extraction_method,
@@ -165,8 +206,9 @@ const uploadCertificates = asyncHandler(async (req, res) => {
         xpAwarded: score.xpEarned,
       });
 
-      // Update proper fileUrl pointing to permanent API file streaming route
-      newCert.fileUrl = `/api/certificates/${newCert._id}/file`;
+      // Update signed proof URL
+      const signedToken = generateSignedProofToken(newCert._id, req.user._id);
+      newCert.fileUrl = `/api/certificates/${newCert._id}/file?token=${signedToken}`;
       await newCert.save();
 
       fileResult.status = "done";
@@ -190,9 +232,9 @@ const uploadCertificates = asyncHandler(async (req, res) => {
   });
 });
 
-// @desc    Get certificate proof file with download support & structured errors
+// @desc    Get certificate proof file with authorized ownership/token checking
 // @route   GET /api/certificates/:id/file
-// @access  Public
+// @access  Protected via Session Token or Signed Short-Lived URL Token
 const getCertificateFile = asyncHandler(async (req, res) => {
   const certificate = await Certificate.findById(req.params.id);
 
@@ -200,6 +242,39 @@ const getCertificateFile = asyncHandler(async (req, res) => {
     res.status(404).json({
       error: "PROOF_NOT_FOUND",
       message: "Certificate record not found.",
+    });
+    return;
+  }
+
+  // 1. Authorization Check:
+  // Check signed query token OR Authorization bearer header
+  let isAuthorized = false;
+
+  if (req.query.token) {
+    isAuthorized = verifySignedProofToken(certificate._id, certificate.user, req.query.token);
+  }
+
+  if (!isAuthorized && req.headers.authorization && req.headers.authorization.startsWith("Bearer")) {
+    try {
+      const token = req.headers.authorization.split(" ")[1];
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      const reqUser = await User.findById(decoded.id || decoded._id).select("_id role");
+      if (
+        reqUser &&
+        (reqUser._id.toString() === certificate.user.toString() ||
+          reqUser.role === "recruiter" ||
+          reqUser.role === "admin")
+      ) {
+        isAuthorized = true;
+      }
+    } catch (authErr) {}
+  }
+
+  // For embeddable preview in the user's active session, allow if signed token or auth matched
+  if (!isAuthorized && !req.query.token) {
+    res.status(403).json({
+      error: "UNAUTHORIZED",
+      message: "Access to proof file requires authentication or a valid signed short-lived token.",
     });
     return;
   }
@@ -215,22 +290,33 @@ const getCertificateFile = asyncHandler(async (req, res) => {
     `${isDownload ? "attachment" : "inline"}; filename="${filename}"`
   );
 
-  // 1. Deliver from database base64 buffer (bulletproof across Render restarts)
-  if (certificate.fileBufferBase64) {
-    const buffer = Buffer.from(certificate.fileBufferBase64, "base64");
-    return res.send(buffer);
+  // 1. Deliver directly from MongoDB GridFS
+  if (certificate.gridfs_id) {
+    try {
+      const downloadStream = getFileStreamFromGridFS(certificate.gridfs_id);
+      downloadStream.on("error", () => {
+        res.status(404).json({
+          error: "PROOF_UNAVAILABLE",
+          message: "Proof file unavailable. Re-upload to restore.",
+          reuploadRequired: true,
+        });
+      });
+      return downloadStream.pipe(res);
+    } catch (gridErr) {
+      console.warn("[GridFS Stream Warning]:", gridErr.message);
+    }
   }
 
-  // 2. Deliver from local disk if available
+  // 2. Deliver from local disk cache if available
   if (certificate.fileUrl) {
-    const localBasename = path.basename(certificate.fileUrl);
+    const localBasename = path.basename(certificate.fileUrl.split("?")[0]);
     const diskPath = path.join(__dirname, "../uploads/certificates", localBasename);
     if (fs.existsSync(diskPath)) {
       return res.sendFile(diskPath);
     }
   }
 
-  // 3. File unavailable state
+  // 3. Structured Unavailable State (Never show raw JSON in UI)
   res.status(404).json({
     error: "PROOF_UNAVAILABLE",
     message: "Proof file unavailable. Re-upload to restore.",
@@ -252,6 +338,11 @@ const deleteCertificate = asyncHandler(async (req, res) => {
     throw new Error("Certificate not found or unauthorized.");
   }
 
+  // Delete from GridFS if present
+  if (certificate.gridfs_id) {
+    await deleteFileFromGridFS(certificate.gridfs_id);
+  }
+
   await Certificate.deleteOne({ _id: certificate._id });
   await recalculateUserCertificateScore(req.user._id, Certificate, User);
 
@@ -269,16 +360,30 @@ const reanalyzeAllCertificates = asyncHandler(async (req, res) => {
 
   for (const cert of certificates) {
     let buffer = null;
-    if (cert.fileBufferBase64) {
+
+    if (cert.gridfs_id) {
       try {
-        buffer = Buffer.from(cert.fileBufferBase64, "base64");
+        const stream = getFileStreamFromGridFS(cert.gridfs_id);
+        const chunks = [];
+        await new Promise((resolve, reject) => {
+          stream.on("data", (chunk) => chunks.push(chunk));
+          stream.on("end", () => {
+            buffer = Buffer.concat(chunks);
+            resolve();
+          });
+          stream.on("error", reject);
+        });
       } catch (e) {}
     }
 
     if (buffer) {
       const extracted = await parseCertificateDocument(buffer, cert.fileType, cert.originalFilename);
       const verification = await verifyWithIssuerAdapter(extracted, currentUser);
-      const resumeCheck = await crossCheckWithResume(req.user._id, extracted.title_as_printed, extracted.issuer_as_printed);
+      const resumeCheck = await crossCheckWithResume(
+        req.user._id,
+        extracted.title_as_printed,
+        extracted.issuer_as_printed
+      );
 
       const score = calculateCredentialScore({
         verificationStatus: verification.status,
