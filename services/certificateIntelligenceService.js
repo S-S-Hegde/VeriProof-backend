@@ -18,6 +18,7 @@ const axios = require("axios");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const pdfParse = require("pdf-parse");
 const { extractText: extractWithUnpdf } = require("unpdf");
+const Tesseract = require("tesseract.js");
 const ResumeAnalysis = require("../models/ResumeAnalysis");
 
 const geminiClient = process.env.GEMINI_API_KEY
@@ -214,6 +215,51 @@ const extractPdfTextLocally = async (buffer) => {
 };
 
 /**
+ * Universal Document Text Extractor (PDF Parser + Tesseract OCR Engine)
+ * Extracts textual metadata from raw PDFs, scanned certificate documents, and bitmap images.
+ */
+const extractDocumentText = async (buffer, mimeType = "", originalFilename = "") => {
+  if (!buffer) return "";
+  let fullText = "";
+
+  const isPdf =
+    mimeType?.includes("pdf") ||
+    originalFilename?.toLowerCase().endsWith(".pdf") ||
+    (buffer.length > 5 && buffer.subarray(0, 5).toString("latin1").includes("%PDF"));
+
+  if (isPdf) {
+    fullText = await extractPdfTextLocally(buffer);
+  }
+
+  // If text is still empty or minimal (<15 chars) or file is an image, invoke Tesseract OCR engine
+  if (!fullText || fullText.trim().length < 15) {
+    const isImage =
+      mimeType?.includes("image") ||
+      originalFilename?.match(/\.(png|jpe?g|webp|bmp|tiff)$/i) ||
+      !isPdf;
+
+    if (isImage || (!fullText && isPdf)) {
+      try {
+        console.log("[Certificate Intelligence] Running OCR parser on certificate buffer...");
+        const ocrPromise = Tesseract.recognize(buffer, "eng");
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("OCR timeout (8s)")), 8000)
+        );
+        const { data } = await Promise.race([ocrPromise, timeoutPromise]);
+        if (data && data.text && data.text.trim().length > 8) {
+          fullText = data.text.trim();
+          console.log(`[Certificate Intelligence] OCR successfully extracted ${fullText.length} characters.`);
+        }
+      } catch (ocrErr) {
+        console.warn("[Certificate Intelligence] OCR recognition fallback notice:", ocrErr.message);
+      }
+    }
+  }
+
+  return fullText.trim();
+};
+
+/**
  * Primary AI Engine: Groq LPU (Zero Gemini credits used!)
  * Uses qwen/qwen3.8-27b with automatic fallback to openai/gpt-oss-120b
  */
@@ -364,6 +410,7 @@ Return ONLY valid JSON matching this schema:
 
 /**
  * Fallback Rule-Based Analyzer for local text (0 API calls, 0 credits)
+ * Extracts dynamic certificate title, vendor/issuer, issue date, and credential ID.
  */
 const analyzeLocally = (extractedText = "", originalFilename = "") => {
   const result = {
@@ -389,35 +436,84 @@ const analyzeLocally = (extractedText = "", originalFilename = "") => {
     }
   }
 
-  // 2. Identify Title
+  // If vendor still default, try dynamic organization/issuer regex
+  if (result.vendor === "Verified Educational Authority") {
+    const orgMatch = textToScan.match(/(?:issued\s*by|offered\s*by|presented\s*by|authorized\s*by|certified\s*by|institution|provider|organization|academy)\s*[:\n-]?\s*([A-Za-z0-9&.,\s-]{3,50})/i);
+    if (orgMatch && orgMatch[1]) {
+      const cleanOrg = orgMatch[1].replace(/\n/g, " ").trim();
+      if (!isUuidOrHash(cleanOrg) && cleanOrg.length > 3) {
+        result.vendor = cleanOrg;
+        result.issuer = cleanOrg;
+      }
+    }
+  }
+
+  // 2. Dynamic Title Identification
   const titlePatterns = [
-    /(?:for successfully completing|has successfully completed|in recognition of completing|completed the online course|completed the specialization)\s*[:\n-]?\s*([A-Za-z0-9\s-]{4,60})/i,
-    /(?:certificate of (?:completion|achievement|excellence|mastery))\s*(?:in|for)?\s*[:\n-]?\s*([A-Za-z0-9\s-]{4,60})/i,
-    /([A-Za-z0-9\s-]{4,50}\s+(?:Architect|Developer|Engineer|Specialist|Associate|Professional|Practitioner|Administrator|Mastery|Expert))/i,
-    /(?:credential|certificate|specialization|course|program)\s*:\s*([A-Za-z0-9\s-]{4,60})/i,
+    /(?:for successfully completing|has successfully completed|in recognition of completing|completed the online course|completed the specialization|completed the program)\s*[:\n-]?\s*([A-Za-z0-9\s-]{4,70})/i,
+    /(?:certificate of (?:completion|achievement|excellence|mastery|attainment))\s*(?:in|for)?\s*[:\n-]?\s*([A-Za-z0-9\s-]{4,70})/i,
+    /([A-Za-z0-9\s-]{4,50}\s+(?:Architect|Developer|Engineer|Specialist|Associate|Professional|Practitioner|Administrator|Mastery|Expert|Consultant))/i,
+    /(?:course|credential|specialization|certification|exam)\s*:\s*([A-Za-z0-9\s-]{4,70})/i,
+    /(?:has successfully passed the examination for|has demonstrated proficiency in)\s*[:\n-]?\s*([A-Za-z0-9\s-]{4,70})/i,
     /([A-Za-z0-9\s-]{4,50}\s+(?:Certification|Specialization|Nanodegree|Bootcamp))/i,
+    /((?:Certified|Certificate in|Diploma in)\s+[A-Za-z0-9\s-]{4,50})/i,
   ];
 
   for (const pat of titlePatterns) {
     const match = extractedText.match(pat);
     if (match && match[1]) {
       const candidateTitle = match[1].replace(/\n/g, " ").trim();
-      if (!isUuidOrHash(candidateTitle) && candidateTitle.length > 4) {
+      if (!isUuidOrHash(candidateTitle) && candidateTitle.length > 4 && !/^(completion|achievement|participation)$/i.test(candidateTitle)) {
         result.title = candidateTitle;
         break;
       }
     }
   }
 
-  // 3. Credential ID
-  const idMatch =
-    extractedText.match(/(?:Certificate ID|Credential ID|License|Verification Number|Serial|ID)[\s:=-]+([A-Za-z0-9-]{6,36})/i) ||
-    extractedText.match(/\b([A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4})\b/);
-  if (idMatch) {
-    result.credentialId = idMatch[1].trim();
+  // 3. Dynamic Issue Date Extraction
+  const datePatterns = [
+    /(?:issue\s*date|issued\s*on|date\s*of\s*issue|completion\s*date|awarded\s*on|awarded|date)\s*[:\n-]?\s*([A-Za-z0-9,\s/-]{4,25})/i,
+    /\b(20\d{2}[-/](?:0[1-9]|1[0-2])[-/](?:0[1-9]|[12]\d|3[01]))\b/,
+    /\b((?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* \d{1,2},? 20\d{2})\b/i,
+    /\b(\d{1,2} (?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*,? 20\d{2})\b/i,
+    /\b((?:0[1-9]|1[0-2])[\/.-](?:0[1-9]|[12]\d|3[01])[\/.-]20\d{2})\b/,
+  ];
+
+  for (const dPat of datePatterns) {
+    const dMatch = extractedText.match(dPat);
+    if (dMatch && (dMatch[1] || dMatch[0])) {
+      const rawDateStr = (dMatch[1] || dMatch[0]).trim();
+      const parsedDate = new Date(rawDateStr);
+      if (!isNaN(parsedDate.getTime()) && parsedDate.getFullYear() >= 2000 && parsedDate.getFullYear() <= 2035) {
+        result.issueDate = parsedDate.toISOString();
+        break;
+      }
+    }
   }
 
-  // 4. Skills
+  // 4. Dynamic Credential ID / Verification Number
+  const idPatterns = [
+    /(?:Certificate ID|Credential ID|Verification Number|License Number|Serial Number|Certificate No|Credential No|Verify at|ID)[\s:=-]+([A-Za-z0-9-]{6,40})/i,
+    /\b([A-Z0-9]{4,6}-[A-Z0-9]{4,6}-[A-Z0-9]{4,6}(?:-[A-Z0-9]{4,6})?)\b/,
+    /(?:verify|credential)\/([A-Za-z0-9-]{6,40})/i,
+  ];
+
+  for (const idPat of idPatterns) {
+    const idMatch = extractedText.match(idPat);
+    if (idMatch && idMatch[1]) {
+      const candidateId = idMatch[1].trim();
+      if (!isUuidOrHash(candidateId) || candidateId.length <= 36) {
+        result.credentialId = candidateId;
+        break;
+      }
+    }
+  }
+
+  if (!result.credentialId) {
+    result.credentialId = `VP-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+  }
+
+  // 5. Skills extraction
   const commonSkills = [
     "Python", "React", "Node.js", "JavaScript", "TypeScript", "AWS", "Google Cloud",
     "Azure", "Docker", "Kubernetes", "Machine Learning", "Deep Learning", "SQL",
@@ -431,10 +527,10 @@ const analyzeLocally = (extractedText = "", originalFilename = "") => {
     }
   }
 
-  // 5. Subject
+  // 6. Subject Domain
   result.subject = detectSubjectDomain(extractedText, result.skills);
 
-  // 6. Clean Title with dynamic fallback to originalFilename
+  // 7. Clean Title with dynamic fallback to originalFilename
   result.title = cleanCertificateTitle(result.title, result.subject, result.skills, result.vendor, originalFilename);
 
   return result;
@@ -442,6 +538,8 @@ const analyzeLocally = (extractedText = "", originalFilename = "") => {
 
 /**
  * Cross-Reference Certificate Against Candidate's Verified Resume (0 API calls)
+ * Checks if keywords from the certificate title, issuer/vendor, or certified skills
+ * appear in candidate's parsed resume text, claims, or MongoDB user record.
  */
 const crossReferenceWithResume = async (userId, certDetails = {}) => {
   const matchResult = {
@@ -450,69 +548,164 @@ const crossReferenceWithResume = async (userId, certDetails = {}) => {
     matchedClaimName: "",
   };
 
+  if (!userId) return matchResult;
+
   try {
-    const resumeAnalysis = await ResumeAnalysis.findOne({ candidateId: userId }).sort({ createdAt: -1 });
-    if (!resumeAnalysis) {
-      matchResult.details = "Independent Credential (No verified resume on file for cross-referencing)";
+    const User = require("../models/User");
+    const RecruiterApplicant = require("../models/RecruiterApplicant");
+
+    // 1. Fetch user to check profile & email
+    const user = await User.findById(userId).lean();
+
+    // 2. Fetch candidate's active or latest ResumeAnalysis
+    let resumeAnalysis = await ResumeAnalysis.findOne({
+      $or: [{ candidateId: userId }, { userId: userId }],
+    }).sort({ createdAt: -1 });
+
+    // 3. Fallback: check RecruiterApplicant if linked by candidateUser or email
+    let applicant = null;
+    if (user?.email) {
+      applicant = await RecruiterApplicant.findOne({
+        $or: [{ candidateUser: userId }, { extractedEmail: user.email.toLowerCase() }],
+      }).sort({ createdAt: -1 }).lean();
+    }
+
+    // If no resume analysis and no applicant found, check if user has verified skill nodes in User model
+    const userSkills = [
+      ...(Array.isArray(user?.skills) ? user.skills : []),
+      ...(Array.isArray(user?.skillNodes) ? user.skillNodes.map((s) => s.name) : []),
+    ];
+
+    if (!resumeAnalysis && !applicant && userSkills.length === 0) {
+      matchResult.details = "Independent Credential (No verified resume or skills on file for cross-referencing)";
       return matchResult;
     }
 
-    const certTitle = (certDetails.title || "").toLowerCase();
+    // Build comprehensive candidate resume text corpus
+    let resumeCorpusParts = [];
+
+    if (resumeAnalysis?.truncatedText) {
+      resumeCorpusParts.push(resumeAnalysis.truncatedText);
+    }
+    // If truncatedText is empty but fileBufferBase64 exists, decode it
+    if ((!resumeAnalysis?.truncatedText || resumeAnalysis.truncatedText.length < 50) && resumeAnalysis?.fileBufferBase64) {
+      try {
+        const buf = Buffer.from(resumeAnalysis.fileBufferBase64, "base64");
+        const extracted = await extractPdfTextLocally(buf);
+        if (extracted) resumeCorpusParts.push(extracted);
+      } catch (bufErr) {}
+    }
+
+    if (applicant?.resumeText) {
+      resumeCorpusParts.push(applicant.resumeText);
+    }
+
+    // Collect all candidate claims & skills
+    const candidateCertClaims = resumeAnalysis?.claims?.certifications || [];
+    const candidateSkillClaims = (resumeAnalysis?.claims?.skills || []).map((s) => s.name || "");
+    const candidateProjectClaims = (resumeAnalysis?.claims?.projects || []).map((p) => `${p.title || ""} ${p.description || ""}`);
+    const candidateExpClaims = (resumeAnalysis?.claims?.experience || []).map((e) => `${e.role || ""} ${e.company || ""}`);
+    const applicantSkills = applicant?.claimedSkills || [];
+
+    const allCandidateSkills = [
+      ...candidateSkillClaims,
+      ...applicantSkills,
+      ...userSkills,
+    ].filter(Boolean);
+
+    resumeCorpusParts.push(...candidateSkillClaims);
+    resumeCorpusParts.push(...candidateProjectClaims);
+    resumeCorpusParts.push(...candidateExpClaims);
+    resumeCorpusParts.push(...allCandidateSkills);
+
+    const fullResumeCorpus = resumeCorpusParts.join(" ").toLowerCase();
+
+    // Prepare certificate tokens & entities
+    const certTitle = (certDetails.title || "").trim();
+    const certTitleLower = certTitle.toLowerCase();
     const certVendor = (certDetails.vendor || certDetails.issuer || "").toLowerCase();
-    const certSubject = (certDetails.subject || "").toLowerCase();
+    const certSkills = Array.isArray(certDetails.skills) ? certDetails.skills : [];
 
-    // 1. Check against Resume Claims: Certifications
-    const claimsCerts = resumeAnalysis.claims?.certifications || [];
-    let matchedClaim = null;
+    // Stop words to exclude from keyword matching
+    const STOP_WORDS = new Set([
+      "certificate", "certification", "certified", "completion", "achievement",
+      "course", "specialization", "program", "in", "of", "for", "the", "and",
+      "a", "an", "to", "with", "by", "on", "professional", "foundation",
+      "foundations", "essentials", "associate", "expert", "specialist", "verified",
+      "authority", "credential", "nanodegree", "bootcamp", "track", "series"
+    ]);
 
-    for (const claim of claimsCerts) {
+    const titleKeywords = certTitleLower
+      .replace(/[^a-z0-9+#.-]/g, " ")
+      .split(/\s+/)
+      .filter((w) => w.length >= 3 && !STOP_WORDS.has(w));
+
+    // ── Check 1: Direct match against Resume Claims: Certifications ──
+    for (const claim of candidateCertClaims) {
       const claimName = (claim.name || "").toLowerCase();
       if (!claimName) continue;
 
-      const titleTokens = certTitle.split(/\s+/).filter((t) => t.length > 2);
-      const claimTokens = claimName.split(/\s+/).filter((t) => t.length > 2);
-
-      const overlap = titleTokens.filter((token) => claimTokens.includes(token));
-      const hasVendorMatch = certVendor && claimName.includes(certVendor.toLowerCase());
+      const claimWords = claimName.replace(/[^a-z0-9+#.-]/g, " ").split(/\s+/).filter((w) => w.length >= 3 && !STOP_WORDS.has(w));
+      const overlap = titleKeywords.filter((kw) => claimWords.includes(kw));
 
       if (
-        claimName.includes(certTitle) ||
-        certTitle.includes(claimName) ||
-        (overlap.length >= 2 && (hasVendorMatch || overlap.length >= claimTokens.length * 0.5)) ||
-        (hasVendorMatch && overlap.length >= 1)
-      ) {
-        matchedClaim = claim;
-        break;
-      }
-    }
-
-    if (matchedClaim) {
-      matchResult.matched = true;
-      matchResult.matchedClaimName = matchedClaim.name;
-      matchResult.details = `Verified against resume credential: "${matchedClaim.name}"`;
-
-      // Update resume analysis claim status to Verified!
-      matchedClaim.verificationStatus = "Verified";
-      await resumeAnalysis.save().catch(() => {});
-      return matchResult;
-    }
-
-    // 2. Check against Resume Raw Truncated Text
-    const resumeText = (resumeAnalysis.truncatedText || "").toLowerCase();
-    if (resumeText) {
-      const titleWords = certTitle.split(/\s+/).filter((w) => w.length > 3);
-      const matchingWords = titleWords.filter((w) => resumeText.includes(w));
-
-      if (
-        (certTitle.length > 6 && resumeText.includes(certTitle)) ||
-        (titleWords.length >= 2 && matchingWords.length >= titleWords.length * 0.75) ||
-        (certVendor && certVendor.length > 3 && resumeText.includes(certVendor) && matchingWords.length >= 1)
+        claimName.includes(certTitleLower) ||
+        certTitleLower.includes(claimName) ||
+        overlap.length >= 1
       ) {
         matchResult.matched = true;
-        matchResult.details = `Mentioned in verified candidate resume (${certDetails.vendor || certDetails.title})`;
+        matchResult.matchedClaimName = claim.name;
+        matchResult.details = `Verified against resume credential: "${claim.name}"`;
+
+        if (claim.verificationStatus !== "Verified") {
+          claim.verificationStatus = "Verified";
+          if (resumeAnalysis) await resumeAnalysis.save().catch(() => {});
+        }
         return matchResult;
       }
     }
+
+    // ── Check 2: Certificate title keywords appear in resume text or project claims ──
+    const matchedTitleKeywords = titleKeywords.filter((kw) => fullResumeCorpus.includes(kw));
+    if (titleKeywords.length > 0 && (matchedTitleKeywords.length >= 1 || (titleKeywords.length >= 3 && matchedTitleKeywords.length >= 2))) {
+      matchResult.matched = true;
+      matchResult.details = `Matched resume keyword(s): ${matchedTitleKeywords.slice(0, 3).join(", ").toUpperCase()}`;
+      return matchResult;
+    }
+
+    // ── Check 3: Issuer/Vendor mentioned in candidate's resume or experience ──
+    if (certVendor && certVendor.length >= 3 && !certVendor.includes("verified")) {
+      const vendorClean = certVendor.replace(/[^a-z0-9]/g, " ").split(/\s+/).filter((w) => w.length >= 3 && !STOP_WORDS.has(w));
+      const vendorMatched = vendorClean.filter((v) => fullResumeCorpus.includes(v));
+      if (vendorMatched.length >= 1) {
+        matchResult.matched = true;
+        matchResult.details = `Vendor accreditation matched in resume (${certDetails.vendor || certDetails.issuer})`;
+        return matchResult;
+      }
+    }
+
+    // ── Check 4: Certificate certified skills overlap with candidate resume skills ──
+    const candidateSkillsLower = allCandidateSkills.map((s) => s.toLowerCase());
+    const matchedSkills = certSkills.filter((sk) => {
+      const skLower = sk.toLowerCase();
+      return candidateSkillsLower.some((csk) => csk.includes(skLower) || skLower.includes(csk)) || fullResumeCorpus.includes(skLower);
+    });
+
+    if (matchedSkills.length >= 1) {
+      matchResult.matched = true;
+      matchResult.details = `Skills cross-verified in resume: ${matchedSkills.slice(0, 3).join(", ")}`;
+      return matchResult;
+    }
+
+    // ── Check 5: If candidate has skills/projects and certificate subject domain matches ──
+    const subjectKeywords = (certDetails.subject || "").toLowerCase().replace(/[^a-z0-9]/g, " ").split(/\s+/).filter((w) => w.length >= 4 && !STOP_WORDS.has(w));
+    const matchedDomain = subjectKeywords.filter((dk) => fullResumeCorpus.includes(dk));
+    if (matchedDomain.length >= 2) {
+      matchResult.matched = true;
+      matchResult.details = `Technical domain verified against resume claims (${certDetails.subject})`;
+      return matchResult;
+    }
+
   } catch (err) {
     console.warn("[Certificate Intelligence] Resume cross-reference notice:", err.message);
   }
@@ -522,18 +715,18 @@ const crossReferenceWithResume = async (userId, certDetails = {}) => {
 
 /**
  * Master Pipeline: Analyze Certificate Buffer + Cross-Reference Resume
- * Prioritizes Groq LLM & Local PDF extractors to preserve Gemini credits.
+ * Prioritizes Local Forensic Extraction + OCR + Groq LLM to preserve Gemini credits.
  */
 const inspectAndVerifyCertificate = async ({ buffer, mimeType, originalFilename, userId }) => {
   let certData = null;
   let localText = "";
 
-  // 1. Extract text locally from PDF or document (Zero API calls, 0 credits)
-  if (buffer && (mimeType?.includes("pdf") || originalFilename?.toLowerCase().endsWith(".pdf"))) {
-    localText = await extractPdfTextLocally(buffer);
+  // 1. Extract text locally from PDF or document with OCR engine fallback
+  if (buffer) {
+    localText = await extractDocumentText(buffer, mimeType, originalFilename);
   }
 
-  // 2. Primary: Run Groq LLM (Zero Gemini credits used!)
+  // 2. Primary: Run Groq LLM if structured text is found (Zero Gemini credits used!)
   if (localText && localText.trim().length >= 15) {
     certData = await analyzeWithGroq(localText, originalFilename);
   }
@@ -580,11 +773,12 @@ const inspectAndVerifyCertificate = async ({ buffer, mimeType, originalFilename,
     issuer,
     subject,
     recipientName: certData.recipientName || "",
-    credentialId: certData.credentialId || `VP-${Date.now().toString(36).toUpperCase()}`,
+    credentialId: certData.credentialId || `VP-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
     issueDate: certData.issueDate ? new Date(certData.issueDate) : new Date(),
     expiryDate: certData.expiryDate ? new Date(certData.expiryDate) : undefined,
     skills,
-    resumeMatched: resumeCheck.matched,
+    isResumeVerified: Boolean(resumeCheck.matched),
+    resumeMatched: Boolean(resumeCheck.matched),
     resumeMatchDetails: resumeCheck.details,
     verificationStatus: "Verified",
   };

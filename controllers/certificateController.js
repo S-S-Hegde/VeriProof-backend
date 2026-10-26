@@ -59,8 +59,8 @@ const getMyCertificates = asyncHandler(async (req, res) => {
       needsSave = true;
     }
 
-    // Check resume cross-reference if not already matched
-    if (!cert.resumeMatched && resumeAnalysis) {
+    // Check resume cross-reference to ensure isResumeVerified matches candidate resume
+    if (!cert.isResumeVerified || !cert.resumeMatched) {
       const match = await crossReferenceWithResume(req.user._id, {
         title: cert.title,
         vendor: cert.vendor,
@@ -69,13 +69,29 @@ const getMyCertificates = asyncHandler(async (req, res) => {
         skills: cert.skills,
       });
       if (match.matched) {
+        cert.isResumeVerified = true;
         cert.resumeMatched = true;
         cert.resumeMatchDetails = match.details;
+        cert.trustScoreBonus = 8;
+        cert.xpAwarded = 350;
         needsSave = true;
-      } else if (!cert.resumeMatchDetails) {
-        cert.resumeMatchDetails = match.details;
-        needsSave = true;
+      } else {
+        cert.isResumeVerified = false;
+        cert.resumeMatched = false;
+        if (!cert.resumeMatchDetails) {
+          cert.resumeMatchDetails = match.details;
+          needsSave = true;
+        }
       }
+    } else if (cert.resumeMatched && !cert.isResumeVerified) {
+      cert.isResumeVerified = true;
+      needsSave = true;
+    }
+
+    // Sanitize fileUrl: if it starts with /uploads/, redirect to secure API file stream route
+    if (cert.fileUrl && cert.fileUrl.startsWith("/uploads/")) {
+      cert.fileUrl = `/api/certificates/${cert._id}/file`;
+      needsSave = true;
     }
 
     if (needsSave) {
@@ -232,13 +248,19 @@ const createCertificate = asyncHandler(async (req, res) => {
     fileUrl,
     fileType,
     fileBufferBase64,
-    skills: parsedSkills,
+    isResumeVerified: Boolean(resumeMatched),
     resumeMatched: Boolean(resumeMatched),
     resumeMatchDetails: resumeMatchDetails || "",
     verificationStatus: "Verified",
     trustScoreBonus: resumeMatched ? 8 : 5,
     xpAwarded: resumeMatched ? 350 : 250,
   });
+
+  // If fileUrl was a local /uploads/ fallback (i.e. not an HTTPS Cloudinary URL), route it to the secure file stream endpoint
+  if (certificate.fileUrl && certificate.fileUrl.startsWith("/uploads/")) {
+    certificate.fileUrl = `/api/certificates/${certificate._id}/file`;
+    await certificate.save();
+  }
 
   // Award XP and bump trust score for candidate
   try {
@@ -359,7 +381,8 @@ const reanalyzeAllCertificates = asyncHandler(async (req, res) => {
           cert.issuer = aiResult.issuer;
           cert.subject = aiResult.subject;
           if (aiResult.skills && aiResult.skills.length > 0) cert.skills = aiResult.skills;
-          cert.resumeMatched = aiResult.resumeMatched;
+          cert.isResumeVerified = Boolean(aiResult.resumeMatched);
+          cert.resumeMatched = Boolean(aiResult.resumeMatched);
           cert.resumeMatchDetails = aiResult.resumeMatchDetails;
           reanalyzed = true;
         }
@@ -377,17 +400,23 @@ const reanalyzeAllCertificates = asyncHandler(async (req, res) => {
         cert.vendor = cert.issuer || "Verified Educational Authority";
       }
 
-      if (resumeAnalysis) {
-        const match = await crossReferenceWithResume(req.user._id, {
-          title: cert.title,
-          vendor: cert.vendor,
-          issuer: cert.issuer,
-          subject: cert.subject,
-          skills: cert.skills,
-        });
-        cert.resumeMatched = match.matched;
-        cert.resumeMatchDetails = match.details;
-      }
+      const match = await crossReferenceWithResume(req.user._id, {
+        title: cert.title,
+        vendor: cert.vendor,
+        issuer: cert.issuer,
+        subject: cert.subject,
+        skills: cert.skills,
+      });
+      cert.isResumeVerified = Boolean(match.matched);
+      cert.resumeMatched = Boolean(match.matched);
+      cert.resumeMatchDetails = match.details;
+    } else {
+      cert.isResumeVerified = Boolean(cert.resumeMatched);
+    }
+
+    // Sanitize fileUrl: ensure it doesn't hold a broken local path
+    if (cert.fileUrl && cert.fileUrl.startsWith("/uploads/")) {
+      cert.fileUrl = `/api/certificates/${cert._id}/file`;
     }
 
     await cert.save();

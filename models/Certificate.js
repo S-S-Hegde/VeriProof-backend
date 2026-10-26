@@ -66,6 +66,11 @@ const certificateSchema = new mongoose.Schema(
       default: "",
       trim: true,
     },
+    isResumeVerified: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
     resumeMatched: {
       type: Boolean,
       default: false,
