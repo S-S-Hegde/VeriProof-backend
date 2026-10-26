@@ -616,6 +616,14 @@ const getUserProfile = async (req, res) => {
       website,
       twitter,
       githubUsername,
+      nodes: {
+        website: website || "",
+        linkedin: linkedin || "",
+        github: githubUsername || "",
+        githubUsername: githubUsername || "",
+        twitter: twitter || "",
+        instagram: user.instagram || "",
+      },
       resumeUrl,
       resumeStatus,
       originalFileName,
@@ -635,6 +643,15 @@ const updateUserProfile = async (req, res) => {
   try {
     const user = await User.findById(req.user._id);
     if (!user) return res.status(404).json({ message: "User not found" });
+
+    if (req.body.nodes && typeof req.body.nodes === "object") {
+      if (req.body.nodes.website !== undefined) user.website = req.body.nodes.website;
+      if (req.body.nodes.twitter !== undefined) user.twitter = req.body.nodes.twitter;
+      if (req.body.nodes.instagram !== undefined) user.instagram = req.body.nodes.instagram;
+      if (req.body.nodes.githubUsername !== undefined) user.githubUsername = req.body.nodes.githubUsername;
+      if (req.body.nodes.github !== undefined) user.githubUsername = req.body.nodes.github;
+      if (req.body.nodes.linkedin !== undefined) user.linkedin = req.body.nodes.linkedin;
+    }
 
     const textFields = [
       "name","bio","phone","location","website",
